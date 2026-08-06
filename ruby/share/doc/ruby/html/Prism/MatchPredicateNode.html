@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+
+<title>class Prism::MatchPredicateNode - Documentation for Ruby 3.3</title>
+
+<script type="text/javascript">
+  var rdoc_rel_prefix = "../";
+  var index_rel_prefix = "../";
+</script>
+
+<script src="../js/navigation.js" defer></script>
+<script src="../js/search.js" defer></script>
+<script src="../js/search_index.js" defer></script>
+<script src="../js/searcher.js" defer></script>
+<script src="../js/darkfish.js" defer></script>
+
+<link href="../css/fonts.css" rel="stylesheet">
+<link href="../css/rdoc.css" rel="stylesheet">
+
+
+<body id="top" role="document" class="class">
+<nav role="navigation">
+  <div id="project-navigation">
+    <div id="home-section" role="region" title="Quick navigation" class="nav-section">
+  <h2>
+    <a href="../index.html" rel="home">Home</a>
+  </h2>
+
+  <div id="table-of-contents-navigation">
+    <a href="../table_of_contents.html#pages">Pages</a>
+    <a href="../table_of_contents.html#classes">Classes</a>
+    <a href="../table_of_contents.html#methods">Methods</a>
+  </div>
+</div>
+
+    <div id="search-section" role="search" class="project-section initially-hidden">
+  <form action="#" method="get" accept-charset="utf-8">
+    <div id="search-field-wrapper">
+      <input id="search-field" role="combobox" aria-label="Search"
+             aria-autocomplete="list" aria-controls="search-results"
+             type="text" name="search" placeholder="Search (/) for a class, method, ..." spellcheck="false"
+             title="Type to search, Up and Down to navigate, Enter to load">
+    </div>
+
+    <ul id="search-results" aria-label="Search Results"
+        aria-busy="false" aria-expanded="false"
+        aria-atomic="false" class="initially-hidden"></ul>
+  </form>
+</div>
+
+  </div>
+
+  
+
+  <div id="class-metadata">
+    
+    
+<div id="parent-class-section" class="nav-section">
+  <h3>Parent</h3>
+
+  <p class="link"><a href="Node.html">Prism::Node</a>
+</div>
+
+    
+    
+    
+<!-- Method Quickref -->
+<div id="method-list-section" class="nav-section">
+  <h3>Methods</h3>
+
+  <ul class="link-list" role="directory">
+    <li ><a href="#method-c-new">::new</a>
+    <li ><a href="#method-c-type">::type</a>
+    <li ><a href="#method-i-accept">#accept</a>
+    <li ><a href="#method-i-child_nodes">#child_nodes</a>
+    <li ><a href="#method-i-comment_targets">#comment_targets</a>
+    <li ><a href="#method-i-compact_child_nodes">#compact_child_nodes</a>
+    <li ><a href="#method-i-copy">#copy</a>
+    <li ><a href="#method-i-deconstruct">#deconstruct</a>
+    <li ><a href="#method-i-deconstruct_keys">#deconstruct_keys</a>
+    <li ><a href="#method-i-inspect">#inspect</a>
+    <li ><a href="#method-i-operator">#operator</a>
+    <li ><a href="#method-i-type">#type</a>
+  </ul>
+</div>
+
+  </div>
+</nav>
+
+<main role="main" aria-labelledby="class-Prism::MatchPredicateNode">
+  <h1 id="class-Prism::MatchPredicateNode" class="class">
+    class Prism::MatchPredicateNode
+  </h1>
+
+  <section class="description">
+    
+<p>Represents the use of the modifier ‘in` operator.</p>
+
+<pre>foo in bar
+^^^^^^^^^^</pre>
+
+  </section>
+
+  <section id="5Buntitled-5D" class="documentation-section">
+
+
+
+    <section class="attribute-method-details" class="method-section">
+      <header>
+        <h3>Attributes</h3>
+      </header>
+
+      <div id="attribute-i-operator_loc" class="method-detail">
+        <div class="method-heading attribute-method-heading">
+          <span class="method-name">operator_loc</span><span
+            class="attribute-access-type">[R]</span>
+        </div>
+
+        <div class="method-description">
+        <p>attr_reader <a href="MatchPredicateNode.html#attribute-i-operator_loc"><code>operator_loc</code></a>: <a href="Location.html"><code>Location</code></a></p>
+        </div>
+      </div>
+      <div id="attribute-i-pattern" class="method-detail">
+        <div class="method-heading attribute-method-heading">
+          <span class="method-name">pattern</span><span
+            class="attribute-access-type">[R]</span>
+        </div>
+
+        <div class="method-description">
+        <p>attr_reader pattern: <a href="Node.html"><code>Node</code></a></p>
+        </div>
+      </div>
+      <div id="attribute-i-value" class="method-detail">
+        <div class="method-heading attribute-method-heading">
+          <span class="method-name">value</span><span
+            class="attribute-access-type">[R]</span>
+        </div>
+
+        <div class="method-description">
+        <p>attr_reader value: <a href="Node.html"><code>Node</code></a></p>
+        </div>
+      </div>
+    </section>
+
+
+     <section id="public-class-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Class Methods</h3>
+       </header>
+
+      <div id="method-c-new" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">new</span><span
+              class="method-args">(value, pattern, operator_loc, location)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def initialize: (value: <a href="Node.html"><code>Node</code></a>, pattern: <a href="Node.html"><code>Node</code></a>, <a href="MatchPredicateNode.html#attribute-i-operator_loc"><code>operator_loc</code></a>: <a href="Location.html"><code>Location</code></a>, location: <a href="Location.html"><code>Location</code></a>) -&gt; void</p>
+
+          <div class="method-source-code" id="new-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11604</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">initialize</span>(<span class="ruby-identifier">value</span>, <span class="ruby-identifier">pattern</span>, <span class="ruby-identifier">operator_loc</span>, <span class="ruby-identifier">location</span>)
+  <span class="ruby-ivar">@value</span> = <span class="ruby-identifier">value</span>
+  <span class="ruby-ivar">@pattern</span> = <span class="ruby-identifier">pattern</span>
+  <span class="ruby-ivar">@operator_loc</span> = <span class="ruby-identifier">operator_loc</span>
+  <span class="ruby-ivar">@location</span> = <span class="ruby-identifier">location</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-c-type" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">type</span><span
+              class="method-args">()</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Similar to <a href="MatchPredicateNode.html#method-i-type"><code>type</code></a>, this method returns a symbol that you can use for splitting on the type of the node without having to do a long === chain. Note that like <a href="MatchPredicateNode.html#method-i-type"><code>type</code></a>, it will still be slower than using == for a single class, but should be faster in a case statement or an array comparison.</p>
+
+<p>def self.type: () -&gt; <a href="../Symbol.html"><code>Symbol</code></a></p>
+
+          <div class="method-source-code" id="type-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11689</span>
+<span class="ruby-keyword">def</span> <span class="ruby-keyword">self</span>.<span class="ruby-identifier ruby-title">type</span>
+  <span class="ruby-value">:match_predicate_node</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+     <section id="public-instance-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Instance Methods</h3>
+       </header>
+
+      <div id="method-i-accept" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">accept</span><span
+              class="method-args">(visitor)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def accept: (visitor: <a href="Visitor.html"><code>Visitor</code></a>) -&gt; void</p>
+
+          <div class="method-source-code" id="accept-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11612</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">accept</span>(<span class="ruby-identifier">visitor</span>)
+  <span class="ruby-identifier">visitor</span>.<span class="ruby-identifier">visit_match_predicate_node</span>(<span class="ruby-keyword">self</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-child_nodes" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">child_nodes</span><span
+              class="method-args">()</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def <a href="MatchPredicateNode.html#method-i-child_nodes"><code>child_nodes</code></a>: () -&gt; Array[nil | Node]</p>
+
+          <div class="method-source-code" id="child_nodes-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11617</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">child_nodes</span>
+  [<span class="ruby-identifier">value</span>, <span class="ruby-identifier">pattern</span>]
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+        <div class="aliases">
+          Also aliased as: <a href="MatchPredicateNode.html#method-i-deconstruct">deconstruct</a>
+        </div>
+
+      </div>
+
+      <div id="method-i-comment_targets" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">comment_targets</span><span
+              class="method-args">()</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def <a href="MatchPredicateNode.html#method-i-comment_targets"><code>comment_targets</code></a>: () -&gt; Array[Node | Location]</p>
+
+          <div class="method-source-code" id="comment_targets-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11627</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">comment_targets</span>
+  [<span class="ruby-identifier">value</span>, <span class="ruby-identifier">pattern</span>, <span class="ruby-identifier">operator_loc</span>]
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-compact_child_nodes" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">compact_child_nodes</span><span
+              class="method-args">()</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def <a href="MatchPredicateNode.html#method-i-compact_child_nodes"><code>compact_child_nodes</code></a>: () -&gt; <a href="Node">Array</a></p>
+
+          <div class="method-source-code" id="compact_child_nodes-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11622</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">compact_child_nodes</span>
+  [<span class="ruby-identifier">value</span>, <span class="ruby-identifier">pattern</span>]
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-copy" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">copy</span><span
+              class="method-args">(**params)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def copy: (**params) -&gt; <a href="MatchPredicateNode.html"><code>MatchPredicateNode</code></a></p>
+
+          <div class="method-source-code" id="copy-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11632</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">copy</span>(<span class="ruby-operator">**</span><span class="ruby-identifier">params</span>)
+  <span class="ruby-constant">MatchPredicateNode</span>.<span class="ruby-identifier">new</span>(
+    <span class="ruby-identifier">params</span>.<span class="ruby-identifier">fetch</span>(<span class="ruby-value">:value</span>) { <span class="ruby-identifier">value</span> },
+    <span class="ruby-identifier">params</span>.<span class="ruby-identifier">fetch</span>(<span class="ruby-value">:pattern</span>) { <span class="ruby-identifier">pattern</span> },
+    <span class="ruby-identifier">params</span>.<span class="ruby-identifier">fetch</span>(<span class="ruby-value">:operator_loc</span>) { <span class="ruby-identifier">operator_loc</span> },
+    <span class="ruby-identifier">params</span>.<span class="ruby-identifier">fetch</span>(<span class="ruby-value">:location</span>) { <span class="ruby-identifier">location</span> },
+  )
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-deconstruct" class="method-detail method-alias">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">deconstruct</span><span
+              class="method-args">()</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def deconstruct: () -&gt; Array[nil | Node]</p>
+
+        </div>
+
+
+        <div class="aliases">
+          Alias for: <a href="MatchPredicateNode.html#method-i-child_nodes">child_nodes</a>
+        </div>
+      </div>
+
+      <div id="method-i-deconstruct_keys" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">deconstruct_keys</span><span
+              class="method-args">(keys)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def <a href="MatchPredicateNode.html#method-i-deconstruct_keys"><code>deconstruct_keys</code></a>: (keys: <a href="Symbol">Array</a>) -&gt; Hash[Symbol, nil | <a href="Node.html"><code>Node</code></a> | <a href="Node">Array</a> | <a href="../String.html"><code>String</code></a> | <a href="Token.html"><code>Token</code></a> | <a href="Token">Array</a> | Location]</p>
+
+          <div class="method-source-code" id="deconstruct_keys-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11645</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">deconstruct_keys</span>(<span class="ruby-identifier">keys</span>)
+  { <span class="ruby-value">value:</span> <span class="ruby-identifier">value</span>, <span class="ruby-value">pattern:</span> <span class="ruby-identifier">pattern</span>, <span class="ruby-value">operator_loc:</span> <span class="ruby-identifier">operator_loc</span>, <span class="ruby-value">location:</span> <span class="ruby-identifier">location</span> }
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-inspect" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">inspect</span><span
+              class="method-args">(inspector = NodeInspector.new)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def inspect(inspector: NodeInspector) -&gt; <a href="../String.html"><code>String</code></a></p>
+
+          <div class="method-source-code" id="inspect-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11655</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">inspect</span>(<span class="ruby-identifier">inspector</span> = <span class="ruby-constant">NodeInspector</span>.<span class="ruby-identifier">new</span>)
+  <span class="ruby-identifier">inspector</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">inspector</span>.<span class="ruby-identifier">header</span>(<span class="ruby-keyword">self</span>)
+  <span class="ruby-identifier">inspector</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-string">&quot;├── value:\n&quot;</span>
+  <span class="ruby-identifier">inspector</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">inspector</span>.<span class="ruby-identifier">child_node</span>(<span class="ruby-identifier">value</span>, <span class="ruby-string">&quot;│   &quot;</span>)
+  <span class="ruby-identifier">inspector</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-string">&quot;├── pattern:\n&quot;</span>
+  <span class="ruby-identifier">inspector</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">inspector</span>.<span class="ruby-identifier">child_node</span>(<span class="ruby-identifier">pattern</span>, <span class="ruby-string">&quot;│   &quot;</span>)
+  <span class="ruby-identifier">inspector</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-node">&quot;└── operator_loc: #{inspector.location(operator_loc)}\n&quot;</span>
+  <span class="ruby-identifier">inspector</span>.<span class="ruby-identifier">to_str</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-operator" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">operator</span><span
+              class="method-args">()</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>def operator: () -&gt; <a href="../String.html"><code>String</code></a></p>
+
+          <div class="method-source-code" id="operator-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11650</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">operator</span>
+  <span class="ruby-identifier">operator_loc</span>.<span class="ruby-identifier">slice</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-type" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">type</span><span
+              class="method-args">()</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Sometimes you want to check an instance of a node against a list of classes to see what kind of behavior to perform. Usually this is done by calling ‘[cls1, cls2].include?(node.class)` or putting the node into a case statement and doing `case node; when cls1; when cls2; end`. Both of these approaches are relatively slow because of the constant lookups, method calls, and/or array allocations.</p>
+
+<p>Instead, you can call <a href="MatchPredicateNode.html#method-i-type"><code>type</code></a>, which will return to you a symbol that you can use for comparison. This is faster than the other approaches because it uses a single integer comparison, but also because if you’re on CRuby you can take advantage of the fact that case statements with all symbol keys will use a jump table.</p>
+
+<p>def type: () -&gt; <a href="../Symbol.html"><code>Symbol</code></a></p>
+
+          <div class="method-source-code" id="type-source">
+            <pre><span class="ruby-comment"># File lib/prism/node.rb, line 11679</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">type</span>
+  <span class="ruby-value">:match_predicate_node</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+  </section>
+</main>
+
+
+<footer id="validator-badges" role="contentinfo">
+  <p><a href="https://validator.w3.org/check/referer">Validate</a>
+  <p>Generated by <a href="https://ruby.github.io/rdoc/">RDoc</a> 6.6.3.1.
+  <p>Based on <a href="http://deveiate.org/projects/Darkfish-RDoc/">Darkfish</a> by <a href="http://deveiate.org">Michael Granger</a>.
+</footer>
+

@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+
+<title>module IRB - Documentation for Ruby 3.3</title>
+
+<script type="text/javascript">
+  var rdoc_rel_prefix = "./";
+  var index_rel_prefix = "./";
+</script>
+
+<script src="./js/navigation.js" defer></script>
+<script src="./js/search.js" defer></script>
+<script src="./js/search_index.js" defer></script>
+<script src="./js/searcher.js" defer></script>
+<script src="./js/darkfish.js" defer></script>
+
+<link href="./css/fonts.css" rel="stylesheet">
+<link href="./css/rdoc.css" rel="stylesheet">
+
+
+<body id="top" role="document" class="module">
+<nav role="navigation">
+  <div id="project-navigation">
+    <div id="home-section" role="region" title="Quick navigation" class="nav-section">
+  <h2>
+    <a href="./index.html" rel="home">Home</a>
+  </h2>
+
+  <div id="table-of-contents-navigation">
+    <a href="./table_of_contents.html#pages">Pages</a>
+    <a href="./table_of_contents.html#classes">Classes</a>
+    <a href="./table_of_contents.html#methods">Methods</a>
+  </div>
+</div>
+
+    <div id="search-section" role="search" class="project-section initially-hidden">
+  <form action="#" method="get" accept-charset="utf-8">
+    <div id="search-field-wrapper">
+      <input id="search-field" role="combobox" aria-label="Search"
+             aria-autocomplete="list" aria-controls="search-results"
+             type="text" name="search" placeholder="Search (/) for a class, method, ..." spellcheck="false"
+             title="Type to search, Up and Down to navigate, Enter to load">
+    </div>
+
+    <ul id="search-results" aria-label="Search Results"
+        aria-busy="false" aria-expanded="false"
+        aria-atomic="false" class="initially-hidden"></ul>
+  </form>
+</div>
+
+  </div>
+
+  
+<div class="nav-section">
+  <h3>Table of Contents</h3>
+
+
+
+  <ul class="link-list" role="directory">
+              <li>      <a href="#module-IRB-label-IRB">IRB</a>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-Startup">Startup</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-The+Command+Line">The Command Line</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-Command-Line+Options">Command-Line Options</a>
+          <li>      <a href="#module-IRB-label-Command-Line+Arguments">Command-Line Arguments</a>
+
+              </ul>
+            </details>
+          </li>
+          <li>      <a href="#module-IRB-label-Configuration+File">Configuration File</a>
+          <li>      <a href="#module-IRB-label-Hash+IRB.conf">Hash <code>IRB.conf</code></a>
+          <li>      <a href="#module-IRB-label-Notes+on+Initialization+Precedence">Notes on Initialization Precedence</a>
+          <li>      <a href="#module-IRB-label-Initialization+Script">Initialization Script</a>
+
+              </ul>
+            </details>
+          </li>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-Input">Input</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-Input+Command+History">Input Command History</a>
+          <li>      <a href="#module-IRB-label-Command+Aliases">Command Aliases</a>
+          <li>      <a href="#module-IRB-label-End-of-File">End-of-File</a>
+          <li>      <a href="#module-IRB-label-SIGINT">SIGINT</a>
+          <li>      <a href="#module-IRB-label-Automatic+Completion">Automatic Completion</a>
+          <li>      <a href="#module-IRB-label-Automatic+Indentation">Automatic Indentation</a>
+          <li>      <a href="#module-IRB-label-Input+Method">Input Method</a>
+
+              </ul>
+            </details>
+          </li>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-Output">Output</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-Return-Value+Printing+-28Echoing-29">Return-Value Printing (Echoing)</a>
+          <li>      <a href="#module-IRB-label-Multiline+Output">Multiline Output</a>
+          <li>      <a href="#module-IRB-label-Evaluation+History">Evaluation History</a>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-Prompt+and+Return+Formats">Prompt and Return Formats</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-The+Default+Prompt+and+Return+Format">The Default Prompt and Return Format</a>
+          <li>      <a href="#module-IRB-label-Pre-Defined+Prompts">Pre-Defined Prompts</a>
+          <li>      <a href="#module-IRB-label-Custom+Prompts">Custom Prompts</a>
+          <li>      <a href="#module-IRB-label-Prompt+Specifiers">Prompt Specifiers</a>
+
+              </ul>
+            </details>
+          </li>
+          <li>      <a href="#module-IRB-label-Verbosity">Verbosity</a>
+          <li>      <a href="#module-IRB-label-Help">Help</a>
+          <li>      <a href="#module-IRB-label-Version">Version</a>
+
+              </ul>
+            </details>
+          </li>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-Input+and+Output">Input and Output</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-Color+Highlighting">Color Highlighting</a>
+
+              </ul>
+            </details>
+          </li>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-Debugging">Debugging</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-Warnings">Warnings</a>
+
+              </ul>
+            </details>
+          </li>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-Other+Features">Other Features</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-Load+Modules">Load Modules</a>
+          <li>      <a href="#module-IRB-label-RI+Documentation+Directories">RI Documentation Directories</a>
+          <li>      <a href="#module-IRB-label-IRB+Name">IRB Name</a>
+          <li>      <a href="#module-IRB-label-Application+Name">Application Name</a>
+          <li>      <a href="#module-IRB-label-Configuration+Monitor">Configuration Monitor</a>
+          <li>      <a href="#module-IRB-label-Encodings">Encodings</a>
+          <li>      <a href="#module-IRB-label-Commands">Commands</a>
+          <li>
+            <details open>
+              <summary>      <a href="#module-IRB-label-IRB+Sessions">IRB Sessions</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#module-IRB-label-Configuration">Configuration</a>
+          <li>      <a href="#module-IRB-label-Session+variables">Session variables</a>
+
+              </ul>
+            </details>
+          </li>
+
+              </ul>
+            </details>
+          </li>
+          <li>      <a href="#module-IRB-label-Restrictions">Restrictions</a>
+
+  </ul>
+</div>
+
+
+  <div id="class-metadata">
+    
+    
+    
+    
+    
+<!-- Method Quickref -->
+<div id="method-list-section" class="nav-section">
+  <h3>Methods</h3>
+
+  <ul class="link-list" role="directory">
+    <li ><a href="#method-c-easter_egg">::easter_egg</a>
+    <li ><a href="#method-c-easter_egg_logo">::easter_egg_logo</a>
+    <li ><a href="#method-c-start">::start</a>
+  </ul>
+</div>
+
+  </div>
+</nav>
+
+<main role="main" aria-labelledby="module-IRB">
+  <h1 id="module-IRB" class="module">
+    module IRB
+  </h1>
+
+  <section class="description">
+    
+<h2 id="module-IRB-label-IRB"><a href="IRB.html"><code>IRB</code></a><span><a href="#module-IRB-label-IRB">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p><a href="Module.html"><code>Module</code></a> <a href="IRB.html"><code>IRB</code></a> (“Interactive Ruby”) provides a shell-like interface that supports user interaction with the Ruby interpreter.</p>
+
+<p>It operates as a <em>read-eval-print loop</em> (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>) that:</p>
+<ul><li>
+<p><strong><em>Reads</em></strong> each character as you type. You can modify the <a href="IRB.html"><code>IRB</code></a> context to change the way input works. See <a href="IRB.html#module-IRB-label-Input">Input</a>.</p>
+</li><li>
+<p><strong><em>Evaluates</em></strong> the code each time it has read a syntactically complete passage.</p>
+</li><li>
+<p><strong><em>Prints</em></strong> after evaluating. You can modify the <a href="IRB.html"><code>IRB</code></a> context to change the way output works. See <a href="IRB.html#module-IRB-label-Output">Output</a>.</p>
+</li></ul>
+
+<p>Example:</p>
+
+<pre>$ irb
+irb(main):001&gt; File.basename(Dir.pwd)
+=&gt; &quot;irb&quot;
+irb(main):002&gt; Dir.entries(&#39;.&#39;).size
+=&gt; 25
+irb(main):003* Dir.entries(&#39;.&#39;).select do |entry|
+irb(main):004*   entry.start_with?(&#39;R&#39;)
+irb(main):005&gt; end
+=&gt; [&quot;README.md&quot;, &quot;Rakefile&quot;]</pre>
+
+<p>The typed input may also include <a href="IRB.html#module-IRB-label-IRB-Specific+Commands">IRB-specific commands</a>.</p>
+
+<p>As seen above, you can start <a href="IRB.html"><code>IRB</code></a> by using the shell command <code>irb</code>.</p>
+
+<p>You can stop an <a href="IRB.html"><code>IRB</code></a> session by typing command <code>exit</code>:</p>
+
+<pre>irb(main):006&gt; exit
+$</pre>
+
+<p>At that point, <a href="IRB.html"><code>IRB</code></a> calls any hooks found in array <code>IRB.conf[:AT_EXIT]</code>, then exits.</p>
+
+<h2 id="module-IRB-label-Startup">Startup<span><a href="#module-IRB-label-Startup">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>At startup, IRB:</p>
+<ol><li>
+<p>Interprets (as Ruby code) the content of the <a href="IRB.html#module-IRB-label-Configuration+File">configuration file</a> (if given).</p>
+</li><li>
+<p>Constructs the initial session context from <a href="IRB.html#module-IRB-label-Hash+IRB.conf">hash IRB.conf</a> and from default values; the hash content may have been affected by command-line options, and by direct assignments in the configuration file.</p>
+</li><li>
+<p>Assigns the context to variable <code>conf</code>.</p>
+</li><li>
+<p>Assigns command-line arguments to variable <code>ARGV</code>.</p>
+</li><li>
+<p>Prints the <a href="IRB.html#module-IRB-label-Prompt+and+Return+Formats">prompt</a>.</p>
+</li><li>
+<p>Puts the content of the <a href="IRB.html#module-IRB-label-Initialization+Script">initialization script</a> onto the <a href="IRB.html"><code>IRB</code></a> shell, just as if it were user-typed commands.</p>
+</li></ol>
+
+<h3 id="module-IRB-label-The+Command+Line">The Command Line<span><a href="#module-IRB-label-The+Command+Line">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>On the command line, all options precede all arguments; the first item that is not recognized as an option is treated as an argument, as are all items that follow.</p>
+
+<h4 id="module-IRB-label-Command-Line+Options">Command-Line Options<span><a href="#module-IRB-label-Command-Line+Options">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p>Many command-line options affect entries in hash <code>IRB.conf</code>, which in turn affect the initial configuration of the <a href="IRB.html"><code>IRB</code></a> session.</p>
+
+<p>Details of the options are described in the relevant subsections below.</p>
+
+<p>A cursory list of the <a href="IRB.html"><code>IRB</code></a> command-line options may be seen in the <a href="https://raw.githubusercontent.com/ruby/irb/master/lib/irb/lc/help-message">help message</a>, which is also displayed if you use command-line option <code>--help</code>.</p>
+
+<p>If you are interested in a specific option, consult the index.</p>
+
+<h4 id="module-IRB-label-Command-Line+Arguments">Command-Line Arguments<span><a href="#module-IRB-label-Command-Line+Arguments">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p>Command-line arguments are passed to <a href="IRB.html"><code>IRB</code></a> in array <code>ARGV</code>:</p>
+
+<pre>$ irb --noscript Foo Bar Baz
+irb(main):001&gt; ARGV
+=&gt; [&quot;Foo&quot;, &quot;Bar&quot;, &quot;Baz&quot;]
+irb(main):002&gt; exit
+$</pre>
+
+<p>Command-line option <code>--</code> causes everything that follows to be treated as arguments, even those that look like options:</p>
+
+<pre>$ irb --noscript -- --noscript -- Foo Bar Baz
+irb(main):001&gt; ARGV
+=&gt; [&quot;--noscript&quot;, &quot;--&quot;, &quot;Foo&quot;, &quot;Bar&quot;, &quot;Baz&quot;]
+irb(main):002&gt; exit
+$</pre>
+
+<h3 id="module-IRB-label-Configuration+File">Configuration <a href="File.html"><code>File</code></a><span><a href="#module-IRB-label-Configuration+File">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>You can initialize <a href="IRB.html"><code>IRB</code></a> via a <em>configuration file</em>.</p>
+
+<p>If command-line option <code>-f</code> is given, no configuration file is looked for.</p>
+
+<p>Otherwise, <a href="IRB.html"><code>IRB</code></a> reads and interprets a configuration file if one is available.</p>
+
+<p>The configuration file can contain any Ruby code, and can usefully include user code that:</p>
+<ul><li>
+<p>Can then be debugged in <a href="IRB.html"><code>IRB</code></a>.</p>
+</li><li>
+<p>Configures <a href="IRB.html"><code>IRB</code></a> itself.</p>
+</li><li>
+<p>Requires or loads files.</p>
+</li></ul>
+
+<p>The path to the configuration file is the first found among:</p>
+<ul><li>
+<p>The value of variable <code>$IRBRC</code>, if defined.</p>
+</li><li>
+<p>The value of variable <code>$XDG_CONFIG_HOME/irb/irbrc</code>, if defined.</p>
+</li><li>
+<p><a href="File.html"><code>File</code></a> <code>$HOME/.irbrc</code>, if it exists.</p>
+</li><li>
+<p><a href="File.html"><code>File</code></a> <code>$HOME/.config/irb/irbrc</code>, if it exists.</p>
+</li><li>
+<p><a href="File.html"><code>File</code></a> <code>.irbrc</code> in the current directory, if it exists.</p>
+</li><li>
+<p><a href="File.html"><code>File</code></a> <code>irb.rc</code> in the current directory, if it exists.</p>
+</li><li>
+<p><a href="File.html"><code>File</code></a> <code>_irbrc</code> in the current directory, if it exists.</p>
+</li><li>
+<p><a href="File.html"><code>File</code></a> <code>$irbrc</code> in the current directory, if it exists.</p>
+</li></ul>
+
+<p>If the search fails, there is no configuration file.</p>
+
+<p>If the search succeeds, the configuration file is read as Ruby code, and so can contain any Ruby programming you like.</p>
+
+<p><a href="Method.html"><code>Method</code></a> <code>conf.rc?</code> returns <code>true</code> if a configuration file was read, <code>false</code> otherwise. <a href="Hash.html"><code>Hash</code></a> entry <code>IRB.conf[:RC]</code> also contains that value.</p>
+
+<h3 id="module-IRB-label-Hash+IRB.conf"><a href="Hash.html"><code>Hash</code></a> <code>IRB.conf</code><span><a href="#module-IRB-label-Hash+IRB.conf">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>The initial entries in hash <code>IRB.conf</code> are determined by:</p>
+<ul><li>
+<p>Default values.</p>
+</li><li>
+<p>Command-line options, which may override defaults.</p>
+</li><li>
+<p>Direct assignments in the configuration file.</p>
+</li></ul>
+
+<p>You can see the hash by typing <code>IRB.conf</code>.</p>
+
+<p>Details of the entries’ meanings are described in the relevant subsections below.</p>
+
+<p>If you are interested in a specific entry, consult the index.</p>
+
+<h3 id="module-IRB-label-Notes+on+Initialization+Precedence">Notes on Initialization Precedence<span><a href="#module-IRB-label-Notes+on+Initialization+Precedence">&para;</a> <a href="#top">&uarr;</a></span></h3>
+<ul><li>
+<p>Any conflict between an entry in hash <code>IRB.conf</code> and a command-line option is resolved in favor of the hash entry.</p>
+</li><li>
+<p><a href="Hash.html"><code>Hash</code></a> <code>IRB.conf</code> affects the context only once, when the configuration file is interpreted; any subsequent changes to it do not affect the context and are therefore essentially meaningless.</p>
+</li></ul>
+
+<h3 id="module-IRB-label-Initialization+Script">Initialization Script<span><a href="#module-IRB-label-Initialization+Script">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, the first command-line argument (after any options) is the path to a Ruby initialization script.</p>
+
+<p><a href="IRB.html"><code>IRB</code></a> reads the initialization script and puts its content onto the <a href="IRB.html"><code>IRB</code></a> shell, just as if it were user-typed commands.</p>
+
+<p>Command-line option <code>--noscript</code> causes the first command-line argument to be treated as an ordinary argument (instead of an initialization script); <code>--script</code> is the default.</p>
+
+<h2 id="module-IRB-label-Input">Input<span><a href="#module-IRB-label-Input">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>This section describes the features that allow you to change the way <a href="IRB.html"><code>IRB</code></a> input works; see also <a href="IRB.html#module-IRB-label-Input+and+Output">Input and Output</a>.</p>
+
+<h3 id="module-IRB-label-Input+Command+History">Input Command History<span><a href="#module-IRB-label-Input+Command+History">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> stores a history of up to 1000 input commands in a file named <code>.irb_history</code>. The history file will be in the same directory as the <a href="IRB.html#module-IRB-label-Configuration+File">configuration file</a> if one is found, or in <code>~/</code> otherwise.</p>
+
+<p>A new <a href="IRB.html"><code>IRB</code></a> session creates the history file if it does not exist, and appends to the file if it does exist.</p>
+
+<p>You can change the filepath by adding to your configuration file: <code>IRB.conf[:HISTORY_FILE] = <strong>filepath</code></strong>, where <em>filepath</em> is a string filepath.</p>
+
+<p>During the session, method <code>conf.history_file</code> returns the filepath, and method <code>conf.history_file = <strong>new_filepath</code></strong> copies the history to the file at <em>new_filepath</em>, which becomes the history file for the session.</p>
+
+<p>You can change the number of commands saved by adding to your configuration file: <code>IRB.conf[:SAVE_HISTORY] = <strong>n</code></strong>, wheHISTORY_FILEre <em>n</em> is one of:</p>
+<ul><li>
+<p>Positive integer: the number of commands to be saved,</p>
+</li><li>
+<p>Zero: all commands are to be saved.</p>
+</li><li>
+<p><code>nil</code>: no commands are to be saved,.</p>
+</li></ul>
+
+<p>During the session, you can use methods <code>conf.save_history</code> or <code>conf.save_history=</code> to retrieve or change the count.</p>
+
+<h3 id="module-IRB-label-Command+Aliases">Command Aliases<span><a href="#module-IRB-label-Command+Aliases">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> defines several command aliases:</p>
+
+<pre>irb(main):001&gt; conf.command_aliases
+=&gt; {:&quot;$&quot;=&gt;:show_source, :&quot;@&quot;=&gt;:whereami}</pre>
+
+<p>You can change the initial aliases in the configuration file with:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:COMMAND_ALIASES</span>] = {<span class="ruby-value">foo:</span> <span class="ruby-value">:show_source</span>, <span class="ruby-value">bar:</span> <span class="ruby-value">:whereami</span>}
+</pre>
+
+<p>You can replace the current aliases at any time with configuration method <code>conf.command_aliases=</code>; Because <code>conf.command_aliases</code> is a hash, you can modify it.</p>
+
+<h3 id="module-IRB-label-End-of-File">End-of-File<span><a href="#module-IRB-label-End-of-File">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <code>IRB.conf[:IGNORE_EOF]</code> is <code>false</code>, which means that typing the end-of-file character <code>Ctrl-D</code> causes the session to exit.</p>
+
+<p>You can reverse that behavior by adding <code>IRB.conf[:IGNORE_EOF] = true</code> to the configuration file.</p>
+
+<p>During the session, method <code>conf.ignore_eof?</code> returns the setting, and method <code>conf.ignore_eof = <strong>boolean</code></strong> sets it.</p>
+
+<h3 id="module-IRB-label-SIGINT">SIGINT<span><a href="#module-IRB-label-SIGINT">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <code>IRB.conf[:IGNORE_SIGINT]</code> is <code>true</code>, which means that typing the interrupt character <code>Ctrl-C</code> causes the session to exit.</p>
+
+<p>You can reverse that behavior by adding <code>IRB.conf[:IGNORE_SIGING] = false</code> to the configuration file.</p>
+
+<p>During the session, method <code>conf.ignore_siging?</code> returns the setting, and method <code>conf.ignore_sigint = <strong>boolean</code></strong> sets it.</p>
+
+<h3 id="module-IRB-label-Automatic+Completion">Automatic Completion<span><a href="#module-IRB-label-Automatic+Completion">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> enables [automatic completion](<a href="https://en.wikipedia.org/wiki/Autocomplete#In_command-line_interpr">en.wikipedia.org/wiki/Autocomplete#In_command-line_interpr</a> eters):</p>
+
+<p>You can disable it by either of these:</p>
+<ul><li>
+<p>Adding <code>IRB.conf[:USE_AUTOCOMPLETE] = false</code> to the configuration file.</p>
+</li><li>
+<p>Giving command-line option <code>--noautocomplete</code> (<code>--autocomplete</code> is the default).</p>
+</li></ul>
+
+<p><a href="Method.html"><code>Method</code></a> <code>conf.use_autocomplete?</code> returns <code>true</code> if automatic completion is enabled, <code>false</code> otherwise.</p>
+
+<p>The setting may not be changed during the session.</p>
+
+<h3 id="module-IRB-label-Automatic+Indentation">Automatic Indentation<span><a href="#module-IRB-label-Automatic+Indentation">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> automatically indents lines of code to show structure (e.g., it indent the contents of a block).</p>
+
+<p>The current setting is returned by the configuration method <code>conf.auto_indent_mode</code>.</p>
+
+<p>The default initial setting is <code>true</code>:</p>
+
+<pre>irb(main):001&gt; conf.auto_indent_mode
+=&gt; true
+irb(main):002* Dir.entries(&#39;.&#39;).select do |entry|
+irb(main):003*   entry.start_with?(&#39;R&#39;)
+irb(main):004&gt; end
+=&gt; [&quot;README.md&quot;, &quot;Rakefile&quot;]</pre>
+
+<p>You can change the initial setting in the configuration file with:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:AUTO_INDENT</span>] = <span class="ruby-keyword">false</span>
+</pre>
+
+<p>Note that the <em>current</em> setting <em>may not</em> be changed in the <a href="IRB.html"><code>IRB</code></a> session.</p>
+
+<h3 id="module-IRB-label-Input+Method">Input <a href="Method.html"><code>Method</code></a><span><a href="#module-IRB-label-Input+Method">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>The <a href="IRB.html"><code>IRB</code></a> input method determines how command input is to be read; by default, the input method for a session is <a href="IRB/RelineInputMethod.html"><code>IRB::RelineInputMethod</code></a>. Unless the value of the TERM environment variable is ‘dumb’, in which case the most simplistic input method is used.</p>
+
+<p>You can set the input method by:</p>
+<ul><li>
+<p>Adding to the configuration file:</p>
+<ul><li>
+<p><code>IRB.conf[:USE_SINGLELINE] = true</code> or <code>IRB.conf[:USE_MULTILINE]= false</code> sets the input method to <a href="IRB/ReadlineInputMethod.html"><code>IRB::ReadlineInputMethod</code></a>.</p>
+</li><li>
+<p><code>IRB.conf[:USE_SINGLELINE] = false</code> or <code>IRB.conf[:USE_MULTILINE] = true</code> sets the input method to <a href="IRB/RelineInputMethod.html"><code>IRB::RelineInputMethod</code></a>.</p>
+</li></ul>
+</li><li>
+<p>Giving command-line options:</p>
+<ul><li>
+<p><code>--singleline</code> or <code>--nomultiline</code> sets the input method to <a href="IRB/ReadlineInputMethod.html"><code>IRB::ReadlineInputMethod</code></a>.</p>
+</li><li>
+<p><code>--nosingleline</code> or <code>--multiline</code> sets the input method to <a href="IRB/RelineInputMethod.html"><code>IRB::RelineInputMethod</code></a>.</p>
+</li><li>
+<p><code>--nosingleline</code> together with <code>--nomultiline</code> sets the input to <a href="IRB/StdioInputMethod.html"><code>IRB::StdioInputMethod</code></a>.</p>
+</li></ul>
+</li></ul>
+
+<p><a href="Method.html"><code>Method</code></a> <code>conf.use_multiline?</code> and its synonym <code>conf.use_reline</code> return:</p>
+<ul><li>
+<p><code>true</code> if option <code>--multiline</code> was given.</p>
+</li><li>
+<p><code>false</code> if option <code>--nomultiline</code> was given.</p>
+</li><li>
+<p><code>nil</code> if neither was given.</p>
+</li></ul>
+
+<p><a href="Method.html"><code>Method</code></a> <code>conf.use_singleline?</code> and its synonym <code>conf.use_readline</code> return:</p>
+<ul><li>
+<p><code>true</code> if option <code>--singleline</code> was given.</p>
+</li><li>
+<p><code>false</code> if option <code>--nosingleline</code> was given.</p>
+</li><li>
+<p><code>nil</code> if neither was given.</p>
+</li></ul>
+
+<h2 id="module-IRB-label-Output">Output<span><a href="#module-IRB-label-Output">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>This section describes the features that allow you to change the way <a href="IRB.html"><code>IRB</code></a> output works; see also <a href="IRB.html#module-IRB-label-Input+and+Output">Input and Output</a>.</p>
+
+<h3 id="module-IRB-label-Return-Value+Printing+-28Echoing-29">Return-Value Printing (Echoing)<span><a href="#module-IRB-label-Return-Value+Printing+-28Echoing-29">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> prints (echoes) the values returned by all input commands.</p>
+
+<p>You can change the initial behavior and suppress all echoing by:</p>
+<ul><li>
+<p>Adding to the configuration file: <code>IRB.conf[:ECHO] = false</code>. (The default value for this entry is <code>nil</code>, which means the same as <code>true</code>.)</p>
+</li><li>
+<p>Giving command-line option <code>--noecho</code>. (The default is <code>--echo</code>.)</p>
+</li></ul>
+
+<p>During the session, you can change the current setting with configuration method <code>conf.echo=</code> (set to <code>true</code> or <code>false</code>).</p>
+
+<p>As stated above, by default <a href="IRB.html"><code>IRB</code></a> prints the values returned by all input commands; but <a href="IRB.html"><code>IRB</code></a> offers special treatment for values returned by assignment statements, which may be:</p>
+<ul><li>
+<p>Printed with truncation (to fit on a single line of output), which is the default; an ellipsis (<code>...</code> is suffixed, to indicate the truncation):</p>
+
+<pre>irb(main):001&gt; x = &#39;abc&#39; * 100</pre>
+</li></ul>
+
+<blockquote>
+<p>“abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc…</p>
+</blockquote>
+<ul><li>
+<p>Printed in full (regardless of the length).</p>
+</li><li>
+<p>Suppressed (not printed at all)</p>
+</li></ul>
+
+<p>You can change the initial behavior by:</p>
+<ul><li>
+<p>Adding to the configuration file: <code>IRB.conf[:ECHO_ON_ASSIGNMENT] = false</code>. (The default value for this entry is <code>niL</code>, which means the same as <code>:truncate</code>.)</p>
+</li><li>
+<p>Giving command-line option <code>--noecho-on-assignment</code> or <code>--echo-on-assignment</code>. (The default is <code>--truncate-echo-on-assignment</code>.)</p>
+</li></ul>
+
+<p>During the session, you can change the current setting with configuration method <code>conf.echo_on_assignment=</code> (set to <code>true</code>, <code>false</code>, or <code>:truncate</code>).</p>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> formats returned values by calling method <code>inspect</code>.</p>
+
+<p>You can change the initial behavior by:</p>
+<ul><li>
+<p>Adding to the configuration file: <code>IRB.conf[:INSPECT_MODE] = false</code>. (The default value for this entry is <code>true</code>.)</p>
+</li><li>
+<p>Giving command-line option <code>--noinspect</code>. (The default is <code>--inspect</code>.)</p>
+</li></ul>
+
+<p>During the session, you can change the setting using method <code>conf.inspect_mode=</code>.</p>
+
+<h3 id="module-IRB-label-Multiline+Output">Multiline Output<span><a href="#module-IRB-label-Multiline+Output">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> prefixes a newline to a multiline response.</p>
+
+<p>You can change the initial default value by adding to the configuration file:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:NEWLINE_BEFORE_MULTILINE_OUTPUT</span>] = <span class="ruby-keyword">false</span>
+</pre>
+
+<p>During a session, you can retrieve or set the value using methods <code>conf.newline_before_multiline_output?</code> and <code>conf.newline_before_multiline_output=</code>.</p>
+
+<p>Examples:</p>
+
+<pre>irb(main):001&gt; conf.inspect_mode = false
+=&gt; false
+irb(main):002&gt; &quot;foo\nbar&quot;
+=&gt;
+foo
+bar
+irb(main):003&gt; conf.newline_before_multiline_output = false
+=&gt; false
+irb(main):004&gt; &quot;foo\nbar&quot;
+=&gt; foo
+bar</pre>
+
+<h3 id="module-IRB-label-Evaluation+History">Evaluation History<span><a href="#module-IRB-label-Evaluation+History">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> saves no history of evaluations (returned values), and the related methods <code>conf.eval_history</code>, <code>_</code>, and <code>__</code> are undefined.</p>
+
+<p>You can turn on that history, and set the maximum number of evaluations to be stored:</p>
+<ul><li>
+<p>In the configuration file: add <code>IRB.conf[:EVAL_HISTORY] = <strong>n</code></strong>. (Examples below assume that we’ve added <code>IRB.conf[:EVAL_HISTORY] = 5</code>.)</p>
+</li><li>
+<p>In the session (at any time): <code>conf.eval_history = <strong>n</code></strong>.</p>
+</li></ul>
+
+<p>If <code>n</code> is zero, all evaluation history is stored.</p>
+
+<p>Doing either of the above:</p>
+<ul><li>
+<p>Sets the maximum size of the evaluation history; defines method <code>conf.eval_history</code>, which returns the maximum size <code>n</code> of the evaluation history:</p>
+
+<pre>irb(main):001&gt; conf.eval_history = 5
+=&gt; 5
+irb(main):002&gt; conf.eval_history
+=&gt; 5</pre>
+</li><li>
+<p>Defines variable <code>_</code>, which contains the most recent evaluation, or <code>nil</code> if none; same as method <code>conf.last_value</code>:</p>
+
+<pre>irb(main):003&gt; _
+=&gt; 5
+irb(main):004&gt; :foo
+=&gt; :foo
+irb(main):005&gt; :bar
+=&gt; :bar
+irb(main):006&gt; _
+=&gt; :bar
+irb(main):007&gt; _
+=&gt; :bar</pre>
+</li><li>
+<p>Defines variable <code>__</code>:</p>
+<ul><li>
+<p><code>__</code> unadorned: contains all evaluation history:</p>
+
+<pre>irb(main):008&gt; :foo
+=&gt; :foo
+irb(main):009&gt; :bar
+=&gt; :bar
+irb(main):010&gt; :baz
+=&gt; :baz
+irb(main):011&gt; :bat
+=&gt; :bat
+irb(main):012&gt; :bam
+=&gt; :bam
+irb(main):013&gt; __
+=&gt;
+9 :bar
+10 :baz
+11 :bat
+12 :bam
+irb(main):014&gt; __
+=&gt;
+10 :baz
+11 :bat
+12 :bam
+13 ...self-history...</pre>
+
+<p>Note that when the evaluation is multiline, it is displayed differently.</p>
+</li><li>
+<p><code>__[</code><em>m</em><code>]</code>:</p>
+<ul><li>
+<p>Positive <em>m</em>: contains the evaluation for the given line number, or <code>nil</code> if that line number is not in the evaluation history:</p>
+
+<pre>irb(main):015&gt; __[12]
+=&gt; :bam
+irb(main):016&gt; __[1]
+=&gt; nil</pre>
+</li><li>
+<p>Negative <em>m</em>: contains the <code>mth</code>-from-end evaluation, or <code>nil</code> if that evaluation is not in the evaluation history:</p>
+
+<pre>irb(main):017&gt; __[-3]
+=&gt; :bam
+irb(main):018&gt; __[-13]
+=&gt; nil</pre>
+</li><li>
+<p>Zero <em>m</em>: contains <code>nil</code>:</p>
+
+<pre>irb(main):019&gt; __[0]
+=&gt; nil</pre>
+</li></ul>
+</li></ul>
+</li></ul>
+
+<h3 id="module-IRB-label-Prompt+and+Return+Formats">Prompt and Return Formats<span><a href="#module-IRB-label-Prompt+and+Return+Formats">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> uses the prompt and return value formats defined in its <code>:DEFAULT</code> prompt mode.</p>
+
+<h4 id="module-IRB-label-The+Default+Prompt+and+Return+Format">The Default Prompt and Return Format<span><a href="#module-IRB-label-The+Default+Prompt+and+Return+Format">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p>The default prompt and return values look like this:</p>
+
+<pre>irb(main):001&gt; 1 + 1
+=&gt; 2
+irb(main):002&gt; 2 + 2
+=&gt; 4</pre>
+
+<p>The prompt includes:</p>
+<ul><li>
+<p>The name of the running program (<code>irb</code>); see <a href="IRB.html#module-IRB-label-IRB+Name">IRB Name</a>.</p>
+</li><li>
+<p>The name of the current session (<code>main</code>); See <a href="IRB.html#module-IRB-label-IRB+Sessions">IRB Sessions</a>.</p>
+</li><li>
+<p>A 3-digit line number (1-based).</p>
+</li></ul>
+
+<p>The default prompt actually defines three formats:</p>
+<ul><li>
+<p>One for most situations (as above):</p>
+
+<pre>irb(main):003&gt; Dir
+=&gt; Dir</pre>
+</li><li>
+<p>One for when the typed command is a statement continuation (adds trailing asterisk):</p>
+
+<pre>irb(main):004* Dir.</pre>
+</li><li>
+<p>One for when the typed command is a string continuation (adds trailing single-quote):</p>
+
+<pre>irb(main):005&#39; Dir.entries(&#39;.</pre>
+</li></ul>
+
+<p>You can see the prompt change as you type the characters in the following:</p>
+
+<pre>irb(main):001* Dir.entries(&#39;.&#39;).select do |entry|
+irb(main):002*   entry.start_with?(&#39;R&#39;)
+irb(main):003&gt; end
+=&gt; [&quot;README.md&quot;, &quot;Rakefile&quot;]</pre>
+
+<h4 id="module-IRB-label-Pre-Defined+Prompts">Pre-Defined Prompts<span><a href="#module-IRB-label-Pre-Defined+Prompts">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p><a href="IRB.html"><code>IRB</code></a> has several pre-defined prompts, stored in hash <code>IRB.conf[:PROMPT]</code>:</p>
+
+<pre>irb(main):001&gt; IRB.conf[:PROMPT].keys
+=&gt; [:NULL, :DEFAULT, :CLASSIC, :SIMPLE, :INF_RUBY, :XMP]</pre>
+
+<p>To see the full data for these, type <code>IRB.conf[:PROMPT]</code>.</p>
+
+<p>Most of these prompt definitions include specifiers that represent values like the <a href="IRB.html"><code>IRB</code></a> name, session name, and line number; see <a href="IRB.html#module-IRB-label-Prompt+Specifiers">Prompt Specifiers</a>.</p>
+
+<p>You can change the initial prompt and return format by:</p>
+<ul><li>
+<p>Adding to the configuration file: <code>IRB.conf[:PROMPT] = <strong>mode</code></strong> where <em>mode</em> is the symbol name of a prompt mode.</p>
+</li><li>
+<p>Giving a command-line option:</p>
+<ul><li>
+<p><code>--prompt <strong>mode</code></strong>: sets the prompt mode to <em>mode</em>. where <em>mode</em> is the symbol name of a prompt mode.</p>
+</li><li>
+<p><code>--simple-prompt</code> or <code>--sample-book-mode</code>: sets the prompt mode to <code>:SIMPLE</code>.</p>
+</li><li>
+<p><code>--inf-ruby-mode</code>: sets the prompt mode to <code>:INF_RUBY</code> and suppresses both <code>--multiline</code> and <code>--singleline</code>.</p>
+</li><li>
+<p><code>--noprompt</code>: suppresses prompting; does not affect echoing.</p>
+</li></ul>
+</li></ul>
+
+<p>You can retrieve or set the current prompt mode with methods</p>
+
+<p><code>conf.prompt_mode</code> and <code>conf.prompt_mode=</code>.</p>
+
+<p>If you’re interested in prompts and return formats other than the defaults, you might experiment by trying some of the others.</p>
+
+<h4 id="module-IRB-label-Custom+Prompts">Custom Prompts<span><a href="#module-IRB-label-Custom+Prompts">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p>You can also define custom prompts and return formats, which may be done either in an <a href="IRB.html"><code>IRB</code></a> session or in the configuration file.</p>
+
+<p>A prompt in <a href="IRB.html"><code>IRB</code></a> actually defines three prompts, as seen above. For simple custom data, we’ll make all three the same:</p>
+
+<pre>irb(main):001* IRB.conf[:PROMPT][:MY_PROMPT] = {
+irb(main):002*   PROMPT_I: &#39;: &#39;,
+irb(main):003*   PROMPT_C: &#39;: &#39;,
+irb(main):004*   PROMPT_S: &#39;: &#39;,
+irb(main):005*   RETURN: &#39;=&gt; &#39;
+irb(main):006&gt; }
+=&gt; {:PROMPT_I=&gt;&quot;: &quot;, :PROMPT_C=&gt;&quot;: &quot;, :PROMPT_S=&gt;&quot;: &quot;, :RETURN=&gt;&quot;=&gt; &quot;}</pre>
+
+<p>If you define the custom prompt in the configuration file, you can also make it the current prompt by adding:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:PROMPT_MODE</span>] = <span class="ruby-value">:MY_PROMPT</span>
+</pre>
+
+<p>Regardless of where it’s defined, you can make it the current prompt in a session:</p>
+
+<pre class="ruby"><span class="ruby-identifier">conf</span>.<span class="ruby-identifier">prompt_mode</span> = <span class="ruby-value">:MY_PROMPT</span>
+</pre>
+
+<p>You can view or modify the current prompt data with various configuration methods:</p>
+<ul><li>
+<p><code>conf.prompt_mode</code>, <code>conf.prompt_mode=</code>.</p>
+</li><li>
+<p><code>conf.prompt_c</code>, <code>conf.c=</code>.</p>
+</li><li>
+<p><code>conf.prompt_i</code>, <code>conf.i=</code>.</p>
+</li><li>
+<p><code>conf.prompt_s</code>, <code>conf.s=</code>.</p>
+</li><li>
+<p><code>conf.return_format</code>, <code>return_format=</code>.</p>
+</li></ul>
+
+<h4 id="module-IRB-label-Prompt+Specifiers">Prompt Specifiers<span><a href="#module-IRB-label-Prompt+Specifiers">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p>A prompt’s definition can include specifiers for which certain values are substituted:</p>
+<ul><li>
+<p><code>%N</code>: the name of the running program.</p>
+</li><li>
+<p><code>%m</code>: the value of <code>self.to_s</code>.</p>
+</li><li>
+<p><code>%M</code>: the value of <code>self.inspect</code>.</p>
+</li><li>
+<p><code>%l</code>: an indication of the type of string; one of <code>&quot;</code>, <code>&#39;</code>, <code>/</code>, <code>]</code>.</p>
+</li><li>
+<p><code>%NNi</code>: Indentation level. NN is a 2-digit number that specifies the number of digits of the indentation level (03 will result in 001).</p>
+</li><li>
+<p><code>%NNn</code>: Line number. NN is a 2-digit number that specifies the number of digits of the line number (03 will result in 001).</p>
+</li><li>
+<p><code>%%</code>: Literal <code>%</code>.</p>
+</li></ul>
+
+<h3 id="module-IRB-label-Verbosity">Verbosity<span><a href="#module-IRB-label-Verbosity">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> verbosity is disabled, which means that output is smaller rather than larger.</p>
+
+<p>You can enable verbosity by:</p>
+<ul><li>
+<p>Adding to the configuration file: <code>IRB.conf[:VERBOSE] = true</code> (the default is <code>nil</code>).</p>
+</li><li>
+<p>Giving command-line options <code>--verbose</code> (the default is <code>--noverbose</code>).</p>
+</li></ul>
+
+<p>During a session, you can retrieve or set verbosity with methods <code>conf.verbose</code> and <code>conf.verbose=</code>.</p>
+
+<h3 id="module-IRB-label-Help">Help<span><a href="#module-IRB-label-Help">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>Command-line option <code>--version</code> causes <a href="IRB.html"><code>IRB</code></a> to print its help text and exit.</p>
+
+<h3 id="module-IRB-label-Version">Version<span><a href="#module-IRB-label-Version">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>Command-line option <code>--version</code> causes <a href="IRB.html"><code>IRB</code></a> to print its version text and exit.</p>
+
+<h2 id="module-IRB-label-Input+and+Output">Input and Output<span><a href="#module-IRB-label-Input+and+Output">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<h3 id="module-IRB-label-Color+Highlighting"><a href="IRB/Color.html"><code>Color</code></a> Highlighting<span><a href="#module-IRB-label-Color+Highlighting">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>By default, <a href="IRB.html"><code>IRB</code></a> color highlighting is enabled, and is used for both:</p>
+<ul><li>
+<p>Input: As you type, <a href="IRB.html"><code>IRB</code></a> reads the typed characters and highlights elements that it recognizes; it also highlights errors such as mismatched parentheses.</p>
+</li><li>
+<p>Output: <a href="IRB.html"><code>IRB</code></a> highlights syntactical elements.</p>
+</li></ul>
+
+<p>You can disable color highlighting by:</p>
+<ul><li>
+<p>Adding to the configuration file: <code>IRB.conf[:USE_COLORIZE] = false</code> (the default value is <code>true</code>).</p>
+</li><li>
+<p>Giving command-line option <code>--nocolorize</code></p>
+</li></ul>
+
+<h2 id="module-IRB-label-Debugging">Debugging<span><a href="#module-IRB-label-Debugging">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>Command-line option <code>-d</code> sets variables <code>$VERBOSE</code> and <code>$DEBUG</code> to <code>true</code>; these have no effect on <a href="IRB.html"><code>IRB</code></a> output.</p>
+
+<h3 id="module-IRB-label-Warnings">Warnings<span><a href="#module-IRB-label-Warnings">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>Command-line option <code>-w</code> suppresses warnings.</p>
+
+<p>Command-line option <code>-W[<strong>level</strong>]</code> sets warning level;</p>
+<ul><li>
+<p>0=silence</p>
+</li><li>
+<p>1=medium</p>
+</li><li>
+<p>2=verbose</p>
+</li></ul>
+
+<h2 id="module-IRB-label-Other+Features">Other Features<span><a href="#module-IRB-label-Other+Features">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<h3 id="module-IRB-label-Load+Modules">Load Modules<span><a href="#module-IRB-label-Load+Modules">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>You can specify the names of modules that are to be required at startup.</p>
+
+<p><a href="Array.html"><code>Array</code></a> <code>conf.load_modules</code> determines the modules (if any) that are to be required during session startup. The array is used only during session startup, so the initial value is the only one that counts.</p>
+
+<p>The default initial value is <code>[]</code> (load no modules):</p>
+
+<pre>irb(main):001&gt; conf.load_modules
+=&gt; []</pre>
+
+<p>You can set the default initial value via:</p>
+<ul><li>
+<p>Command-line option <code>-r</code></p>
+
+<pre> $ irb -r csv -r json
+irb(main):001&gt; conf.load_modules
+=&gt; [&quot;csv&quot;, &quot;json&quot;]</pre>
+</li><li>
+<p><a href="Hash.html"><code>Hash</code></a> entry <code>IRB.conf[:LOAD_MODULES] = <strong>array</code></strong>:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:LOAD_MODULES</span>] = <span class="ruby-node">%w[csv, json]</span>
+</pre>
+</li></ul>
+
+<p>Note that the configuration file entry overrides the command-line options.</p>
+
+<h3 id="module-IRB-label-RI+Documentation+Directories">RI Documentation Directories<span><a href="#module-IRB-label-RI+Documentation+Directories">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>You can specify the paths to RI documentation directories that are to be loaded (in addition to the default directories) at startup; see details about RI by typing <code>ri --help</code>.</p>
+
+<p><a href="Array.html"><code>Array</code></a> <code>conf.extra_doc_dirs</code> determines the directories (if any) that are to be loaded during session startup. The array is used only during session startup, so the initial value is the only one that counts.</p>
+
+<p>The default initial value is <code>[]</code> (load no extra documentation):</p>
+
+<pre>irb(main):001&gt; conf.extra_doc_dirs
+=&gt; []</pre>
+
+<p>You can set the default initial value via:</p>
+<ul><li>
+<p>Command-line option <code>--extra_doc_dir</code></p>
+
+<pre>$ irb --extra-doc-dir your_doc_dir --extra-doc-dir my_doc_dir
+irb(main):001&gt; conf.extra_doc_dirs
+=&gt; [&quot;your_doc_dir&quot;, &quot;my_doc_dir&quot;]</pre>
+</li><li>
+<p><a href="Hash.html"><code>Hash</code></a> entry <code>IRB.conf[:EXTRA_DOC_DIRS] = <strong>array</code></strong>:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:EXTRA_DOC_DIRS</span>] = <span class="ruby-node">%w[your_doc_dir my_doc_dir]</span>
+</pre>
+</li></ul>
+
+<p>Note that the configuration file entry overrides the command-line options.</p>
+
+<h3 id="module-IRB-label-IRB+Name"><a href="IRB.html"><code>IRB</code></a> Name<span><a href="#module-IRB-label-IRB+Name">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>You can specify a name for <a href="IRB.html"><code>IRB</code></a>.</p>
+
+<p>The default initial value is <code>&#39;irb&#39;</code>:</p>
+
+<pre>irb(main):001&gt; conf.irb_name
+=&gt; &quot;irb&quot;</pre>
+
+<p>You can set the default initial value via hash entry <code>IRB.conf[:IRB_NAME] = <strong>string</code></strong>:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:IRB_NAME</span>] = <span class="ruby-string">&#39;foo&#39;</span>
+</pre>
+
+<h3 id="module-IRB-label-Application+Name">Application Name<span><a href="#module-IRB-label-Application+Name">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>You can specify an application name for the <a href="IRB.html"><code>IRB</code></a> session.</p>
+
+<p>The default initial value is <code>&#39;irb&#39;</code>:</p>
+
+<pre>irb(main):001&gt; conf.ap_name
+=&gt; &quot;irb&quot;</pre>
+
+<p>You can set the default initial value via hash entry <code>IRB.conf[:AP_NAME] = <strong>string</code></strong>:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:AP_NAME</span>] = <span class="ruby-string">&#39;my_ap_name&#39;</span>
+</pre>
+
+<h3 id="module-IRB-label-Configuration+Monitor">Configuration <a href="Monitor.html"><code>Monitor</code></a><span><a href="#module-IRB-label-Configuration+Monitor">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>You can monitor changes to the configuration by assigning a proc to <code>IRB.conf[:IRB_RC]</code> in the configuration file:</p>
+
+<pre class="ruby"><span class="ruby-constant">IRB</span>.<span class="ruby-identifier">conf</span>[<span class="ruby-value">:IRB_RC</span>] = <span class="ruby-identifier">proc</span> {<span class="ruby-operator">|</span><span class="ruby-identifier">conf</span><span class="ruby-operator">|</span> <span class="ruby-identifier">puts</span> <span class="ruby-identifier">conf</span>.<span class="ruby-identifier">class</span> }
+</pre>
+
+<p>Each time the configuration is changed, that proc is called with argument <code>conf</code>:</p>
+
+<h3 id="module-IRB-label-Encodings">Encodings<span><a href="#module-IRB-label-Encodings">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>Command-line option <code>-E <strong>ex</strong>[:<strong>in</strong>]</code> sets initial external (ex) and internal (in) encodings.</p>
+
+<p>Command-line option <code>-U</code> sets both to UTF-8.</p>
+
+<h3 id="module-IRB-label-Commands">Commands<span><a href="#module-IRB-label-Commands">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p>Please use the <code>help</code> command to see the list of available commands.</p>
+
+<h3 id="module-IRB-label-IRB+Sessions"><a href="IRB.html"><code>IRB</code></a> Sessions<span><a href="#module-IRB-label-IRB+Sessions">&para;</a> <a href="#top">&uarr;</a></span></h3>
+
+<p><a href="IRB.html"><code>IRB</code></a> has a special feature, that allows you to manage many sessions at once.</p>
+
+<p>You can create new sessions with Irb.irb, and get a list of current sessions with the <code>jobs</code> command in the prompt.</p>
+
+<h4 id="module-IRB-label-Configuration">Configuration<span><a href="#module-IRB-label-Configuration">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p>The command line options, or IRB.conf, specify the default behavior of Irb.irb.</p>
+
+<p>On the other hand, each conf in <a href="IRB.html#module-IRB-label-Command-Line+Options">Command-Line Options at <code>IRB</code></a> is used to individually configure IRB.irb.</p>
+
+<p>If a proc is set for <code>IRB.conf[:IRB_RC]</code>, its will be invoked after execution of that proc with the context of the current session as its argument. Each session can be configured using this mechanism.</p>
+
+<h4 id="module-IRB-label-Session+variables">Session variables<span><a href="#module-IRB-label-Session+variables">&para;</a> <a href="#top">&uarr;</a></span></h4>
+
+<p>There are a few variables in every <a href="IRB/Irb.html"><code>Irb</code></a> session that can come in handy:</p>
+
+<p><code>_</code> : The value command executed, as a local variable <code>__</code> : The history of evaluated commands. Available only if <code>IRB.conf[:EVAL_HISTORY]</code> is not <code>nil</code> (which is the default). See also <a href="IRB/Context.html#method-i-eval_history-3D"><code>IRB::Context#eval_history=</code></a> and IRB::History. <code>__[line_no]</code> : Returns the evaluation value at the given line number, <code>line_no</code>. If <code>line_no</code> is a negative, the return value <code>line_no</code> many lines before the most recent return value.</p>
+
+<h2 id="module-IRB-label-Restrictions">Restrictions<span><a href="#module-IRB-label-Restrictions">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>Ruby code typed into <a href="IRB.html"><code>IRB</code></a> behaves the same as Ruby code in a file, except that:</p>
+<ul><li>
+<p>Because <a href="IRB.html"><code>IRB</code></a> evaluates input immediately after it is syntactically complete, some results may be slightly different.</p>
+</li><li>
+<p>Forking may not be well behaved.</p>
+</li></ul>
+
+<p>nop.rb -</p>
+
+<pre class="ruby"><span class="ruby-identifier">by</span> <span class="ruby-constant">Keiju</span> <span class="ruby-constant">ISHITSUKA</span>(<span class="ruby-identifier">keiju</span><span class="ruby-ivar">@ruby</span><span class="ruby-operator">-</span><span class="ruby-identifier">lang</span>.<span class="ruby-identifier">org</span>)
+</pre>
+
+<p>multi.rb -</p>
+
+<pre class="ruby"><span class="ruby-identifier">by</span> <span class="ruby-constant">Keiju</span> <span class="ruby-constant">ISHITSUKA</span>(<span class="ruby-identifier">keiju</span><span class="ruby-ivar">@ruby</span><span class="ruby-operator">-</span><span class="ruby-identifier">lang</span>.<span class="ruby-identifier">org</span>)
+</pre>
+
+<p>irb/multi-irb.rb - multiple irb module</p>
+
+<pre class="ruby"><span class="ruby-identifier">by</span> <span class="ruby-constant">Keiju</span> <span class="ruby-constant">ISHITSUKA</span>(<span class="ruby-identifier">keiju</span><span class="ruby-ivar">@ruby</span><span class="ruby-operator">-</span><span class="ruby-identifier">lang</span>.<span class="ruby-identifier">org</span>)
+</pre>
+
+<p>frame.rb -</p>
+
+<pre>by Keiju ISHITSUKA(Nihon Rational Software Co.,Ltd)</pre>
+
+<p>irb/help.rb - print usage module</p>
+
+<pre class="ruby"><span class="ruby-identifier">by</span> <span class="ruby-constant">Keiju</span> <span class="ruby-constant">ISHITSUKA</span>(<span class="ruby-identifier">keiju</span><span class="ruby-ivar">@ishitsuka</span>.<span class="ruby-identifier">com</span>)
+</pre>
+
+<p>irb/lc/error.rb -</p>
+
+<pre class="ruby"><span class="ruby-identifier">by</span> <span class="ruby-constant">Keiju</span> <span class="ruby-constant">ISHITSUKA</span>(<span class="ruby-identifier">keiju</span><span class="ruby-ivar">@ruby</span><span class="ruby-operator">-</span><span class="ruby-identifier">lang</span>.<span class="ruby-identifier">org</span>)
+</pre>
+
+<p>irb/lc/ja/error.rb -</p>
+
+<pre class="ruby"><span class="ruby-identifier">by</span> <span class="ruby-constant">Keiju</span> <span class="ruby-constant">ISHITSUKA</span>(<span class="ruby-identifier">keiju</span><span class="ruby-ivar">@ruby</span><span class="ruby-operator">-</span><span class="ruby-identifier">lang</span>.<span class="ruby-identifier">org</span>)
+</pre>
+
+<p>output-method.rb - output methods used by irb</p>
+
+<pre class="ruby"><span class="ruby-identifier">by</span> <span class="ruby-constant">Keiju</span> <span class="ruby-constant">ISHITSUKA</span>(<span class="ruby-identifier">keiju</span><span class="ruby-ivar">@ruby</span><span class="ruby-operator">-</span><span class="ruby-identifier">lang</span>.<span class="ruby-identifier">org</span>)
+</pre>
+
+  </section>
+
+  <section id="5Buntitled-5D" class="documentation-section">
+
+
+    <section class="constants-list">
+      <header>
+        <h3>Constants</h3>
+      </header>
+      <dl>
+        <dt id="ExtendCommand">ExtendCommand
+        <dd>
+        <dt id="TOPLEVEL_BINDING">TOPLEVEL_BINDING
+        <dd>
+      </dl>
+    </section>
+
+
+
+     <section id="public-class-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Class Methods</h3>
+       </header>
+
+      <div id="method-c-start" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">start</span><span
+              class="method-args">(ap_path = nil)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Initializes <a href="IRB.html"><code>IRB</code></a> and creates a new Irb.irb object at the <code>TOPLEVEL_BINDING</code></p>
+
+          <div class="method-source-code" id="start-source">
+            <pre><span class="ruby-comment"># File lib/irb.rb, line 893</span>
+<span class="ruby-keyword">def</span> <span class="ruby-constant">IRB</span>.<span class="ruby-identifier ruby-title">start</span>(<span class="ruby-identifier">ap_path</span> = <span class="ruby-keyword">nil</span>)
+  <span class="ruby-constant">STDOUT</span>.<span class="ruby-identifier">sync</span> = <span class="ruby-keyword">true</span>
+  <span class="ruby-identifier">$0</span> = <span class="ruby-constant">File</span><span class="ruby-operator">::</span><span class="ruby-identifier">basename</span>(<span class="ruby-identifier">ap_path</span>, <span class="ruby-string">&quot;.rb&quot;</span>) <span class="ruby-keyword">if</span> <span class="ruby-identifier">ap_path</span>
+
+  <span class="ruby-constant">IRB</span>.<span class="ruby-identifier">setup</span>(<span class="ruby-identifier">ap_path</span>)
+
+  <span class="ruby-keyword">if</span> <span class="ruby-ivar">@CONF</span>[<span class="ruby-value">:SCRIPT</span>]
+    <span class="ruby-identifier">irb</span> = <span class="ruby-constant">Irb</span>.<span class="ruby-identifier">new</span>(<span class="ruby-keyword">nil</span>, <span class="ruby-ivar">@CONF</span>[<span class="ruby-value">:SCRIPT</span>])
+  <span class="ruby-keyword">else</span>
+    <span class="ruby-identifier">irb</span> = <span class="ruby-constant">Irb</span>.<span class="ruby-identifier">new</span>
+  <span class="ruby-keyword">end</span>
+  <span class="ruby-identifier">irb</span>.<span class="ruby-identifier">run</span>(<span class="ruby-ivar">@CONF</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+     <section id="private-class-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Private Class Methods</h3>
+       </header>
+
+      <div id="method-c-easter_egg" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">easter_egg</span><span
+              class="method-args">(type = nil)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          
+
+          <div class="method-source-code" id="easter_egg-source">
+            <pre><span class="ruby-comment"># File lib/irb/easter-egg.rb, line 109</span>
+        <span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">easter_egg</span>(<span class="ruby-identifier">type</span> = <span class="ruby-keyword">nil</span>)
+  <span class="ruby-identifier">type</span> <span class="ruby-operator">||=</span> [<span class="ruby-value">:logo</span>, <span class="ruby-value">:dancing</span>].<span class="ruby-identifier">sample</span>
+  <span class="ruby-keyword">case</span> <span class="ruby-identifier">type</span>
+  <span class="ruby-keyword">when</span> <span class="ruby-value">:logo</span>
+    <span class="ruby-identifier">require</span> <span class="ruby-string">&quot;rdoc&quot;</span>
+    <span class="ruby-constant">RDoc</span><span class="ruby-operator">::</span><span class="ruby-constant">RI</span><span class="ruby-operator">::</span><span class="ruby-constant">Driver</span>.<span class="ruby-identifier">new</span>.<span class="ruby-identifier">page</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">io</span><span class="ruby-operator">|</span>
+      <span class="ruby-identifier">io</span>.<span class="ruby-identifier">write</span> <span class="ruby-identifier">easter_egg_logo</span>(<span class="ruby-value">:large</span>)
+    <span class="ruby-keyword">end</span>
+  <span class="ruby-keyword">when</span> <span class="ruby-value">:dancing</span>
+    <span class="ruby-constant">STDOUT</span>.<span class="ruby-identifier">cooked</span> <span class="ruby-keyword">do</span>
+      <span class="ruby-identifier">interrupted</span> = <span class="ruby-keyword">false</span>
+      <span class="ruby-identifier">prev_trap</span> = <span class="ruby-identifier">trap</span>(<span class="ruby-string">&quot;SIGINT&quot;</span>) { <span class="ruby-identifier">interrupted</span> = <span class="ruby-keyword">true</span> }
+      <span class="ruby-identifier">canvas</span> = <span class="ruby-constant">Canvas</span>.<span class="ruby-identifier">new</span>(<span class="ruby-constant">Reline</span>.<span class="ruby-identifier">get_screen_size</span>)
+      <span class="ruby-constant">Reline</span><span class="ruby-operator">::</span><span class="ruby-constant">IOGate</span>.<span class="ruby-identifier">set_winch_handler</span> <span class="ruby-keyword">do</span>
+        <span class="ruby-identifier">canvas</span> = <span class="ruby-constant">Canvas</span>.<span class="ruby-identifier">new</span>(<span class="ruby-constant">Reline</span>.<span class="ruby-identifier">get_screen_size</span>)
+      <span class="ruby-keyword">end</span>
+      <span class="ruby-identifier">ruby_model</span> = <span class="ruby-constant">RubyModel</span>.<span class="ruby-identifier">new</span>
+      <span class="ruby-identifier">print</span> <span class="ruby-string">&quot;\e[?1049h&quot;</span>
+      <span class="ruby-value">0</span>.<span class="ruby-identifier">step</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">i</span><span class="ruby-operator">|</span> <span class="ruby-comment"># TODO (0..).each needs Ruby 2.6 or later</span>
+        <span class="ruby-identifier">buff</span> = <span class="ruby-identifier">canvas</span>.<span class="ruby-identifier">draw</span> <span class="ruby-keyword">do</span>
+          <span class="ruby-identifier">ruby_model</span>.<span class="ruby-identifier">render_frame</span>(<span class="ruby-identifier">i</span>) <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">p1</span>, <span class="ruby-identifier">p2</span><span class="ruby-operator">|</span>
+            <span class="ruby-identifier">canvas</span>.<span class="ruby-identifier">line</span>(<span class="ruby-identifier">p1</span>, <span class="ruby-identifier">p2</span>)
+          <span class="ruby-keyword">end</span>
+        <span class="ruby-keyword">end</span>
+        <span class="ruby-identifier">buff</span>[<span class="ruby-value">0</span>, <span class="ruby-value">20</span>] = <span class="ruby-string">&quot;\e[0mPress Ctrl+C to stop\e[31m\e[1m&quot;</span>
+        <span class="ruby-identifier">print</span> <span class="ruby-string">&quot;\e[H&quot;</span> <span class="ruby-operator">+</span> <span class="ruby-identifier">buff</span>
+        <span class="ruby-identifier">sleep</span> <span class="ruby-value">0.05</span>
+        <span class="ruby-keyword">break</span> <span class="ruby-keyword">if</span> <span class="ruby-identifier">interrupted</span>
+      <span class="ruby-keyword">end</span>
+    <span class="ruby-keyword">rescue</span> <span class="ruby-constant">Interrupt</span>
+    <span class="ruby-keyword">ensure</span>
+      <span class="ruby-identifier">print</span> <span class="ruby-string">&quot;\e[0m\e[?1049l&quot;</span>
+      <span class="ruby-identifier">trap</span>(<span class="ruby-string">&quot;SIGINT&quot;</span>, <span class="ruby-identifier">prev_trap</span>)
+    <span class="ruby-keyword">end</span>
+  <span class="ruby-keyword">end</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-c-easter_egg_logo" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">easter_egg_logo</span><span
+              class="method-args">(type)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          
+
+          <div class="method-source-code" id="easter_egg_logo-source">
+            <pre><span class="ruby-comment"># File lib/irb/easter-egg.rb, line 101</span>
+        <span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">easter_egg_logo</span>(<span class="ruby-identifier">type</span>)
+  <span class="ruby-ivar">@easter_egg_logos</span> <span class="ruby-operator">||=</span> <span class="ruby-constant">File</span>.<span class="ruby-identifier">read</span>(<span class="ruby-constant">File</span>.<span class="ruby-identifier">join</span>(<span class="ruby-identifier">__dir__</span>, <span class="ruby-string">&#39;ruby_logo.aa&#39;</span>), <span class="ruby-value">encoding:</span> <span class="ruby-string">&#39;UTF-8:UTF-8&#39;</span>)
+    .<span class="ruby-identifier">split</span>(<span class="ruby-regexp">/TYPE: ([A-Z]+)\n/</span>)[<span class="ruby-value">1</span><span class="ruby-operator">..</span>]
+    .<span class="ruby-identifier">each_slice</span>(<span class="ruby-value">2</span>)
+    .<span class="ruby-identifier">to_h</span>
+  <span class="ruby-ivar">@easter_egg_logos</span>[<span class="ruby-identifier">type</span>.<span class="ruby-identifier">to_s</span>.<span class="ruby-identifier">upcase</span>]
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+  </section>
+</main>
+
+
+<footer id="validator-badges" role="contentinfo">
+  <p><a href="https://validator.w3.org/check/referer">Validate</a>
+  <p>Generated by <a href="https://ruby.github.io/rdoc/">RDoc</a> 6.6.3.1.
+  <p>Based on <a href="http://deveiate.org/projects/Darkfish-RDoc/">Darkfish</a> by <a href="http://deveiate.org">Michael Granger</a>.
+</footer>
+

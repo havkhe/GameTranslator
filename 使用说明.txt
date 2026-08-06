@@ -1,0 +1,33 @@
+RPG Maker 汉化管理器（GameTranslator.exe）
+============================================
+
+一、支持的引擎
+  - RPG Maker MV / MZ（www\data 下的 json 数据）
+  - RPG Maker VX Ace（Data\*.rvdata2 散装数据，或加密包 Game.rgss3a，
+    会自动解包 → 汉化 → 重新打包，并保留原版加密包备份）
+
+二、翻译模型
+  - 本地 Ollama 模型：hy-mt2-1.8b:q8_0（快）、sakura-gatransl-7b-v3.7:iq4_xs（质量）、
+    murasaki-4b-v0.3:q6_k（文学），需先启动 Ollama。
+  - 网络 API：任何 OpenAI 兼容接口（如阿里云百炼
+    https://dashscope.aliyuncs.com/compatible-mode/v1）。
+    在界面下方“API设置”行选择模式：
+      本地Ollama      ：只用本地模型
+      网络API         ：只用网络模型
+      本地+API混合    ：本地失败/超时时自动改用网络 API
+    填写 API 地址、密钥、模型名后点“保存API设置”，设置保存在 api-config.json。
+
+三、使用方法
+  1. 点击“扫描 K:\”或“添加游戏(选Game.exe)”把游戏加入列表（拖拽 Game.exe 也可）。
+  2. 在列表选择游戏（“全选”按钮可一键全选/取消）。
+  3. 选择模型/API 模式后，点“开始汉化选中”或“全部汉化”。
+  4. 汉化前自动备份：游戏目录下生成 data_原版备份 和“一键还原汉化前.bat”，
+     出错时双击该 bat 或点“一键还原选中”即可恢复原版。
+  5. 断点续翻：中断后重新对同一游戏执行汉化，会自动跳过已翻译的条目继续。
+
+四、说明
+  - 已汉化（中文明显多于日文）的游戏会被自动跳过。
+  - 非 RPG Maker 游戏不会被识别，也不会被改动。
+  - 目录结构：game-pipeline.js（汉化管线）、ruby\（便携 Ruby，处理 .rvdata2）、
+    vxace_*.rb（VX Ace 数据读写）、rgss3a.js（Game.rgss3a 解包/重打包）。
+  - 翻译进度保存在软件目录 work\<游戏名>-translations.json。

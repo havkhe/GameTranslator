@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+
+<title>module Prism::Debug - Documentation for Ruby 3.3</title>
+
+<script type="text/javascript">
+  var rdoc_rel_prefix = "../";
+  var index_rel_prefix = "../";
+</script>
+
+<script src="../js/navigation.js" defer></script>
+<script src="../js/search.js" defer></script>
+<script src="../js/search_index.js" defer></script>
+<script src="../js/searcher.js" defer></script>
+<script src="../js/darkfish.js" defer></script>
+
+<link href="../css/fonts.css" rel="stylesheet">
+<link href="../css/rdoc.css" rel="stylesheet">
+
+
+<body id="top" role="document" class="module">
+<nav role="navigation">
+  <div id="project-navigation">
+    <div id="home-section" role="region" title="Quick navigation" class="nav-section">
+  <h2>
+    <a href="../index.html" rel="home">Home</a>
+  </h2>
+
+  <div id="table-of-contents-navigation">
+    <a href="../table_of_contents.html#pages">Pages</a>
+    <a href="../table_of_contents.html#classes">Classes</a>
+    <a href="../table_of_contents.html#methods">Methods</a>
+  </div>
+</div>
+
+    <div id="search-section" role="search" class="project-section initially-hidden">
+  <form action="#" method="get" accept-charset="utf-8">
+    <div id="search-field-wrapper">
+      <input id="search-field" role="combobox" aria-label="Search"
+             aria-autocomplete="list" aria-controls="search-results"
+             type="text" name="search" placeholder="Search (/) for a class, method, ..." spellcheck="false"
+             title="Type to search, Up and Down to navigate, Enter to load">
+    </div>
+
+    <ul id="search-results" aria-label="Search Results"
+        aria-busy="false" aria-expanded="false"
+        aria-atomic="false" class="initially-hidden"></ul>
+  </form>
+</div>
+
+  </div>
+
+  
+
+  <div id="class-metadata">
+    
+    
+    
+    
+    
+<!-- Method Quickref -->
+<div id="method-list-section" class="nav-section">
+  <h3>Methods</h3>
+
+  <ul class="link-list" role="directory">
+    <li ><a href="#method-c-cruby_locals">::cruby_locals</a>
+    <li ><a href="#method-c-newlines">::newlines</a>
+    <li ><a href="#method-c-prism_locals">::prism_locals</a>
+  </ul>
+</div>
+
+  </div>
+</nav>
+
+<main role="main" aria-labelledby="module-Prism::Debug">
+  <h1 id="module-Prism::Debug" class="module">
+    module Prism::Debug
+  </h1>
+
+  <section class="description">
+    
+<p>This module is used for testing and debugging and is not meant to be used by consumers of this library.</p>
+
+  </section>
+
+  <section id="5Buntitled-5D" class="documentation-section">
+
+
+    <section class="constants-list">
+      <header>
+        <h3>Constants</h3>
+      </header>
+      <dl>
+        <dt id="AnonymousLocal">AnonymousLocal
+        <dd><p>Used to hold the place of a local that will be in the local table but cannot be accessed directly from the source code. For example, the iteration variable in a for loop or the positional parameter on a method definition that is destructured.</p>
+      </dl>
+    </section>
+
+
+
+     <section id="public-class-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Class Methods</h3>
+       </header>
+
+      <div id="method-c-cruby_locals" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-callseq">
+              Debug::cruby_locals(source) &rarr; Array
+            </span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>For the given source, compiles with CRuby and returns a list of all of the sets of local variables that were encountered.</p>
+
+          <div class="method-source-code" id="cruby_locals-source">
+            <pre><span class="ruby-comment"># File lib/prism/debug.rb, line 54</span>
+<span class="ruby-keyword">def</span> <span class="ruby-keyword">self</span>.<span class="ruby-identifier ruby-title">cruby_locals</span>(<span class="ruby-identifier">source</span>)
+  <span class="ruby-identifier">verbose</span>, <span class="ruby-identifier">$VERBOSE</span> = <span class="ruby-identifier">$VERBOSE</span>, <span class="ruby-keyword">nil</span>
+
+  <span class="ruby-keyword">begin</span>
+    <span class="ruby-identifier">locals</span> = []
+    <span class="ruby-identifier">stack</span> = [<span class="ruby-constant">ISeq</span>.<span class="ruby-identifier">new</span>(<span class="ruby-constant">RubyVM</span><span class="ruby-operator">::</span><span class="ruby-constant">InstructionSequence</span>.<span class="ruby-identifier">compile</span>(<span class="ruby-identifier">source</span>).<span class="ruby-identifier">to_a</span>)]
+
+    <span class="ruby-keyword">while</span> (<span class="ruby-identifier">iseq</span> = <span class="ruby-identifier">stack</span>.<span class="ruby-identifier">pop</span>)
+      <span class="ruby-identifier">names</span> = [<span class="ruby-operator">*</span><span class="ruby-identifier">iseq</span>.<span class="ruby-identifier">local_table</span>]
+      <span class="ruby-identifier">names</span>.<span class="ruby-identifier">map!</span>.<span class="ruby-identifier">with_index</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">name</span>, <span class="ruby-identifier">index</span><span class="ruby-operator">|</span>
+        <span class="ruby-comment"># When an anonymous local variable is present in the iseq&#39;s local</span>
+        <span class="ruby-comment"># table, it is represented as the stack offset from the top.</span>
+        <span class="ruby-comment"># However, when these are dumped to binary and read back in, they</span>
+        <span class="ruby-comment"># are replaced with the symbol :#arg_rest. To consistently handle</span>
+        <span class="ruby-comment"># this, we replace them here with their index.</span>
+        <span class="ruby-keyword">if</span> <span class="ruby-identifier">name</span> <span class="ruby-operator">==</span> <span class="ruby-value">:&quot;#arg_rest&quot;</span>
+          <span class="ruby-identifier">names</span>.<span class="ruby-identifier">length</span> <span class="ruby-operator">-</span> <span class="ruby-identifier">index</span> <span class="ruby-operator">+</span> <span class="ruby-value">1</span>
+        <span class="ruby-keyword">else</span>
+          <span class="ruby-identifier">name</span>
+        <span class="ruby-keyword">end</span>
+      <span class="ruby-keyword">end</span>
+
+      <span class="ruby-identifier">locals</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">names</span>
+      <span class="ruby-identifier">iseq</span>.<span class="ruby-identifier">each_child</span> { <span class="ruby-operator">|</span><span class="ruby-identifier">child</span><span class="ruby-operator">|</span> <span class="ruby-identifier">stack</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">child</span> }
+    <span class="ruby-keyword">end</span>
+
+    <span class="ruby-identifier">locals</span>
+  <span class="ruby-keyword">ensure</span>
+    <span class="ruby-identifier">$VERBOSE</span> = <span class="ruby-identifier">verbose</span>
+  <span class="ruby-keyword">end</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-c-newlines" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-callseq">
+              Debug::newlines(source) &rarr; Array
+            </span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>For the given source string, return the byte offsets of every newline in the source.</p>
+
+          <div class="method-source-code" id="newlines-source">
+            <pre><span class="ruby-comment"># File lib/prism/debug.rb, line 196</span>
+<span class="ruby-keyword">def</span> <span class="ruby-keyword">self</span>.<span class="ruby-identifier ruby-title">newlines</span>(<span class="ruby-identifier">source</span>)
+  <span class="ruby-constant">Prism</span>.<span class="ruby-identifier">parse</span>(<span class="ruby-identifier">source</span>).<span class="ruby-identifier">source</span>.<span class="ruby-identifier">offsets</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-c-prism_locals" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-callseq">
+              Debug::prism_locals(source) &rarr; Array
+            </span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>For the given source, parses with prism and returns a list of all of the sets of local variables that were encountered.</p>
+
+          <div class="method-source-code" id="prism_locals-source">
+            <pre><span class="ruby-comment"># File lib/prism/debug.rb, line 98</span>
+<span class="ruby-keyword">def</span> <span class="ruby-keyword">self</span>.<span class="ruby-identifier ruby-title">prism_locals</span>(<span class="ruby-identifier">source</span>)
+  <span class="ruby-identifier">locals</span> = []
+  <span class="ruby-identifier">stack</span> = [<span class="ruby-constant">Prism</span>.<span class="ruby-identifier">parse</span>(<span class="ruby-identifier">source</span>).<span class="ruby-identifier">value</span>]
+
+  <span class="ruby-keyword">while</span> (<span class="ruby-identifier">node</span> = <span class="ruby-identifier">stack</span>.<span class="ruby-identifier">pop</span>)
+    <span class="ruby-keyword">case</span> <span class="ruby-identifier">node</span>
+    <span class="ruby-keyword">when</span> <span class="ruby-constant">BlockNode</span>, <span class="ruby-constant">DefNode</span>, <span class="ruby-constant">LambdaNode</span>
+      <span class="ruby-identifier">names</span> = <span class="ruby-identifier">node</span>.<span class="ruby-identifier">locals</span>
+      <span class="ruby-identifier">params</span> =
+        <span class="ruby-keyword">if</span> <span class="ruby-identifier">node</span>.<span class="ruby-identifier">is_a?</span>(<span class="ruby-constant">DefNode</span>)
+          <span class="ruby-identifier">node</span>.<span class="ruby-identifier">parameters</span>
+        <span class="ruby-keyword">elsif</span> <span class="ruby-identifier">node</span>.<span class="ruby-identifier">parameters</span>.<span class="ruby-identifier">is_a?</span>(<span class="ruby-constant">NumberedParametersNode</span>)
+          <span class="ruby-keyword">nil</span>
+        <span class="ruby-keyword">else</span>
+          <span class="ruby-identifier">node</span>.<span class="ruby-identifier">parameters</span>&amp;.<span class="ruby-identifier">parameters</span>
+        <span class="ruby-keyword">end</span>
+
+      <span class="ruby-comment"># prism places parameters in the same order that they appear in the</span>
+      <span class="ruby-comment"># source. CRuby places them in the order that they need to appear</span>
+      <span class="ruby-comment"># according to their own internal calling convention. We mimic that</span>
+      <span class="ruby-comment"># order here so that we can compare properly.</span>
+      <span class="ruby-keyword">if</span> <span class="ruby-identifier">params</span>
+        <span class="ruby-identifier">sorted</span> = [
+          <span class="ruby-operator">*</span><span class="ruby-identifier">params</span>.<span class="ruby-identifier">requireds</span>.<span class="ruby-identifier">map</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">required</span><span class="ruby-operator">|</span>
+            <span class="ruby-keyword">if</span> <span class="ruby-identifier">required</span>.<span class="ruby-identifier">is_a?</span>(<span class="ruby-constant">RequiredParameterNode</span>)
+              <span class="ruby-identifier">required</span>.<span class="ruby-identifier">name</span>
+            <span class="ruby-keyword">else</span>
+              <span class="ruby-constant">AnonymousLocal</span>
+            <span class="ruby-keyword">end</span>
+          <span class="ruby-keyword">end</span>,
+          <span class="ruby-operator">*</span><span class="ruby-identifier">params</span>.<span class="ruby-identifier">optionals</span>.<span class="ruby-identifier">map</span>(<span class="ruby-operator">&amp;</span><span class="ruby-value">:name</span>),
+          <span class="ruby-operator">*</span>((<span class="ruby-identifier">params</span>.<span class="ruby-identifier">rest</span>.<span class="ruby-identifier">name</span> <span class="ruby-operator">||</span> <span class="ruby-value">:*</span>) <span class="ruby-keyword">if</span> <span class="ruby-identifier">params</span>.<span class="ruby-identifier">rest</span> <span class="ruby-operator">&amp;&amp;</span> <span class="ruby-operator">!</span><span class="ruby-identifier">params</span>.<span class="ruby-identifier">rest</span>.<span class="ruby-identifier">is_a?</span>(<span class="ruby-constant">ImplicitRestNode</span>)),
+          <span class="ruby-operator">*</span><span class="ruby-identifier">params</span>.<span class="ruby-identifier">posts</span>.<span class="ruby-identifier">map</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">post</span><span class="ruby-operator">|</span>
+            <span class="ruby-keyword">if</span> <span class="ruby-identifier">post</span>.<span class="ruby-identifier">is_a?</span>(<span class="ruby-constant">RequiredParameterNode</span>)
+              <span class="ruby-identifier">post</span>.<span class="ruby-identifier">name</span>
+            <span class="ruby-keyword">else</span>
+              <span class="ruby-constant">AnonymousLocal</span>
+            <span class="ruby-keyword">end</span>
+          <span class="ruby-keyword">end</span>,
+          <span class="ruby-operator">*</span><span class="ruby-identifier">params</span>.<span class="ruby-identifier">keywords</span>.<span class="ruby-identifier">grep</span>(<span class="ruby-constant">RequiredKeywordParameterNode</span>).<span class="ruby-identifier">map</span>(<span class="ruby-operator">&amp;</span><span class="ruby-value">:name</span>),
+          <span class="ruby-operator">*</span><span class="ruby-identifier">params</span>.<span class="ruby-identifier">keywords</span>.<span class="ruby-identifier">grep</span>(<span class="ruby-constant">OptionalKeywordParameterNode</span>).<span class="ruby-identifier">map</span>(<span class="ruby-operator">&amp;</span><span class="ruby-value">:name</span>),
+        ]
+
+        <span class="ruby-keyword">if</span> <span class="ruby-identifier">params</span>.<span class="ruby-identifier">keyword_rest</span>.<span class="ruby-identifier">is_a?</span>(<span class="ruby-constant">ForwardingParameterNode</span>)
+          <span class="ruby-identifier">sorted</span>.<span class="ruby-identifier">push</span>(<span class="ruby-value">:*</span>, <span class="ruby-value">:&amp;</span>, <span class="ruby-value">:&quot;...&quot;</span>)
+        <span class="ruby-keyword">end</span>
+
+        <span class="ruby-identifier">sorted</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-constant">AnonymousLocal</span> <span class="ruby-keyword">if</span> <span class="ruby-identifier">params</span>.<span class="ruby-identifier">keywords</span>.<span class="ruby-identifier">any?</span>
+
+        <span class="ruby-comment"># Recurse down the parameter tree to find any destructured</span>
+        <span class="ruby-comment"># parameters and add them after the other parameters.</span>
+        <span class="ruby-identifier">param_stack</span> = <span class="ruby-identifier">params</span>.<span class="ruby-identifier">requireds</span>.<span class="ruby-identifier">concat</span>(<span class="ruby-identifier">params</span>.<span class="ruby-identifier">posts</span>).<span class="ruby-identifier">grep</span>(<span class="ruby-constant">MultiTargetNode</span>).<span class="ruby-identifier">reverse</span>
+        <span class="ruby-keyword">while</span> (<span class="ruby-identifier">param</span> = <span class="ruby-identifier">param_stack</span>.<span class="ruby-identifier">pop</span>)
+          <span class="ruby-keyword">case</span> <span class="ruby-identifier">param</span>
+          <span class="ruby-keyword">when</span> <span class="ruby-constant">MultiTargetNode</span>
+            <span class="ruby-identifier">param_stack</span>.<span class="ruby-identifier">concat</span>(<span class="ruby-identifier">param</span>.<span class="ruby-identifier">rights</span>.<span class="ruby-identifier">reverse</span>)
+            <span class="ruby-identifier">param_stack</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">param</span>.<span class="ruby-identifier">rest</span>
+            <span class="ruby-identifier">param_stack</span>.<span class="ruby-identifier">concat</span>(<span class="ruby-identifier">param</span>.<span class="ruby-identifier">lefts</span>.<span class="ruby-identifier">reverse</span>)
+          <span class="ruby-keyword">when</span> <span class="ruby-constant">RequiredParameterNode</span>
+            <span class="ruby-identifier">sorted</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">param</span>.<span class="ruby-identifier">name</span>
+          <span class="ruby-keyword">when</span> <span class="ruby-constant">SplatNode</span>
+            <span class="ruby-identifier">sorted</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">param</span>.<span class="ruby-identifier">expression</span>.<span class="ruby-identifier">name</span> <span class="ruby-keyword">if</span> <span class="ruby-identifier">param</span>.<span class="ruby-identifier">expression</span>
+          <span class="ruby-keyword">end</span>
+        <span class="ruby-keyword">end</span>
+
+        <span class="ruby-identifier">names</span> = <span class="ruby-identifier">sorted</span>.<span class="ruby-identifier">concat</span>(<span class="ruby-identifier">names</span> <span class="ruby-operator">-</span> <span class="ruby-identifier">sorted</span>)
+      <span class="ruby-keyword">end</span>
+
+      <span class="ruby-identifier">names</span>.<span class="ruby-identifier">map!</span>.<span class="ruby-identifier">with_index</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">name</span>, <span class="ruby-identifier">index</span><span class="ruby-operator">|</span>
+        <span class="ruby-keyword">if</span> <span class="ruby-identifier">name</span> <span class="ruby-operator">==</span> <span class="ruby-constant">AnonymousLocal</span>
+          <span class="ruby-identifier">names</span>.<span class="ruby-identifier">length</span> <span class="ruby-operator">-</span> <span class="ruby-identifier">index</span> <span class="ruby-operator">+</span> <span class="ruby-value">1</span>
+        <span class="ruby-keyword">else</span>
+          <span class="ruby-identifier">name</span>
+        <span class="ruby-keyword">end</span>
+      <span class="ruby-keyword">end</span>
+
+      <span class="ruby-identifier">locals</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">names</span>
+    <span class="ruby-keyword">when</span> <span class="ruby-constant">ClassNode</span>, <span class="ruby-constant">ModuleNode</span>, <span class="ruby-constant">ProgramNode</span>, <span class="ruby-constant">SingletonClassNode</span>
+      <span class="ruby-identifier">locals</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">node</span>.<span class="ruby-identifier">locals</span>
+    <span class="ruby-keyword">when</span> <span class="ruby-constant">ForNode</span>
+      <span class="ruby-identifier">locals</span> <span class="ruby-operator">&lt;&lt;</span> [<span class="ruby-value">2</span>]
+    <span class="ruby-keyword">when</span> <span class="ruby-constant">PostExecutionNode</span>
+      <span class="ruby-identifier">locals</span>.<span class="ruby-identifier">push</span>([], [])
+    <span class="ruby-keyword">when</span> <span class="ruby-constant">InterpolatedRegularExpressionNode</span>
+      <span class="ruby-identifier">locals</span> <span class="ruby-operator">&lt;&lt;</span> [] <span class="ruby-keyword">if</span> <span class="ruby-identifier">node</span>.<span class="ruby-identifier">once?</span>
+    <span class="ruby-keyword">end</span>
+
+    <span class="ruby-identifier">stack</span>.<span class="ruby-identifier">concat</span>(<span class="ruby-identifier">node</span>.<span class="ruby-identifier">compact_child_nodes</span>)
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-identifier">locals</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+  </section>
+</main>
+
+
+<footer id="validator-badges" role="contentinfo">
+  <p><a href="https://validator.w3.org/check/referer">Validate</a>
+  <p>Generated by <a href="https://ruby.github.io/rdoc/">RDoc</a> 6.6.3.1.
+  <p>Based on <a href="http://deveiate.org/projects/Darkfish-RDoc/">Darkfish</a> by <a href="http://deveiate.org">Michael Granger</a>.
+</footer>
+

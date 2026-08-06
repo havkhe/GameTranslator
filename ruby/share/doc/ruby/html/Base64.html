@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+
+<title>module Base64 - Documentation for Ruby 3.3</title>
+
+<script type="text/javascript">
+  var rdoc_rel_prefix = "./";
+  var index_rel_prefix = "./";
+</script>
+
+<script src="./js/navigation.js" defer></script>
+<script src="./js/search.js" defer></script>
+<script src="./js/search_index.js" defer></script>
+<script src="./js/searcher.js" defer></script>
+<script src="./js/darkfish.js" defer></script>
+
+<link href="./css/fonts.css" rel="stylesheet">
+<link href="./css/rdoc.css" rel="stylesheet">
+
+
+<body id="top" role="document" class="module">
+<nav role="navigation">
+  <div id="project-navigation">
+    <div id="home-section" role="region" title="Quick navigation" class="nav-section">
+  <h2>
+    <a href="./index.html" rel="home">Home</a>
+  </h2>
+
+  <div id="table-of-contents-navigation">
+    <a href="./table_of_contents.html#pages">Pages</a>
+    <a href="./table_of_contents.html#classes">Classes</a>
+    <a href="./table_of_contents.html#methods">Methods</a>
+  </div>
+</div>
+
+    <div id="search-section" role="search" class="project-section initially-hidden">
+  <form action="#" method="get" accept-charset="utf-8">
+    <div id="search-field-wrapper">
+      <input id="search-field" role="combobox" aria-label="Search"
+             aria-autocomplete="list" aria-controls="search-results"
+             type="text" name="search" placeholder="Search (/) for a class, method, ..." spellcheck="false"
+             title="Type to search, Up and Down to navigate, Enter to load">
+    </div>
+
+    <ul id="search-results" aria-label="Search Results"
+        aria-busy="false" aria-expanded="false"
+        aria-atomic="false" class="initially-hidden"></ul>
+  </form>
+</div>
+
+  </div>
+
+  
+<div class="nav-section">
+  <h3>Table of Contents</h3>
+
+
+
+  <ul class="link-list" role="directory">
+              <li>      <a href="#module-Base64-label-Encoding+Character+Sets">Encoding Character Sets</a>
+          <li>      <a href="#module-Base64-label-Padding">Padding</a>
+          <li>      <a href="#module-Base64-label-Newlines">Newlines</a>
+
+  </ul>
+</div>
+
+
+  <div id="class-metadata">
+    
+    
+    
+    
+    
+<!-- Method Quickref -->
+<div id="method-list-section" class="nav-section">
+  <h3>Methods</h3>
+
+  <ul class="link-list" role="directory">
+    <li ><a href="#method-i-decode64">#decode64</a>
+    <li ><a href="#method-i-encode64">#encode64</a>
+    <li ><a href="#method-i-strict_decode64">#strict_decode64</a>
+    <li ><a href="#method-i-strict_encode64">#strict_encode64</a>
+    <li ><a href="#method-i-urlsafe_decode64">#urlsafe_decode64</a>
+    <li ><a href="#method-i-urlsafe_encode64">#urlsafe_encode64</a>
+  </ul>
+</div>
+
+  </div>
+</nav>
+
+<main role="main" aria-labelledby="module-Base64">
+  <h1 id="module-Base64" class="module">
+    module Base64
+  </h1>
+
+  <section class="description">
+    
+<p>Module Base64 provides methods for:</p>
+<ul><li>
+<p><a href="Encoding.html"><code>Encoding</code></a> a binary string (containing non-ASCII characters) as a string of printable ASCII characters.</p>
+</li><li>
+<p>Decoding such an encoded string.</p>
+</li></ul>
+
+<p>Base64 is commonly used in contexts where binary data is not allowed or supported:</p>
+<ul><li>
+<p>Images in HTML or CSS files, or in URLs.</p>
+</li><li>
+<p>Email attachments.</p>
+</li></ul>
+
+<p>A Base64-encoded string is about one-third larger that its source. See the <a href="https://en.wikipedia.org/wiki/Base64">Wikipedia article</a> for more information.</p>
+
+<p>This module provides three pairs of encode/decode methods. Your choices among these methods should depend on:</p>
+<ul><li>
+<p>Which character set is to be used for encoding and decoding.</p>
+</li><li>
+<p>Whether “padding” is to be used.</p>
+</li><li>
+<p>Whether encoded strings are to contain newlines.</p>
+</li></ul>
+
+<p>Note: Examples on this page assume that the including program has executed:</p>
+
+<pre class="ruby"><span class="ruby-identifier">require</span> <span class="ruby-string">&#39;base64&#39;</span>
+</pre>
+
+<h2 id="module-Base64-label-Encoding+Character+Sets"><a href="Encoding.html"><code>Encoding</code></a> Character Sets<span><a href="#module-Base64-label-Encoding+Character+Sets">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>A Base64-encoded string consists only of characters from a 64-character set:</p>
+<ul><li>
+<p><code>(&#39;A&#39;..&#39;Z&#39;)</code>.</p>
+</li><li>
+<p><code>(&#39;a&#39;..&#39;z&#39;)</code>.</p>
+</li><li>
+<p><code>(&#39;0&#39;..&#39;9&#39;)</code>.</p>
+</li><li>
+<p><code>=</code>, the ‘padding’ character.</p>
+</li><li>
+<p>Either:</p>
+<ul><li>
+<p><code>%w[+ /]</code>: <a href="https://datatracker.ietf.org/doc/html/rfc2045">RFC-2045-compliant</a>; <em>not</em> safe for URLs.</p>
+</li><li>
+<p><code>%w[- _]</code>: <a href="https://datatracker.ietf.org/doc/html/rfc4648">RFC-4648-compliant</a>; safe for URLs.</p>
+</li></ul>
+</li></ul>
+
+<p>If you are working with Base64-encoded strings that will come from or be put into URLs, you should choose this encoder-decoder pair of RFC-4648-compliant methods:</p>
+<ul><li>
+<p><a href="Base64.html#method-i-urlsafe_encode64"><code>Base64.urlsafe_encode64</code></a> and <a href="Base64.html#method-i-urlsafe_decode64"><code>Base64.urlsafe_decode64</code></a>.</p>
+</li></ul>
+
+<p>Otherwise, you may choose any of the pairs in this module, including the pair above, or the RFC-2045-compliant pairs:</p>
+<ul><li>
+<p><a href="Base64.html#method-i-encode64"><code>Base64.encode64</code></a> and <a href="Base64.html#method-i-decode64"><code>Base64.decode64</code></a>.</p>
+</li><li>
+<p><a href="Base64.html#method-i-strict_encode64"><code>Base64.strict_encode64</code></a> and <a href="Base64.html#method-i-strict_decode64"><code>Base64.strict_decode64</code></a>.</p>
+</li></ul>
+
+<h2 id="module-Base64-label-Padding">Padding<span><a href="#module-Base64-label-Padding">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>Base64-encoding changes a triplet of input bytes into a quartet of output characters.</p>
+
+<p><strong>Padding in Encode Methods</strong></p>
+
+<p>Padding – extending an encoded string with zero, one, or two trailing <code>=</code> characters – is performed by methods <a href="Base64.html#method-i-encode64"><code>Base64.encode64</code></a>, <a href="Base64.html#method-i-strict_encode64"><code>Base64.strict_encode64</code></a>, and, by default, <a href="Base64.html#method-i-urlsafe_encode64"><code>Base64.urlsafe_encode64</code></a>:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&#39;s&#39;</span>)                         <span class="ruby-comment"># =&gt; &quot;cw==\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;s&#39;</span>)                  <span class="ruby-comment"># =&gt; &quot;cw==&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;s&#39;</span>)                 <span class="ruby-comment"># =&gt; &quot;cw==&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;s&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>) <span class="ruby-comment"># =&gt; &quot;cw&quot;</span>
+</pre>
+
+<p>When padding is performed, the encoded string is always of length <em>4n</em>, where <code>n</code> is a non-negative integer:</p>
+<ul><li>
+<p>Input bytes of length <em>3n</em> generate unpadded output characters of length <em>4n</em>:</p>
+
+<pre class="ruby"><span class="ruby-comment"># n = 1:  3 bytes =&gt; 4 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;123&#39;</span>)      <span class="ruby-comment"># =&gt; &quot;MDEy&quot;</span>
+<span class="ruby-comment"># n = 2:  6 bytes =&gt; 8 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;123456&#39;</span>)   <span class="ruby-comment"># =&gt; &quot;MDEyMzQ1&quot;</span>
+</pre>
+</li><li>
+<p>Input bytes of length <em>3n+1</em> generate padded output characters of length <em>4(n+1)</em>, with two padding characters at the end:</p>
+
+<pre class="ruby"><span class="ruby-comment"># n = 1:  4 bytes =&gt; 8 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;1234&#39;</span>)     <span class="ruby-comment"># =&gt; &quot;MDEyMw==&quot;</span>
+<span class="ruby-comment"># n = 2:  7 bytes =&gt; 12 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;1234567&#39;</span>)  <span class="ruby-comment"># =&gt; &quot;MDEyMzQ1Ng==&quot;</span>
+</pre>
+</li><li>
+<p>Input bytes of length <em>3n+2</em> generate padded output characters of length <em>4(n+1)</em>, with one padding character at the end:</p>
+
+<pre class="ruby"><span class="ruby-comment"># n = 1:  5 bytes =&gt; 8 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;12345&#39;</span>)    <span class="ruby-comment"># =&gt; &quot;MDEyMzQ=&quot;</span>
+<span class="ruby-comment"># n = 2:  8 bytes =&gt; 12 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;12345678&#39;</span>) <span class="ruby-comment"># =&gt; &quot;MDEyMzQ1Njc=&quot;</span>
+</pre>
+</li></ul>
+
+<p>When padding is suppressed, for a positive integer <em>n</em>:</p>
+<ul><li>
+<p>Input bytes of length <em>3n</em> generate unpadded output characters of length <em>4n</em>:</p>
+
+<pre class="ruby"><span class="ruby-comment"># n = 1:  3 bytes =&gt; 4 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;123&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>)      <span class="ruby-comment"># =&gt; &quot;MDEy&quot;</span>
+<span class="ruby-comment"># n = 2:  6 bytes =&gt; 8 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;123456&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>)   <span class="ruby-comment"># =&gt; &quot;MDEyMzQ1&quot;</span>
+</pre>
+</li><li>
+<p>Input bytes of length <em>3n+1</em> generate unpadded output characters of length <em>4n+2</em>, with two padding characters at the end:</p>
+
+<pre class="ruby"><span class="ruby-comment"># n = 1:  4 bytes =&gt; 6 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;1234&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>)     <span class="ruby-comment"># =&gt; &quot;MDEyMw&quot;</span>
+<span class="ruby-comment"># n = 2:  7 bytes =&gt; 10 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;1234567&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>)  <span class="ruby-comment"># =&gt; &quot;MDEyMzQ1Ng&quot;</span>
+</pre>
+</li><li>
+<p>Input bytes of length <em>3n+2</em> generate unpadded output characters of length <em>4n+3</em>, with one padding character at the end:</p>
+
+<pre class="ruby"><span class="ruby-comment"># n = 1:  5 bytes =&gt; 7 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;12345&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>)    <span class="ruby-comment"># =&gt; &quot;MDEyMzQ&quot;</span>
+<span class="ruby-comment"># m = 2:  8 bytes =&gt; 11 characters.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;12345678&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>) <span class="ruby-comment"># =&gt; &quot;MDEyMzQ1Njc&quot;</span>
+</pre>
+</li></ul>
+
+<p><strong>Padding in Decode Methods</strong></p>
+
+<p>All of the Base64 decode methods support (but do not require) padding.</p>
+
+<p>Method <a href="Base64.html#method-i-decode64"><code>Base64.decode64</code></a> does not check the size of the padding:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc=&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc==&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+</pre>
+
+<p>Method <a href="Base64.html#method-i-strict_decode64"><code>Base64.strict_decode64</code></a> strictly enforces padding size:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc&quot;</span>)   <span class="ruby-comment"># Raises ArgumentError</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc=&quot;</span>)  <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc==&quot;</span>) <span class="ruby-comment"># Raises ArgumentError</span>
+</pre>
+
+<p>Method <a href="Base64.html#method-i-urlsafe_decode64"><code>Base64.urlsafe_decode64</code></a> allows padding in <code>str</code>, which if present, must be correct: see <a href="Base64.html#module-Base64-label-Padding">Padding</a>, above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc=&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc==&quot;</span>) <span class="ruby-comment"># Raises ArgumentError.</span>
+</pre>
+
+<h2 id="module-Base64-label-Newlines">Newlines<span><a href="#module-Base64-label-Newlines">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>An encoded string returned by <a href="Base64.html#method-i-encode64"><code>Base64.encode64</code></a> or <a href="Base64.html#method-i-urlsafe_encode64"><code>Base64.urlsafe_encode64</code></a> has an embedded newline character after each 60-character sequence, and, if non-empty, at the end:</p>
+
+<pre class="ruby"><span class="ruby-comment"># No newline if empty.</span>
+<span class="ruby-identifier">encoded</span> = <span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&quot;\x00&quot;</span> <span class="ruby-operator">*</span>  <span class="ruby-value">0</span>)
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">index</span>(<span class="ruby-string">&quot;\n&quot;</span>) <span class="ruby-comment"># =&gt; nil</span>
+
+<span class="ruby-comment"># Newline at end of short output.</span>
+<span class="ruby-identifier">encoded</span> = <span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&quot;\x00&quot;</span> <span class="ruby-operator">*</span>  <span class="ruby-value">1</span>)
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">size</span>        <span class="ruby-comment"># =&gt; 4</span>
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">index</span>(<span class="ruby-string">&quot;\n&quot;</span>) <span class="ruby-comment"># =&gt; 4</span>
+
+<span class="ruby-comment"># Newline at end of longer output.</span>
+<span class="ruby-identifier">encoded</span> = <span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&quot;\x00&quot;</span> <span class="ruby-operator">*</span> <span class="ruby-value">45</span>)
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">size</span>        <span class="ruby-comment"># =&gt; 60</span>
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">index</span>(<span class="ruby-string">&quot;\n&quot;</span>) <span class="ruby-comment"># =&gt; 60</span>
+
+<span class="ruby-comment"># Newlines embedded and at end of still longer output.</span>
+<span class="ruby-identifier">encoded</span> = <span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&quot;\x00&quot;</span> <span class="ruby-operator">*</span> <span class="ruby-value">46</span>)
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">size</span>                          <span class="ruby-comment"># =&gt; 65</span>
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">rindex</span>(<span class="ruby-string">&quot;\n&quot;</span>)                  <span class="ruby-comment"># =&gt; 65</span>
+<span class="ruby-identifier">encoded</span>.<span class="ruby-identifier">split</span>(<span class="ruby-string">&quot;\n&quot;</span>).<span class="ruby-identifier">map</span> {<span class="ruby-operator">|</span><span class="ruby-identifier">s</span><span class="ruby-operator">|</span> <span class="ruby-identifier">s</span>.<span class="ruby-identifier">size</span> } <span class="ruby-comment"># =&gt; [60, 4]</span>
+</pre>
+
+<p>The string to be encoded may itself contain newlines, which are encoded as Base64:</p>
+
+<pre class="ruby">  <span class="ruby-comment">#   Base64.encode64(&quot;\n\n\n&quot;) # =&gt; &quot;CgoK\n&quot;</span>
+<span class="ruby-identifier">s</span> = <span class="ruby-string">&quot;This is line 1\nThis is line 2\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-identifier">s</span>) <span class="ruby-comment"># =&gt; &quot;VGhpcyBpcyBsaW5lIDEKVGhpcyBpcyBsaW5lIDIK\n&quot;</span>
+</pre>
+
+  </section>
+
+  <section id="5Buntitled-5D" class="documentation-section">
+
+
+    <section class="constants-list">
+      <header>
+        <h3>Constants</h3>
+      </header>
+      <dl>
+        <dt id="VERSION">VERSION
+        <dd>
+      </dl>
+    </section>
+
+
+
+     <section id="public-instance-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Instance Methods</h3>
+       </header>
+
+      <div id="method-i-decode64" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">decode64</span><span
+              class="method-args">(str)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Returns a string containing the decoding of an RFC-2045-compliant Base64-encoded string <code>str</code>:</p>
+
+<pre class="ruby"><span class="ruby-identifier">s</span> = <span class="ruby-string">&quot;VGhpcyBpcyBsaW5lIDEKVGhpcyBpcyBsaW5lIDIK\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-identifier">s</span>) <span class="ruby-comment"># =&gt; &quot;This is line 1\nThis is line 2\n&quot;</span>
+</pre>
+
+<p>Non-Base64 characters in <code>str</code> are ignored; see <a href="Base64.html#module-Base64-label-Encoding+Character+Sets">Encoding Character Set</a> above: these include newline characters and characters <code>-</code> and <code>/</code>:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-string">&quot;\x00\n-_&quot;</span>) <span class="ruby-comment"># =&gt; &quot;&quot;</span>
+</pre>
+
+<p>Padding in <code>str</code> (even if incorrect) is ignored:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc&quot;</span>)   <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc=&quot;</span>)  <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc==&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+</pre>
+
+          <div class="method-source-code" id="decode64-source">
+            <pre><span class="ruby-comment"># File lib/base64.rb, line 241</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">decode64</span>(<span class="ruby-identifier">str</span>)
+  <span class="ruby-identifier">str</span>.<span class="ruby-identifier">unpack1</span>(<span class="ruby-string">&quot;m&quot;</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-encode64" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">encode64</span><span
+              class="method-args">(bin)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Returns a string containing the RFC-2045-compliant Base64-encoding of <code>bin</code>.</p>
+
+<p>Per RFC 2045, the returned string may contain the URL-unsafe characters <code>+</code> or <code>/</code>; see <a href="Base64.html#module-Base64-label-Encoding+Character+Sets">Encoding Character Set</a> above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&quot;\xFB\xEF\xBE&quot;</span>) <span class="ruby-comment"># =&gt; &quot;++++\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&quot;\xFF\xFF\xFF&quot;</span>) <span class="ruby-comment"># =&gt; &quot;////\n&quot;</span>
+</pre>
+
+<p>The returned string may include padding; see <a href="Base64.html#module-Base64-label-Padding">Padding</a> above.</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&#39;*&#39;</span>) <span class="ruby-comment"># =&gt; &quot;Kg==\n&quot;</span>
+</pre>
+
+<p>The returned string ends with a newline character, and if sufficiently long will have one or more embedded newline characters; see <a href="Base64.html#module-Base64-label-Newlines">Newlines</a> above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&#39;*&#39;</span>) <span class="ruby-comment"># =&gt; &quot;Kg==\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&#39;*&#39;</span> <span class="ruby-operator">*</span> <span class="ruby-value">46</span>)
+<span class="ruby-comment"># =&gt; &quot;KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioq\nKg==\n&quot;</span>
+</pre>
+
+<p>The string to be encoded may itself contain newlines, which will be encoded as ordinary Base64:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-string">&quot;\n\n\n&quot;</span>) <span class="ruby-comment"># =&gt; &quot;CgoK\n&quot;</span>
+<span class="ruby-identifier">s</span> = <span class="ruby-string">&quot;This is line 1\nThis is line 2\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">encode64</span>(<span class="ruby-identifier">s</span>) <span class="ruby-comment"># =&gt; &quot;VGhpcyBpcyBsaW5lIDEKVGhpcyBpcyBsaW5lIDIK\n&quot;</span>
+</pre>
+
+          <div class="method-source-code" id="encode64-source">
+            <pre><span class="ruby-comment"># File lib/base64.rb, line 219</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">encode64</span>(<span class="ruby-identifier">bin</span>)
+  [<span class="ruby-identifier">bin</span>].<span class="ruby-identifier">pack</span>(<span class="ruby-string">&quot;m&quot;</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-strict_decode64" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">strict_decode64</span><span
+              class="method-args">(str)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Returns a string containing the decoding of an RFC-2045-compliant Base64-encoded string <code>str</code>:</p>
+
+<pre class="ruby"><span class="ruby-identifier">s</span> = <span class="ruby-string">&quot;VGhpcyBpcyBsaW5lIDEKVGhpcyBpcyBsaW5lIDIK&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-identifier">s</span>) <span class="ruby-comment"># =&gt; &quot;This is line 1\nThis is line 2\n&quot;</span>
+</pre>
+
+<p>Non-Base64 characters in <code>str</code> not allowed; see <a href="Base64.html#module-Base64-label-Encoding+Character+Sets">Encoding Character Set</a> above: these include newline characters and characters <code>-</code> and <code>/</code>:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&quot;\n&quot;</span>) <span class="ruby-comment"># Raises ArgumentError</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&#39;-&#39;</span>)  <span class="ruby-comment"># Raises ArgumentError</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&#39;_&#39;</span>)  <span class="ruby-comment"># Raises ArgumentError</span>
+</pre>
+
+<p>Padding in <code>str</code>, if present, must be correct:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc&quot;</span>)   <span class="ruby-comment"># Raises ArgumentError</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc=&quot;</span>)  <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc==&quot;</span>) <span class="ruby-comment"># Raises ArgumentError</span>
+</pre>
+
+          <div class="method-source-code" id="strict_decode64-source">
+            <pre><span class="ruby-comment"># File lib/base64.rb, line 297</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">strict_decode64</span>(<span class="ruby-identifier">str</span>)
+  <span class="ruby-identifier">str</span>.<span class="ruby-identifier">unpack1</span>(<span class="ruby-string">&quot;m0&quot;</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-strict_encode64" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">strict_encode64</span><span
+              class="method-args">(bin)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Returns a string containing the RFC-2045-compliant Base64-encoding of <code>bin</code>.</p>
+
+<p>Per RFC 2045, the returned string may contain the URL-unsafe characters <code>+</code> or <code>/</code>; see <a href="Base64.html#module-Base64-label-Encoding+Character+Sets">Encoding Character Set</a> above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&quot;\xFB\xEF\xBE&quot;</span>) <span class="ruby-comment"># =&gt; &quot;++++\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&quot;\xFF\xFF\xFF&quot;</span>) <span class="ruby-comment"># =&gt; &quot;////\n&quot;</span>
+</pre>
+
+<p>The returned string may include padding; see <a href="Base64.html#module-Base64-label-Padding">Padding</a> above.</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;*&#39;</span>) <span class="ruby-comment"># =&gt; &quot;Kg==\n&quot;</span>
+</pre>
+
+<p>The returned string will have no newline characters, regardless of its length; see <a href="Base64.html#module-Base64-label-Newlines">Newlines</a> above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;*&#39;</span>) <span class="ruby-comment"># =&gt; &quot;Kg==&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&#39;*&#39;</span> <span class="ruby-operator">*</span> <span class="ruby-value">46</span>)
+<span class="ruby-comment"># =&gt; &quot;KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKg==&quot;</span>
+</pre>
+
+<p>The string to be encoded may itself contain newlines, which will be encoded as ordinary Base64:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-string">&quot;\n\n\n&quot;</span>) <span class="ruby-comment"># =&gt; &quot;CgoK&quot;</span>
+<span class="ruby-identifier">s</span> = <span class="ruby-string">&quot;This is line 1\nThis is line 2\n&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">strict_encode64</span>(<span class="ruby-identifier">s</span>) <span class="ruby-comment"># =&gt; &quot;VGhpcyBpcyBsaW5lIDEKVGhpcyBpcyBsaW5lIDIK&quot;</span>
+</pre>
+
+          <div class="method-source-code" id="strict_encode64-source">
+            <pre><span class="ruby-comment"># File lib/base64.rb, line 273</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">strict_encode64</span>(<span class="ruby-identifier">bin</span>)
+  [<span class="ruby-identifier">bin</span>].<span class="ruby-identifier">pack</span>(<span class="ruby-string">&quot;m0&quot;</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-urlsafe_decode64" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">urlsafe_decode64</span><span
+              class="method-args">(str)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Returns the decoding of an RFC-4648-compliant Base64-encoded string <code>str</code>:</p>
+
+<p><code>str</code> may not contain non-Base64 characters; see <a href="Base64.html#module-Base64-label-Encoding+Character+Sets">Encoding Character Set</a> above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&#39;+&#39;</span>)  <span class="ruby-comment"># Raises ArgumentError.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&#39;/&#39;</span>)  <span class="ruby-comment"># Raises ArgumentError.</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&quot;\n&quot;</span>) <span class="ruby-comment"># Raises ArgumentError.</span>
+</pre>
+
+<p>Padding in <code>str</code>, if present, must be correct: see <a href="Base64.html#module-Base64-label-Padding">Padding</a>, above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc=&quot;</span>) <span class="ruby-comment"># =&gt; &quot;01234567&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_decode64</span>(<span class="ruby-string">&quot;MDEyMzQ1Njc==&quot;</span>) <span class="ruby-comment"># Raises ArgumentError.</span>
+</pre>
+
+          <div class="method-source-code" id="urlsafe_decode64-source">
+            <pre><span class="ruby-comment"># File lib/base64.rb, line 351</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">urlsafe_decode64</span>(<span class="ruby-identifier">str</span>)
+  <span class="ruby-comment"># NOTE: RFC 4648 does say nothing about unpadded input, but says that</span>
+  <span class="ruby-comment"># &quot;the excess pad characters MAY also be ignored&quot;, so it is inferred that</span>
+  <span class="ruby-comment"># unpadded input is also acceptable.</span>
+  <span class="ruby-keyword">if</span> <span class="ruby-operator">!</span><span class="ruby-identifier">str</span>.<span class="ruby-identifier">end_with?</span>(<span class="ruby-string">&quot;=&quot;</span>) <span class="ruby-operator">&amp;&amp;</span> <span class="ruby-identifier">str</span>.<span class="ruby-identifier">length</span> <span class="ruby-operator">%</span> <span class="ruby-value">4</span> <span class="ruby-operator">!=</span> <span class="ruby-value">0</span>
+    <span class="ruby-identifier">str</span> = <span class="ruby-identifier">str</span>.<span class="ruby-identifier">ljust</span>((<span class="ruby-identifier">str</span>.<span class="ruby-identifier">length</span> <span class="ruby-operator">+</span> <span class="ruby-value">3</span>) <span class="ruby-operator">&amp;</span> <span class="ruby-operator">~</span><span class="ruby-value">3</span>, <span class="ruby-string">&quot;=&quot;</span>)
+    <span class="ruby-identifier">str</span>.<span class="ruby-identifier">tr!</span>(<span class="ruby-string">&quot;-_&quot;</span>, <span class="ruby-string">&quot;+/&quot;</span>)
+  <span class="ruby-keyword">else</span>
+    <span class="ruby-identifier">str</span> = <span class="ruby-identifier">str</span>.<span class="ruby-identifier">tr</span>(<span class="ruby-string">&quot;-_&quot;</span>, <span class="ruby-string">&quot;+/&quot;</span>)
+  <span class="ruby-keyword">end</span>
+  <span class="ruby-identifier">strict_decode64</span>(<span class="ruby-identifier">str</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-urlsafe_encode64" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">urlsafe_encode64</span><span
+              class="method-args">(bin, padding: true)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Returns the RFC-4648-compliant Base64-encoding of <code>bin</code>.</p>
+
+<p>Per RFC 4648, the returned string will not contain the URL-unsafe characters <code>+</code> or <code>/</code>, but instead may contain the URL-safe characters <code>-</code> and <code>_</code>; see <a href="Base64.html#module-Base64-label-Encoding+Character+Sets">Encoding Character Set</a> above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&quot;\xFB\xEF\xBE&quot;</span>) <span class="ruby-comment"># =&gt; &quot;----&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&quot;\xFF\xFF\xFF&quot;</span>) <span class="ruby-comment"># =&gt; &quot;____&quot;</span>
+</pre>
+
+<p>By default, the returned string may have padding; see <a href="Base64.html#module-Base64-label-Padding">Padding</a>, above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;*&#39;</span>) <span class="ruby-comment"># =&gt; &quot;Kg==&quot;</span>
+</pre>
+
+<p>Optionally, you can suppress padding:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;*&#39;</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">false</span>) <span class="ruby-comment"># =&gt; &quot;Kg&quot;</span>
+</pre>
+
+<p>The returned string will have no newline characters, regardless of its length; see <a href="Base64.html#module-Base64-label-Newlines">Newlines</a> above:</p>
+
+<pre class="ruby"><span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;*&#39;</span>) <span class="ruby-comment"># =&gt; &quot;Kg==&quot;</span>
+<span class="ruby-constant">Base64</span>.<span class="ruby-identifier">urlsafe_encode64</span>(<span class="ruby-string">&#39;*&#39;</span> <span class="ruby-operator">*</span> <span class="ruby-value">46</span>)
+<span class="ruby-comment"># =&gt; &quot;KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKg==&quot;</span>
+</pre>
+
+          <div class="method-source-code" id="urlsafe_encode64-source">
+            <pre><span class="ruby-comment"># File lib/base64.rb, line 328</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">urlsafe_encode64</span>(<span class="ruby-identifier">bin</span>, <span class="ruby-value">padding:</span> <span class="ruby-keyword">true</span>)
+  <span class="ruby-identifier">str</span> = <span class="ruby-identifier">strict_encode64</span>(<span class="ruby-identifier">bin</span>)
+  <span class="ruby-identifier">str</span>.<span class="ruby-identifier">chomp!</span>(<span class="ruby-string">&quot;==&quot;</span>) <span class="ruby-keyword">or</span> <span class="ruby-identifier">str</span>.<span class="ruby-identifier">chomp!</span>(<span class="ruby-string">&quot;=&quot;</span>) <span class="ruby-keyword">unless</span> <span class="ruby-identifier">padding</span>
+  <span class="ruby-identifier">str</span>.<span class="ruby-identifier">tr!</span>(<span class="ruby-string">&quot;+/&quot;</span>, <span class="ruby-string">&quot;-_&quot;</span>)
+  <span class="ruby-identifier">str</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+  </section>
+</main>
+
+
+<footer id="validator-badges" role="contentinfo">
+  <p><a href="https://validator.w3.org/check/referer">Validate</a>
+  <p>Generated by <a href="https://ruby.github.io/rdoc/">RDoc</a> 6.6.3.1.
+  <p>Based on <a href="http://deveiate.org/projects/Darkfish-RDoc/">Darkfish</a> by <a href="http://deveiate.org">Michael Granger</a>.
+</footer>
+

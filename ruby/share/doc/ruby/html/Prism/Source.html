@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+
+<title>class Prism::Source - Documentation for Ruby 3.3</title>
+
+<script type="text/javascript">
+  var rdoc_rel_prefix = "../";
+  var index_rel_prefix = "../";
+</script>
+
+<script src="../js/navigation.js" defer></script>
+<script src="../js/search.js" defer></script>
+<script src="../js/search_index.js" defer></script>
+<script src="../js/searcher.js" defer></script>
+<script src="../js/darkfish.js" defer></script>
+
+<link href="../css/fonts.css" rel="stylesheet">
+<link href="../css/rdoc.css" rel="stylesheet">
+
+
+<body id="top" role="document" class="class">
+<nav role="navigation">
+  <div id="project-navigation">
+    <div id="home-section" role="region" title="Quick navigation" class="nav-section">
+  <h2>
+    <a href="../index.html" rel="home">Home</a>
+  </h2>
+
+  <div id="table-of-contents-navigation">
+    <a href="../table_of_contents.html#pages">Pages</a>
+    <a href="../table_of_contents.html#classes">Classes</a>
+    <a href="../table_of_contents.html#methods">Methods</a>
+  </div>
+</div>
+
+    <div id="search-section" role="search" class="project-section initially-hidden">
+  <form action="#" method="get" accept-charset="utf-8">
+    <div id="search-field-wrapper">
+      <input id="search-field" role="combobox" aria-label="Search"
+             aria-autocomplete="list" aria-controls="search-results"
+             type="text" name="search" placeholder="Search (/) for a class, method, ..." spellcheck="false"
+             title="Type to search, Up and Down to navigate, Enter to load">
+    </div>
+
+    <ul id="search-results" aria-label="Search Results"
+        aria-busy="false" aria-expanded="false"
+        aria-atomic="false" class="initially-hidden"></ul>
+  </form>
+</div>
+
+  </div>
+
+  
+
+  <div id="class-metadata">
+    
+    
+<div id="parent-class-section" class="nav-section">
+  <h3>Parent</h3>
+
+  <p class="link"><a href="../Object.html">Object</a>
+</div>
+
+    
+    
+    
+<!-- Method Quickref -->
+<div id="method-list-section" class="nav-section">
+  <h3>Methods</h3>
+
+  <ul class="link-list" role="directory">
+    <li ><a href="#method-c-new">::new</a>
+    <li ><a href="#method-i-character_column">#character_column</a>
+    <li ><a href="#method-i-character_offset">#character_offset</a>
+    <li ><a href="#method-i-column">#column</a>
+    <li ><a href="#method-i-compute_offsets">#compute_offsets</a>
+    <li ><a href="#method-i-find_line">#find_line</a>
+    <li ><a href="#method-i-line">#line</a>
+    <li ><a href="#method-i-line_start">#line_start</a>
+    <li ><a href="#method-i-slice">#slice</a>
+  </ul>
+</div>
+
+  </div>
+</nav>
+
+<main role="main" aria-labelledby="class-Prism::Source">
+  <h1 id="class-Prism::Source" class="class">
+    class Prism::Source
+  </h1>
+
+  <section class="description">
+    
+<p>This represents a source of Ruby code that has been parsed. It is used in conjunction with locations to allow them to resolve line numbers and source ranges.</p>
+
+  </section>
+
+  <section id="5Buntitled-5D" class="documentation-section">
+
+
+
+    <section class="attribute-method-details" class="method-section">
+      <header>
+        <h3>Attributes</h3>
+      </header>
+
+      <div id="attribute-i-offsets" class="method-detail">
+        <div class="method-heading attribute-method-heading">
+          <span class="method-name">offsets</span><span
+            class="attribute-access-type">[R]</span>
+        </div>
+
+        <div class="method-description">
+        <p>The list of newline byte offsets in the source code.</p>
+        </div>
+      </div>
+      <div id="attribute-i-source" class="method-detail">
+        <div class="method-heading attribute-method-heading">
+          <span class="method-name">source</span><span
+            class="attribute-access-type">[R]</span>
+        </div>
+
+        <div class="method-description">
+        <p>The source code that this source object represents.</p>
+        </div>
+      </div>
+      <div id="attribute-i-start_line" class="method-detail">
+        <div class="method-heading attribute-method-heading">
+          <span class="method-name">start_line</span><span
+            class="attribute-access-type">[RW]</span>
+        </div>
+
+        <div class="method-description">
+        <p>The line number where this source starts.</p>
+        </div>
+      </div>
+    </section>
+
+
+     <section id="public-class-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Class Methods</h3>
+       </header>
+
+      <div id="method-c-new" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">new</span><span
+              class="method-args">(source, start_line = 1, offsets = compute_offsets(source))</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Create a new source object with the given source code and newline byte offsets. If no newline byte offsets are given, they will be computed from the source code.</p>
+
+          <div class="method-source-code" id="new-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 20</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">initialize</span>(<span class="ruby-identifier">source</span>, <span class="ruby-identifier">start_line</span> = <span class="ruby-value">1</span>, <span class="ruby-identifier">offsets</span> = <span class="ruby-identifier">compute_offsets</span>(<span class="ruby-identifier">source</span>))
+  <span class="ruby-ivar">@source</span> = <span class="ruby-identifier">source</span>
+  <span class="ruby-ivar">@start_line</span> = <span class="ruby-identifier">start_line</span>
+  <span class="ruby-ivar">@offsets</span> = <span class="ruby-identifier">offsets</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+     <section id="public-instance-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Instance Methods</h3>
+       </header>
+
+      <div id="method-i-character_column" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">character_column</span><span
+              class="method-args">(byte_offset)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Return the column number in characters for the given byte offset.</p>
+
+          <div class="method-source-code" id="character_column-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 55</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">character_column</span>(<span class="ruby-identifier">byte_offset</span>)
+  <span class="ruby-identifier">character_offset</span>(<span class="ruby-identifier">byte_offset</span>) <span class="ruby-operator">-</span> <span class="ruby-identifier">character_offset</span>(<span class="ruby-identifier">line_start</span>(<span class="ruby-identifier">byte_offset</span>))
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-character_offset" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">character_offset</span><span
+              class="method-args">(byte_offset)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Return the character offset for the given byte offset.</p>
+
+          <div class="method-source-code" id="character_offset-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 50</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">character_offset</span>(<span class="ruby-identifier">byte_offset</span>)
+  <span class="ruby-identifier">source</span>.<span class="ruby-identifier">byteslice</span>(<span class="ruby-value">0</span>, <span class="ruby-identifier">byte_offset</span>).<span class="ruby-identifier">length</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-column" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">column</span><span
+              class="method-args">(byte_offset)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Return the column number for the given byte offset.</p>
+
+          <div class="method-source-code" id="column-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 45</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">column</span>(<span class="ruby-identifier">byte_offset</span>)
+  <span class="ruby-identifier">byte_offset</span> <span class="ruby-operator">-</span> <span class="ruby-identifier">line_start</span>(<span class="ruby-identifier">byte_offset</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-line" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">line</span><span
+              class="method-args">(byte_offset)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Binary search through the offsets to find the line number for the given byte offset.</p>
+
+          <div class="method-source-code" id="line-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 34</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">line</span>(<span class="ruby-identifier">byte_offset</span>)
+  <span class="ruby-identifier">start_line</span> <span class="ruby-operator">+</span> <span class="ruby-identifier">find_line</span>(<span class="ruby-identifier">byte_offset</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-line_start" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">line_start</span><span
+              class="method-args">(byte_offset)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Return the byte offset of the start of the line corresponding to the given byte offset.</p>
+
+          <div class="method-source-code" id="line_start-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 40</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">line_start</span>(<span class="ruby-identifier">byte_offset</span>)
+  <span class="ruby-identifier">offsets</span>[<span class="ruby-identifier">find_line</span>(<span class="ruby-identifier">byte_offset</span>)]
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-slice" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">slice</span><span
+              class="method-args">(byte_offset, length)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Perform a byteslice on the source code using the given byte offset and byte length.</p>
+
+          <div class="method-source-code" id="slice-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 28</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">slice</span>(<span class="ruby-identifier">byte_offset</span>, <span class="ruby-identifier">length</span>)
+  <span class="ruby-identifier">source</span>.<span class="ruby-identifier">byteslice</span>(<span class="ruby-identifier">byte_offset</span>, <span class="ruby-identifier">length</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+     <section id="private-instance-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Private Instance Methods</h3>
+       </header>
+
+      <div id="method-i-compute_offsets" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">compute_offsets</span><span
+              class="method-args">(code)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p><a href="../Find.html"><code>Find</code></a> all of the newlines in the source code and return their byte offsets from the start of the string an array.</p>
+
+          <div class="method-source-code" id="compute_offsets-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 83</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">compute_offsets</span>(<span class="ruby-identifier">code</span>)
+  <span class="ruby-identifier">offsets</span> = [<span class="ruby-value">0</span>]
+  <span class="ruby-identifier">code</span>.<span class="ruby-identifier">b</span>.<span class="ruby-identifier">scan</span>(<span class="ruby-string">&quot;\n&quot;</span>) { <span class="ruby-identifier">offsets</span> <span class="ruby-operator">&lt;&lt;</span> <span class="ruby-identifier">$~</span>.<span class="ruby-identifier">end</span>(<span class="ruby-value">0</span>) }
+  <span class="ruby-identifier">offsets</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-find_line" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">find_line</span><span
+              class="method-args">(byte_offset)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          <p>Binary search through the offsets to find the line number for the given byte offset.</p>
+
+          <div class="method-source-code" id="find_line-source">
+            <pre><span class="ruby-comment"># File lib/prism/parse_result.rb, line 63</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">find_line</span>(<span class="ruby-identifier">byte_offset</span>)
+  <span class="ruby-identifier">left</span> = <span class="ruby-value">0</span>
+  <span class="ruby-identifier">right</span> = <span class="ruby-identifier">offsets</span>.<span class="ruby-identifier">length</span> <span class="ruby-operator">-</span> <span class="ruby-value">1</span>
+
+  <span class="ruby-keyword">while</span> <span class="ruby-identifier">left</span> <span class="ruby-operator">&lt;=</span> <span class="ruby-identifier">right</span>
+    <span class="ruby-identifier">mid</span> = <span class="ruby-identifier">left</span> <span class="ruby-operator">+</span> (<span class="ruby-identifier">right</span> <span class="ruby-operator">-</span> <span class="ruby-identifier">left</span>) <span class="ruby-operator">/</span> <span class="ruby-value">2</span>
+    <span class="ruby-keyword">return</span> <span class="ruby-identifier">mid</span> <span class="ruby-keyword">if</span> <span class="ruby-identifier">offsets</span>[<span class="ruby-identifier">mid</span>] <span class="ruby-operator">==</span> <span class="ruby-identifier">byte_offset</span>
+
+    <span class="ruby-keyword">if</span> <span class="ruby-identifier">offsets</span>[<span class="ruby-identifier">mid</span>] <span class="ruby-operator">&lt;</span> <span class="ruby-identifier">byte_offset</span>
+      <span class="ruby-identifier">left</span> = <span class="ruby-identifier">mid</span> <span class="ruby-operator">+</span> <span class="ruby-value">1</span>
+    <span class="ruby-keyword">else</span>
+      <span class="ruby-identifier">right</span> = <span class="ruby-identifier">mid</span> <span class="ruby-operator">-</span> <span class="ruby-value">1</span>
+    <span class="ruby-keyword">end</span>
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-identifier">left</span> <span class="ruby-operator">-</span> <span class="ruby-value">1</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+  </section>
+</main>
+
+
+<footer id="validator-badges" role="contentinfo">
+  <p><a href="https://validator.w3.org/check/referer">Validate</a>
+  <p>Generated by <a href="https://ruby.github.io/rdoc/">RDoc</a> 6.6.3.1.
+  <p>Based on <a href="http://deveiate.org/projects/Darkfish-RDoc/">Darkfish</a> by <a href="http://deveiate.org">Michael Granger</a>.
+</footer>
+

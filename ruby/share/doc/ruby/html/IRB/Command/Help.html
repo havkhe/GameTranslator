@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+
+<title>class IRB::Command::Help - Documentation for Ruby 3.3</title>
+
+<script type="text/javascript">
+  var rdoc_rel_prefix = "../../";
+  var index_rel_prefix = "../../";
+</script>
+
+<script src="../../js/navigation.js" defer></script>
+<script src="../../js/search.js" defer></script>
+<script src="../../js/search_index.js" defer></script>
+<script src="../../js/searcher.js" defer></script>
+<script src="../../js/darkfish.js" defer></script>
+
+<link href="../../css/fonts.css" rel="stylesheet">
+<link href="../../css/rdoc.css" rel="stylesheet">
+
+
+<body id="top" role="document" class="class">
+<nav role="navigation">
+  <div id="project-navigation">
+    <div id="home-section" role="region" title="Quick navigation" class="nav-section">
+  <h2>
+    <a href="../../index.html" rel="home">Home</a>
+  </h2>
+
+  <div id="table-of-contents-navigation">
+    <a href="../../table_of_contents.html#pages">Pages</a>
+    <a href="../../table_of_contents.html#classes">Classes</a>
+    <a href="../../table_of_contents.html#methods">Methods</a>
+  </div>
+</div>
+
+    <div id="search-section" role="search" class="project-section initially-hidden">
+  <form action="#" method="get" accept-charset="utf-8">
+    <div id="search-field-wrapper">
+      <input id="search-field" role="combobox" aria-label="Search"
+             aria-autocomplete="list" aria-controls="search-results"
+             type="text" name="search" placeholder="Search (/) for a class, method, ..." spellcheck="false"
+             title="Type to search, Up and Down to navigate, Enter to load">
+    </div>
+
+    <ul id="search-results" aria-label="Search Results"
+        aria-busy="false" aria-expanded="false"
+        aria-atomic="false" class="initially-hidden"></ul>
+  </form>
+</div>
+
+  </div>
+
+  
+
+  <div id="class-metadata">
+    
+    
+<div id="parent-class-section" class="nav-section">
+  <h3>Parent</h3>
+
+  <p class="link"><a href="Base.html">IRB::Command::Base</a>
+</div>
+
+    
+    
+    
+<!-- Method Quickref -->
+<div id="method-list-section" class="nav-section">
+  <h3>Methods</h3>
+
+  <ul class="link-list" role="directory">
+    <li ><a href="#method-i-add_category_to_output">#add_category_to_output</a>
+    <li ><a href="#method-i-execute">#execute</a>
+    <li ><a href="#method-i-help_message">#help_message</a>
+  </ul>
+</div>
+
+  </div>
+</nav>
+
+<main role="main" aria-labelledby="class-IRB::Command::Help">
+  <h1 id="class-IRB::Command::Help" class="class">
+    class IRB::Command::Help
+  </h1>
+
+  <section class="description">
+    
+  </section>
+
+  <section id="5Buntitled-5D" class="documentation-section">
+
+
+
+
+
+     <section id="public-instance-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Public Instance Methods</h3>
+       </header>
+
+      <div id="method-i-execute" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">execute</span><span
+              class="method-args">(command_name)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          
+
+          <div class="method-source-code" id="execute-source">
+            <pre><span class="ruby-comment"># File lib/irb/command/help.rb, line 9</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">execute</span>(<span class="ruby-identifier">command_name</span>)
+  <span class="ruby-identifier">content</span> =
+    <span class="ruby-keyword">if</span> <span class="ruby-identifier">command_name</span>.<span class="ruby-identifier">empty?</span>
+      <span class="ruby-identifier">help_message</span>
+    <span class="ruby-keyword">else</span>
+      <span class="ruby-keyword">if</span> <span class="ruby-identifier">command_class</span> = <span class="ruby-constant">Command</span>.<span class="ruby-identifier">load_command</span>(<span class="ruby-identifier">command_name</span>)
+        <span class="ruby-identifier">command_class</span>.<span class="ruby-identifier">help_message</span> <span class="ruby-operator">||</span> <span class="ruby-identifier">command_class</span>.<span class="ruby-identifier">description</span>
+      <span class="ruby-keyword">else</span>
+        <span class="ruby-node">&quot;Can&#39;t find command `#{command_name}`. Please check the command name and try again.\n\n&quot;</span>
+      <span class="ruby-keyword">end</span>
+    <span class="ruby-keyword">end</span>
+  <span class="ruby-constant">Pager</span>.<span class="ruby-identifier">page_content</span>(<span class="ruby-identifier">content</span>)
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+     <section id="private-instance-5Buntitled-5D-method-details" class="method-section">
+       <header>
+         <h3>Private Instance Methods</h3>
+       </header>
+
+      <div id="method-i-add_category_to_output" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">add_category_to_output</span><span
+              class="method-args">(category, cmds, output, longest_cmd_name_length)</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          
+
+          <div class="method-source-code" id="add_category_to_output-source">
+            <pre><span class="ruby-comment"># File lib/irb/command/help.rb, line 72</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">add_category_to_output</span>(<span class="ruby-identifier">category</span>, <span class="ruby-identifier">cmds</span>, <span class="ruby-identifier">output</span>, <span class="ruby-identifier">longest_cmd_name_length</span>)
+  <span class="ruby-identifier">output</span>.<span class="ruby-identifier">puts</span> <span class="ruby-constant">Color</span>.<span class="ruby-identifier">colorize</span>(<span class="ruby-identifier">category</span>, [<span class="ruby-value">:BOLD</span>])
+
+  <span class="ruby-identifier">cmds</span>.<span class="ruby-identifier">each</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">cmd</span><span class="ruby-operator">|</span>
+    <span class="ruby-identifier">output</span>.<span class="ruby-identifier">puts</span> <span class="ruby-node">&quot;  #{cmd[:display_name].to_s.ljust(longest_cmd_name_length)}    #{cmd[:description]}&quot;</span>
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-identifier">output</span>.<span class="ruby-identifier">puts</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+      <div id="method-i-help_message" class="method-detail ">
+        <div class="method-header">
+          <div class="method-heading">
+            <span class="method-name">help_message</span><span
+              class="method-args">()</span>
+            <span class="method-click-advice">click to toggle source</span>
+          </div>
+        </div>
+
+        <div class="method-description">
+          
+
+          <div class="method-source-code" id="help_message-source">
+            <pre><span class="ruby-comment"># File lib/irb/command/help.rb, line 25</span>
+<span class="ruby-keyword">def</span> <span class="ruby-identifier ruby-title">help_message</span>
+  <span class="ruby-identifier">commands_info</span> = <span class="ruby-constant">IRB</span><span class="ruby-operator">::</span><span class="ruby-constant">Command</span>.<span class="ruby-identifier">all_commands_info</span>
+  <span class="ruby-identifier">helper_methods_info</span> = <span class="ruby-constant">IRB</span><span class="ruby-operator">::</span><span class="ruby-constant">HelperMethod</span>.<span class="ruby-identifier">all_helper_methods_info</span>
+  <span class="ruby-identifier">commands_grouped_by_categories</span> = <span class="ruby-identifier">commands_info</span>.<span class="ruby-identifier">group_by</span> { <span class="ruby-operator">|</span><span class="ruby-identifier">cmd</span><span class="ruby-operator">|</span> <span class="ruby-identifier">cmd</span>[<span class="ruby-value">:category</span>] }
+  <span class="ruby-identifier">commands_grouped_by_categories</span>[<span class="ruby-string">&quot;Helper methods&quot;</span>] = <span class="ruby-identifier">helper_methods_info</span>
+
+  <span class="ruby-keyword">if</span> <span class="ruby-identifier">irb_context</span>.<span class="ruby-identifier">with_debugger</span>
+    <span class="ruby-comment"># Remove the original &quot;Debugging&quot; category</span>
+    <span class="ruby-identifier">commands_grouped_by_categories</span>.<span class="ruby-identifier">delete</span>(<span class="ruby-string">&quot;Debugging&quot;</span>)
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-identifier">longest_cmd_name_length</span> = <span class="ruby-identifier">commands_info</span>.<span class="ruby-identifier">map</span> { <span class="ruby-operator">|</span><span class="ruby-identifier">c</span><span class="ruby-operator">|</span> <span class="ruby-identifier">c</span>[<span class="ruby-value">:display_name</span>].<span class="ruby-identifier">length</span> }.<span class="ruby-identifier">max</span>
+
+  <span class="ruby-identifier">output</span> = <span class="ruby-constant">StringIO</span>.<span class="ruby-identifier">new</span>
+
+  <span class="ruby-identifier">help_cmds</span> = <span class="ruby-identifier">commands_grouped_by_categories</span>.<span class="ruby-identifier">delete</span>(<span class="ruby-string">&quot;Help&quot;</span>)
+  <span class="ruby-identifier">no_category_cmds</span> = <span class="ruby-identifier">commands_grouped_by_categories</span>.<span class="ruby-identifier">delete</span>(<span class="ruby-string">&quot;No category&quot;</span>)
+  <span class="ruby-identifier">aliases</span> = <span class="ruby-identifier">irb_context</span>.<span class="ruby-identifier">instance_variable_get</span>(<span class="ruby-value">:@user_aliases</span>).<span class="ruby-identifier">map</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">alias_name</span>, <span class="ruby-identifier">target</span><span class="ruby-operator">|</span>
+    { <span class="ruby-value">display_name:</span> <span class="ruby-identifier">alias_name</span>, <span class="ruby-value">description:</span> <span class="ruby-node">&quot;Alias for `#{target}`&quot;</span> }
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-comment"># Display help commands first</span>
+  <span class="ruby-identifier">add_category_to_output</span>(<span class="ruby-string">&quot;Help&quot;</span>, <span class="ruby-identifier">help_cmds</span>, <span class="ruby-identifier">output</span>, <span class="ruby-identifier">longest_cmd_name_length</span>)
+
+  <span class="ruby-comment"># Display the rest of the commands grouped by categories</span>
+  <span class="ruby-identifier">commands_grouped_by_categories</span>.<span class="ruby-identifier">each</span> <span class="ruby-keyword">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">category</span>, <span class="ruby-identifier">cmds</span><span class="ruby-operator">|</span>
+    <span class="ruby-identifier">add_category_to_output</span>(<span class="ruby-identifier">category</span>, <span class="ruby-identifier">cmds</span>, <span class="ruby-identifier">output</span>, <span class="ruby-identifier">longest_cmd_name_length</span>)
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-comment"># Display commands without a category</span>
+  <span class="ruby-keyword">if</span> <span class="ruby-identifier">no_category_cmds</span>
+    <span class="ruby-identifier">add_category_to_output</span>(<span class="ruby-string">&quot;No category&quot;</span>, <span class="ruby-identifier">no_category_cmds</span>, <span class="ruby-identifier">output</span>, <span class="ruby-identifier">longest_cmd_name_length</span>)
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-comment"># Display aliases</span>
+  <span class="ruby-identifier">add_category_to_output</span>(<span class="ruby-string">&quot;Aliases&quot;</span>, <span class="ruby-identifier">aliases</span>, <span class="ruby-identifier">output</span>, <span class="ruby-identifier">longest_cmd_name_length</span>)
+
+  <span class="ruby-comment"># Append the debugger help at the end</span>
+  <span class="ruby-keyword">if</span> <span class="ruby-identifier">irb_context</span>.<span class="ruby-identifier">with_debugger</span>
+    <span class="ruby-comment"># Add &quot;Debugging (from debug.gem)&quot; category as title</span>
+    <span class="ruby-identifier">add_category_to_output</span>(<span class="ruby-string">&quot;Debugging (from debug.gem)&quot;</span>, [], <span class="ruby-identifier">output</span>, <span class="ruby-identifier">longest_cmd_name_length</span>)
+    <span class="ruby-identifier">output</span>.<span class="ruby-identifier">puts</span> <span class="ruby-constant">DEBUGGER__</span>.<span class="ruby-identifier">help</span>
+  <span class="ruby-keyword">end</span>
+
+  <span class="ruby-identifier">output</span>.<span class="ruby-identifier">string</span>
+<span class="ruby-keyword">end</span></pre>
+          </div>
+        </div>
+
+
+      </div>
+
+    </section>
+
+  </section>
+</main>
+
+
+<footer id="validator-badges" role="contentinfo">
+  <p><a href="https://validator.w3.org/check/referer">Validate</a>
+  <p>Generated by <a href="https://ruby.github.io/rdoc/">RDoc</a> 6.6.3.1.
+  <p>Based on <a href="http://deveiate.org/projects/Darkfish-RDoc/">Darkfish</a> by <a href="http://deveiate.org">Michael Granger</a>.
+</footer>
+

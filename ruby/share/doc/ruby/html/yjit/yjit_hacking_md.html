@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+
+<title>yjit_hacking - Documentation for Ruby 3.3</title>
+
+<script type="text/javascript">
+  var rdoc_rel_prefix = "../";
+  var index_rel_prefix = "../";
+</script>
+
+<script src="../js/navigation.js" defer></script>
+<script src="../js/search.js" defer></script>
+<script src="../js/search_index.js" defer></script>
+<script src="../js/searcher.js" defer></script>
+<script src="../js/darkfish.js" defer></script>
+
+<link href="../css/fonts.css" rel="stylesheet">
+<link href="../css/rdoc.css" rel="stylesheet">
+
+
+<body id="top" role="document" class="file">
+<nav role="navigation">
+  <div id="project-navigation">
+    <div id="home-section" role="region" title="Quick navigation" class="nav-section">
+  <h2>
+    <a href="../index.html" rel="home">Home</a>
+  </h2>
+
+  <div id="table-of-contents-navigation">
+    <a href="../table_of_contents.html#pages">Pages</a>
+    <a href="../table_of_contents.html#classes">Classes</a>
+    <a href="../table_of_contents.html#methods">Methods</a>
+  </div>
+</div>
+
+    <div id="search-section" role="search" class="project-section initially-hidden">
+  <form action="#" method="get" accept-charset="utf-8">
+    <div id="search-field-wrapper">
+      <input id="search-field" role="combobox" aria-label="Search"
+             aria-autocomplete="list" aria-controls="search-results"
+             type="text" name="search" placeholder="Search (/) for a class, method, ..." spellcheck="false"
+             title="Type to search, Up and Down to navigate, Enter to load">
+    </div>
+
+    <ul id="search-results" aria-label="Search Results"
+        aria-busy="false" aria-expanded="false"
+        aria-atomic="false" class="initially-hidden"></ul>
+  </form>
+</div>
+
+  </div>
+
+  
+<div class="nav-section">
+  <h3>Table of Contents</h3>
+
+
+
+  <ul class="link-list" role="directory">
+              <li>
+            <details open>
+              <summary>      <a href="#label-YJIT+Hacking">YJIT Hacking</a>
+</summary>
+              <ul class="link-list" role="directory">
+                          <li>      <a href="#label-Code+Generation+and+Assembly+Language">Code Generation and Assembly Language</a>
+          <li>      <a href="#label-Code+Generation+vs+Code+Execution">Code Generation vs Code Execution</a>
+          <li>      <a href="#label-Inlined+and+Outlined+Code">Inlined and Outlined Code</a>
+          <li>      <a href="#label-Statistics+and+Comments">Statistics and Comments</a>
+          <li>      <a href="#label-Entering+and+Exiting+the+Interpreter">Entering and Exiting the Interpreter</a>
+          <li>      <a href="#label-Side+Exits">Side Exits</a>
+
+              </ul>
+            </details>
+          </li>
+
+  </ul>
+</div>
+
+
+  <div id="project-metadata">
+    
+<div id="fileindex-section" class="nav-section">
+  <h3>Pages</h3>
+
+  <ul class="link-list">
+    <li><a href="../COPYING.html">COPYING</a>
+    <li><a href="../COPYING_ja.html">COPYING.ja</a>
+    <li><a href="../LEGAL.html">LEGAL</a>
+    <li><details><summary><a href="../NEWS_md.html">NEWS</a></summary>
+    <ul class="link-list">
+      <li><a href="../NEWS/NEWS-1_8_7.html">NEWS-1.8.7</a>
+      <li><a href="../NEWS/NEWS-1_9_1.html">NEWS-1.9.1</a>
+      <li><a href="../NEWS/NEWS-1_9_2.html">NEWS-1.9.2</a>
+      <li><a href="../NEWS/NEWS-1_9_3.html">NEWS-1.9.3</a>
+      <li><a href="../NEWS/NEWS-2_0_0.html">NEWS-2.0.0</a>
+      <li><a href="../NEWS/NEWS-2_1_0.html">NEWS-2.1.0</a>
+      <li><a href="../NEWS/NEWS-2_2_0.html">NEWS-2.2.0</a>
+      <li><a href="../NEWS/NEWS-2_3_0.html">NEWS-2.3.0</a>
+      <li><a href="../NEWS/NEWS-2_4_0.html">NEWS-2.4.0</a>
+      <li><a href="../NEWS/NEWS-2_5_0.html">NEWS-2.5.0</a>
+      <li><a href="../NEWS/NEWS-2_6_0.html">NEWS-2.6.0</a>
+      <li><a href="../NEWS/NEWS-2_7_0.html">NEWS-2.7.0</a>
+      <li><a href="../NEWS/NEWS-3_0_0_md.html">NEWS-3.0.0</a>
+      <li><a href="../NEWS/NEWS-3_1_0_md.html">NEWS-3.1.0</a>
+      <li><a href="../NEWS/NEWS-3_2_0_md.html">NEWS-3.2.0</a>
+    </ul></details>
+    <li><a href="../README_ja_md.html">README.ja</a>
+    <li><a href="../README_md.html">README</a>
+    <li><a href="../bsearch_rdoc.html">bsearch</a>
+    <li><a href="../bug_triaging_rdoc.html">bug_triaging</a>
+    <li><a href="../case_mapping_rdoc.html">case_mapping</a>
+    <li><a href="../character_selectors_rdoc.html">character_selectors</a>
+    <li><a href="../command_injection_rdoc.html">command_injection</a>
+    <li><details><summary><a href="../contributing_md.html">contributing</a></summary>
+    <ul class="link-list">
+      <li><a href="../contributing/building_ruby_md.html">building_ruby</a>
+      <li><a href="../contributing/documentation_guide_md.html">documentation_guide</a>
+      <li><a href="../contributing/glossary_md.html">glossary</a>
+      <li><a href="../contributing/making_changes_to_ruby_md.html">making_changes_to_ruby</a>
+      <li><a href="../contributing/making_changes_to_stdlibs_md.html">making_changes_to_stdlibs</a>
+      <li><a href="../contributing/reporting_issues_md.html">reporting_issues</a>
+      <li><a href="../contributing/testing_ruby_md.html">testing_ruby</a>
+    </ul></details>
+    <li><a href="../dig_methods_rdoc.html">dig_methods</a>
+    <li><a href="../distribution_md.html">distribution</a>
+    <li><a href="../dtrace_probes_rdoc.html">dtrace_probes</a>
+    <li><a href="../encodings_rdoc.html">encodings</a>
+    <li><a href="../extension_ja_rdoc.html">extension.ja</a>
+    <li><a href="../extension_rdoc.html">extension</a>
+    <li><a href="../fiber_md.html">fiber</a>
+    <li><a href="../format_specifications_rdoc.html">format_specifications</a>
+    <li><a href="../globals_rdoc.html">globals</a>
+    <li><a href="../implicit_conversion_rdoc.html">implicit_conversion</a>
+    <li><a href="../keywords_rdoc.html">keywords</a>
+    <li><a href="../maintainers_md.html">maintainers</a>
+    <li><a href="../marshal_rdoc.html">marshal</a>
+    <li><a href="../memory_view_md.html">memory_view</a>
+    <li><details><summary>optparse</summary>
+    <ul class="link-list">
+      <li><a href="../optparse/argument_converters_rdoc.html">argument_converters</a>
+      <li><a href="../optparse/creates_option_rdoc.html">creates_option</a>
+      <li><a href="../optparse/option_params_rdoc.html">option_params</a>
+      <li><a href="../optparse/tutorial_rdoc.html">tutorial</a>
+    </ul></details>
+    <li><a href="../packed_data_rdoc.html">packed_data</a>
+    <li><a href="../ractor_md.html">ractor</a>
+    <li><details><summary>regexp</summary>
+    <ul class="link-list">
+      <li><a href="../regexp/methods_rdoc.html">methods</a>
+      <li><a href="../regexp/unicode_properties_rdoc.html">unicode_properties</a>
+    </ul></details>
+    <li><a href="../rjit/rjit_md.html">rjit</a>
+    <li><a href="../security_rdoc.html">security</a>
+    <li><a href="../signals_rdoc.html">signals</a>
+    <li><a href="../standard_library_rdoc.html">standard_library</a>
+    <li><a href="../strftime_formatting_rdoc.html">strftime_formatting</a>
+    <li><details><summary><a href="../syntax_rdoc.html">syntax</a></summary>
+    <ul class="link-list">
+      <li><a href="../syntax/assignment_rdoc.html">assignment</a>
+      <li><a href="../syntax/calling_methods_rdoc.html">calling_methods</a>
+      <li><a href="../syntax/comments_rdoc.html">comments</a>
+      <li><a href="../syntax/control_expressions_rdoc.html">control_expressions</a>
+      <li><a href="../syntax/exceptions_rdoc.html">exceptions</a>
+      <li><a href="../syntax/literals_rdoc.html">literals</a>
+      <li><a href="../syntax/methods_rdoc.html">methods</a>
+      <li><a href="../syntax/miscellaneous_rdoc.html">miscellaneous</a>
+      <li><a href="../syntax/modules_and_classes_rdoc.html">modules_and_classes</a>
+      <li><a href="../syntax/operators_rdoc.html">operators</a>
+      <li><a href="../syntax/pattern_matching_rdoc.html">pattern_matching</a>
+      <li><a href="../syntax/precedence_rdoc.html">precedence</a>
+      <li><a href="../syntax/refinements_rdoc.html">refinements</a>
+    </ul></details>
+    <li><a href="../windows_md.html">windows</a>
+    <li><details open><summary><a href="../yjit/yjit_md.html">yjit</a></summary>
+    <ul class="link-list">
+      <li><a href="../yjit/yjit_hacking_md.html">yjit_hacking</a>
+    </ul></details>
+  </ul>
+</div>
+
+  </div>
+</nav>
+
+<main role="main" aria-label="Page yjit/yjit_hacking.md">
+
+<h1 id="label-YJIT+Hacking">YJIT Hacking<span><a href="#label-YJIT+Hacking">&para;</a> <a href="#top">&uarr;</a></span></h1>
+
+<h2 id="label-Code+Generation+and+Assembly+Language">Code Generation and Assembly Language<span><a href="#label-Code+Generation+and+Assembly+Language">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>YJIT’s basic purpose is to take ISEQs and generate machine code.</p>
+
+<p>Documentation on each Ruby bytecode can be found in insns.def.</p>
+
+<p>YJIT uses those bytecodes as the “Basic Blocks” in Lazy Basic Block Versioning (LBBV.) For more deep details of LBBV, see yjit.md in this directory.</p>
+
+<p>Current YJIT has a simple assembler as a backend. Each method that generates code does it by emitting machine code:</p>
+
+<pre># Excerpt of yjit_gen_exit() from yjit_codegen.c, Sept 2021
+// Generate an exit to return to the interpreter
+static uint32_t
+yjit_gen_exit(VALUE *exit_pc, ctx_t *ctx, codeblock_t *cb)
+{
+    const uint32_t code_pos = cb-&gt;write_pos;
+
+    ADD_COMMENT(cb, &quot;exit to interpreter&quot;);
+
+    // Generate the code to exit to the interpreters
+    // Write the adjusted SP back into the CFP
+    if (ctx-&gt;sp_offset != 0) {
+        x86opnd_t stack_pointer = ctx_sp_opnd(ctx, 0);
+        lea(cb, REG_SP, stack_pointer);
+        mov(cb, member_opnd(REG_CFP, rb_control_frame_t, sp), REG_SP);
+    }
+
+    // Update CFP-&gt;PC
+    mov(cb, RAX, const_ptr_opnd(exit_pc));
+    mov(cb, member_opnd(REG_CFP, rb_control_frame_t, pc), RAX);</pre>
+
+<p>Later there will be a more complex backend.</p>
+
+<h2 id="label-Code+Generation+vs+Code+Execution">Code Generation vs Code Execution<span><a href="#label-Code+Generation+vs+Code+Execution">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>When you see lea() call above (“load effective address,”) it’s not running the LEA x86 instruction. It’s generating an LEA instruction to the codeblock pointer in the first argument. It will execute that instruction later, when the codeblock gets executed.</p>
+
+<p>This is subtle because YJIT will often wait to compile the method until you’re about to run it – that’s when it knows the most about what types of arguments the method will receive. So it’s a compile-time instruction, but often it will defer compile-time until just barely before runtime.</p>
+
+<p>The ctx structure tracks what is known at compile time about the arguments being passed into the Ruby bytecode. Often YJIT will “peek” at an expected type before it generates machine code.</p>
+
+<h2 id="label-Inlined+and+Outlined+Code">Inlined and Outlined Code<span><a href="#label-Inlined+and+Outlined+Code">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>When YJIT is generating code, it needs a code pointer. In many cases it needs two, usually called “cb” (codeblock) and “ocb” (out-of-line codeblock.)</p>
+
+<p>cb is for “inlined” normal code and ocb is for “outline” code such as exits. Inlined code is normal generated code for Ruby operations, while outlined code is for unusual and error conditions, such as encountering an unexpected parameter type and exiting to the interpreter.</p>
+
+<p>The purpose of the outlined code block is to keep things we believe are going to be infrequent somewhere else. That way we can keep the code in the inline block more linear and compact. Linear code, with as few branches as possible, is more easily predicted by the CPU. An exception or unsupported operation will cause YJIT to generate outlined code to handle it.</p>
+
+<p>If you search for ocb in yjit_codegen.c, you can see some places where out-of-line code is generated.</p>
+
+<p>YJIT statistics are only gathered when RUBY_DEBUG or YJIT_STATS is true. In some cases the code to increment YJIT statistics will be generated out-of-line, especially if those statistics are gathered when a side exit happens.</p>
+
+<h2 id="label-Statistics+and+Comments">Statistics and Comments<span><a href="#label-Statistics+and+Comments">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>When RUBY_DEBUG is defined to a true value, YJIT will emit comments into the generated machine code. This can make disassemblies a lot more readable. When RUBY_DEBUG or YJIT_STATS is defined and stats are active (–yjit-stats or export YJIT_STATS=1), code will be generated to collect statistics during the run, and a report will be printed when the process exits.</p>
+
+<h2 id="label-Entering+and+Exiting+the+Interpreter">Entering and Exiting the Interpreter<span><a href="#label-Entering+and+Exiting+the+Interpreter">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>YJIT won’t generate machine code for an ISEQ until it’s been run a certain number of times (10 by default.) Then, the next time the interpreter would call that ISEQ, it will call the generated machine code version instead. If YJIT hits an unexpected or unsupported operation, it will return to the normal interpreter.</p>
+
+<p>If YJIT returns to the interpreter, the behaviour will be correct but slower. YJIT only optimises part of some operations - for instance, YJIT will not optimise a BMETHOD call yet.</p>
+
+<p>When the interpreter calls to a YJIT-optimised method again, control will return to YJIT’s generated machine code. The more time that’s spent in YJIT-generated code (“ratio in YJIT,”) the more CPU time YJIT can save with its optimisations.</p>
+
+<h2 id="label-Side+Exits">Side Exits<span><a href="#label-Side+Exits">&para;</a> <a href="#top">&uarr;</a></span></h2>
+
+<p>When YJIT has compiled an ISEQ and is running it later, sometimes it will hit an unexpected condition. It might see a parameter of a different type than before, or square-brackets might be used on a hash when they were first used on an array. In those cases, the generated code will contain a call to return to the interpreter at runtime, called a “side exit.”</p>
+
+<p>Side exits are generated as out-of-line code.</p>
+
+</main>
+
+
+
+<footer id="validator-badges" role="contentinfo">
+  <p><a href="https://validator.w3.org/check/referer">Validate</a>
+  <p>Generated by <a href="https://ruby.github.io/rdoc/">RDoc</a> 6.6.3.1.
+  <p>Based on <a href="http://deveiate.org/projects/Darkfish-RDoc/">Darkfish</a> by <a href="http://deveiate.org">Michael Granger</a>.
+</footer>
+
