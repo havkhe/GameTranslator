@@ -27,6 +27,7 @@ namespace GameTranslator
     public class Settings
     {
         [DataMember] public string ModelDir = "D:\\galtrans";
+        [DataMember] public string LlamaDir = "D:\\GameTranslator\\llama";
         [DataMember] public int Port = 18080;
     }
 
@@ -168,7 +169,12 @@ namespace GameTranslator
             }
             KillLlama();
             var server = Path.Combine(appDir, "llama", "llama-server.exe");
-            if (!File.Exists(server)) { Log("未找到内置 llama-server: " + server); return false; }
+            if (!File.Exists(server)) server = Path.Combine(settings.LlamaDir, "llama-server.exe");
+            if (!File.Exists(server))
+            {
+                Log("未找到内置 llama-server（已尝试: " + Path.Combine(appDir, "llama") + " 与 " + settings.LlamaDir + "）。请确认 D:\\GameTranslator\\llama 存在，或修改 settings.json 的 LlamaDir。");
+                return false;
+            }
             Log("启动内置 llama（CUDA）：" + Path.GetFileName(modelPath));
             var psi = new ProcessStartInfo(server)
             {
