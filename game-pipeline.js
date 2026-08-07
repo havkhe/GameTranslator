@@ -17,6 +17,7 @@ const MODEL = process.argv[3] || "model";
 const WORK = process.argv[4] || path.join(__dirname, "pipeline-work");
 const PORT = process.argv[5] || "18080";
 const MODE = process.argv[6] || "translate";
+const PROMPT_FILE = process.argv[7] || "";
 const PAUSE_FLAG = path.join(WORK, "pause.flag");
 const STOP_FLAG = path.join(WORK, "stop.flag");
 
@@ -462,6 +463,25 @@ function parseResult(text) {
   return null;
 }
 
+// The default prompt asks for line-by-line simplified-Chinese output as a JSON
+// object. Users may override it via a prompt file (argv[7]); "{lines}" is
+// replaced with the numbered source lines, otherwise they are appended.
+const DEFAULT_PROMPT =
+  "将下列每行日文翻译成简体中文（禁止翻译成英文，只能输出简体中文）。必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码与角色名标记，不得增删行数。\n" +
+  '只输出一个JSON对象，键为行号，值为简体中文译文，例如{"1":"译文一","2":"译文二"}，不要输出其他内容。\n' +
+  "{lines}";
+let basePrompt = DEFAULT_PROMPT;
+if (PROMPT_FILE && fs.existsSync(PROMPT_FILE)) {
+  const custom = fs.readFileSync(PROMPT_FILE, "utf8").trim();
+  if (custom) basePrompt = custom;
+}
+
+function buildPrompt(batch) {
+  const lines = batch.map((e, j) => j + 1 + ". " + e.text).join("\n");
+  if (basePrompt.includes("{lines}")) return basePrompt.replace(/\{lines\}/g, lines);
+  return basePrompt + "\n\n" + lines;
+}
+
 async function translate(entries) {
   if (fs.existsSync(PAUSE_FLAG)) fs.rmSync(PAUSE_FLAG);
   if (fs.existsSync(STOP_FLAG)) fs.rmSync(STOP_FLAG);
@@ -493,11 +513,7 @@ async function translate(entries) {
   for (let i = 0; i < pending.length; i += BATCH) {
     checkFlags();
     const batch = pending.slice(i, i + BATCH);
-    const lines = batch.map((e, j) => j + 1 + ". " + e.text).join("\n");
-    const prompt =
-      "将下列每行日文翻译成简体中文（禁止翻译成英文，只能输出简体中文）。必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码与角色名标记，不得增删行数。\n" +
-      '只输出一个JSON对象，键为行号，值为简体中文译文，例如{"1":"译文一","2":"译文二"}，不要输出其他内容。\n\n' +
-      lines;
+    const prompt = buildPrompt(batch);
     let result = null;
     for (let attempt = 0; attempt < 3 && !result; attempt++) {
       try {

@@ -28,12 +28,27 @@ namespace GameTranslator
     [DataContract]
     public class Settings
     {
+        public const string DefaultPrompt =
+            "将下列每行日文翻译成简体中文（禁止翻译成英文，只能输出简体中文）。必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码与角色名标记，不得增删行数。\r\n" +
+            "只输出一个JSON对象，键为行号，值为简体中文译文，例如{\"1\":\"译文一\",\"2\":\"译文二\"}，不要输出其他内容。\r\n" +
+            "{lines}";
+
         [DataMember] public string ModelDir = "D:\\galtrans";
         [DataMember] public string LlamaDir = "D:\\GameTranslator\\llama";
         [DataMember] public string Device = "gpu";
         [DataMember] public int MaxMemoryMB = 0;
         [DataMember] public string ScanPath = "K:\\";
         [DataMember] public int Port = 18080;
+        [DataMember] public int LlamaContext = 4096;
+        [DataMember] public int LlamaGpuLayers = 99;
+        [DataMember] public int LlamaBatch = 512;
+        [DataMember] public int LlamaUbatch = 256;
+        [DataMember] public int LlamaThreads = 0;
+        [DataMember] public int LlamaPoll = 0;
+        [DataMember] public string LlamaFlashAttn = "auto";
+        [DataMember] public string LlamaCacheK = "f16";
+        [DataMember] public string LlamaCacheV = "f16";
+        [DataMember] public string Prompt = DefaultPrompt;
     }
 
     [DataContract]
@@ -56,12 +71,16 @@ namespace GameTranslator
     {
         private ListView list;
         private Button btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore, btnRefresh,
-            btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop, btnCheck, btnRestoreCn, btnLlama;
+            btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop, btnCheck, btnRestoreCn, btnLlama,
+            btnSettings, btnPromptSettings, btnToggleSide;
         private ComboBox cmbModel, cmbDevice;
         private TextBox txtScanPath;
         private ProgressBar progress;
         private Label lblStatus;
         private RichTextBox log;
+        private Panel sidePanel;
+        private SplitContainer mainSplit;
+        private ToolStripMenuItem miPause;
         private List<GameItem> games = new List<GameItem>();
         private Dictionary<string, string> modelMap = new Dictionary<string, string>();
         private string appDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -78,9 +97,10 @@ namespace GameTranslator
 
         public MainForm()
         {
-            Text = "RPG Maker 汉化管理器 v2.2";
-            Width = 1840;
-            Height = 720;
+            Text = "RPG Maker 汉化管理器 v2.3";
+            Width = 1720;
+            Height = 760;
+            MinimumSize = new Size(1280, 640);
             StartPosition = FormStartPosition.CenterScreen;
             AllowDrop = true;
             DragEnter += (s, e) => { if (e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effect = DragDropEffects.Copy; };
@@ -98,58 +118,105 @@ namespace GameTranslator
 
         private void BuildUi()
         {
-            var top = new Panel { Dock = DockStyle.Top, Height = 42 };
-            txtScanPath = new TextBox { Location = new Point(10, 9), Width = 320, Text = settings.ScanPath };
-            btnScanFolder = new Button { Text = "选择文件夹…", Width = 95, Location = new Point(336, 8) };
-            btnScan = new Button { Text = "扫描", Width = 55, Location = new Point(437, 8) };
-            btnAdd = new Button { Text = "添加游戏(选Game.exe)", Width = 145, Location = new Point(498, 8) };
-            btnSelectAll = new Button { Text = "全选", Width = 58, Location = new Point(649, 8) };
-            btnStartAll = new Button { Text = "全部汉化", Width = 86, Location = new Point(713, 8), BackColor = Color.FromArgb(200, 255, 200) };
-            btnRestore = new Button { Text = "卸载汉化", Width = 90, Location = new Point(805, 8) };
-            cmbModel = new ComboBox { Location = new Point(915, 10), Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
-            cmbDevice = new ComboBox { Location = new Point(1071, 10), Width = 250, DropDownStyle = ComboBoxStyle.DropDownList };
-            btnRefreshModels = new Button { Text = "刷新模型", Width = 75, Location = new Point(1327, 8) };
-            btnModelDir = new Button { Text = "模型目录…", Width = 85, Location = new Point(1408, 8) };
-            btnStart = new Button { Text = "开始汉化选中", Width = 105, Location = new Point(1499, 8), BackColor = Color.FromArgb(210, 235, 255) };
-            btnPause = new Button { Text = "暂停", Width = 60, Location = new Point(1610, 8) };
-            btnStop = new Button { Text = "终止", Width = 60, Location = new Point(1676, 8), BackColor = Color.FromArgb(255, 220, 220) };
-            btnRefresh = new Button { Text = "刷新状态", Width = 80, Location = new Point(1742, 8) };
-            top.Controls.AddRange(new Control[] { txtScanPath, btnScanFolder, btnScan, btnAdd, btnSelectAll, btnStartAll, btnRestore, cmbModel, cmbDevice, btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop, btnRefresh });
-            DetectHardware();
+            // ---------------- menu ----------------
+            var menu = new MenuStrip();
+            var mFile = new ToolStripMenuItem("文件(&F)");
+            mFile.DropDownItems.Add("添加游戏(Game.exe)…", null, (s, e) => AddGame());
+            mFile.DropDownItems.Add("选择扫描文件夹…", null, (s, e) => ChooseScanFolder());
+            mFile.DropDownItems.Add("扫描当前路径", null, (s, e) => { var p = txtScanPath.Text.Trim(); if (p != "") ScanRoot(p); });
+            mFile.DropDownItems.Add("刷新状态", null, (s, e) => RefreshStatus());
+            mFile.DropDownItems.Add(new ToolStripSeparator());
+            mFile.DropDownItems.Add("退出", null, (s, e) => Close());
+            var mTrans = new ToolStripMenuItem("翻译(&T)");
+            mTrans.DropDownItems.Add("开始汉化选中", null, (s, e) => StartTranslate(false));
+            mTrans.DropDownItems.Add("全部汉化", null, (s, e) => StartTranslate(true));
+            miPause = new ToolStripMenuItem("暂停", null, (s, e) => TogglePause());
+            mTrans.DropDownItems.Add(miPause);
+            mTrans.DropDownItems.Add("终止", null, (s, e) => StopTranslate());
+            mTrans.DropDownItems.Add(new ToolStripSeparator());
+            mTrans.DropDownItems.Add("检查翻译", null, (s, e) => CheckTranslation());
+            mTrans.DropDownItems.Add("卸载汉化(还原原版)", null, (s, e) => RestoreSelected());
+            mTrans.DropDownItems.Add("恢复汉化(切回汉化版)", null, (s, e) => RestoreChinese());
+            var mSet = new ToolStripMenuItem("设置(&S)");
+            mSet.DropDownItems.Add("模型目录…", null, (s, e) => ChooseModelDir());
+            mSet.DropDownItems.Add("刷新模型列表", null, (s, e) => LoadModels());
+            mSet.DropDownItems.Add(new ToolStripSeparator());
+            mSet.DropDownItems.Add("llama 高级设置…", null, (s, e) => OpenSettings(0));
+            mSet.DropDownItems.Add("翻译提示词设置…", null, (s, e) => OpenSettings(1));
+            mSet.DropDownItems.Add(new ToolStripSeparator());
+            mSet.DropDownItems.Add("显示/隐藏设置面板", null, (s, e) => ToggleSidePanel());
+            var mHelp = new ToolStripMenuItem("帮助(&H)");
+            mHelp.DropDownItems.Add("使用说明", null, (s, e) => OpenHelp());
+            mHelp.DropDownItems.Add("关于", null, (s, e) => MessageBox.Show("RPG Maker 汉化管理器 v2.3\n\n内置 llama.cpp 本地翻译引擎\n支持 MV / MZ / VX Ace\n支持自定义 llama 参数与翻译提示词", "关于 GameTranslator"));
+            menu.Items.AddRange(new ToolStripItem[] { mFile, mTrans, mSet, mHelp });
+            MainMenuStrip = menu;
 
+            // ---------------- top toolbar: row 1 (scan) ----------------
+            var top = new Panel { Dock = DockStyle.Top, Height = 88 };
+            txtScanPath = new TextBox { Location = new Point(10, 8), Width = 420, Text = settings.ScanPath };
+            btnScanFolder = new Button { Text = "选择文件夹…", Width = 100, Location = new Point(438, 6) };
+            btnScan = new Button { Text = "扫描", Width = 60, Location = new Point(544, 6) };
+            btnAdd = new Button { Text = "添加游戏(选Game.exe)", Width = 160, Location = new Point(612, 6) };
+            btnSelectAll = new Button { Text = "全选", Width = 60, Location = new Point(780, 6) };
+            btnRefresh = new Button { Text = "刷新状态", Width = 90, Location = new Point(846, 6) };
+            top.Controls.AddRange(new Control[] { txtScanPath, btnScanFolder, btnScan, btnAdd, btnSelectAll, btnRefresh });
+
+            // ---------------- top toolbar: row 2 (model + actions) ----------------
+            var lblModel = new Label { Text = "模型:", Location = new Point(10, 50), AutoSize = true };
+            cmbModel = new ComboBox { Location = new Point(52, 46), Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
+            btnRefreshModels = new Button { Text = "刷新模型", Width = 80, Location = new Point(318, 45) };
+            btnModelDir = new Button { Text = "模型目录…", Width = 90, Location = new Point(404, 45) };
+            btnStart = new Button { Text = "开始汉化选中", Width = 110, Location = new Point(510, 45), BackColor = Color.FromArgb(210, 235, 255) };
+            btnStartAll = new Button { Text = "全部汉化", Width = 90, Location = new Point(626, 45), BackColor = Color.FromArgb(200, 255, 200) };
+            btnPause = new Button { Text = "暂停", Width = 70, Location = new Point(722, 45) };
+            btnStop = new Button { Text = "终止", Width = 70, Location = new Point(798, 45), BackColor = Color.FromArgb(255, 220, 220) };
+            top.Controls.AddRange(new Control[] { lblModel, cmbModel, btnRefreshModels, btnModelDir, btnStart, btnStartAll, btnPause, btnStop });
+
+            // ---------------- game list ----------------
             list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = true };
-            list.Columns.Add("游戏目录", 920);
+            list.Columns.Add("游戏目录", 700);
             list.Columns.Add("引擎", 70);
             list.Columns.Add("状态", 150);
             list.Columns.Add("数据大小", 90);
 
+            // ---------------- right collapsible settings panel ----------------
+            sidePanel = new Panel { Dock = DockStyle.Fill, Width = 260, BackColor = Color.FromArgb(246, 246, 250), Padding = new Padding(8) };
+            var lblSideTitle = new Label { Text = "设置面板", Location = new Point(12, 8), Font = new Font(Font.FontFamily, 10f, FontStyle.Bold), AutoSize = true };
+            var lblDev = new Label { Text = "运行设备", Location = new Point(12, 36), AutoSize = true };
+            cmbDevice = new ComboBox { Location = new Point(12, 56), Width = 224, DropDownStyle = ComboBoxStyle.DropDownList };
+            btnLlama = new Button { Text = "启动llama", Location = new Point(12, 86), Width = 224 };
+            btnSettings = new Button { Text = "llama 高级设置…", Location = new Point(12, 118), Width = 224 };
+            btnPromptSettings = new Button { Text = "翻译提示词设置…", Location = new Point(12, 150), Width = 224 };
+            var lblSideCn = new Label { Text = "汉化维护", Location = new Point(12, 194), Font = new Font(Font.FontFamily, 10f, FontStyle.Bold), AutoSize = true };
+            btnCheck = new Button { Text = "检查翻译", Location = new Point(12, 218), Width = 224 };
+            btnRestore = new Button { Text = "卸载汉化(还原原版)", Location = new Point(12, 250), Width = 224 };
+            btnRestoreCn = new Button { Text = "恢复汉化(切回汉化版)", Location = new Point(12, 282), Width = 224 };
+            btnToggleSide = new Button { Text = "隐藏设置面板", Location = new Point(12, 324), Width = 224 };
+            sidePanel.Controls.AddRange(new Control[] { lblSideTitle, lblDev, cmbDevice, btnLlama, btnSettings, btnPromptSettings, lblSideCn, btnCheck, btnRestore, btnRestoreCn, btnToggleSide });
+
+            // ---------------- split: list | settings ----------------
+            mainSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 6, Panel2MinSize = 0 };
+            mainSplit.Panel1.Controls.Add(list);
+            mainSplit.Panel2.Controls.Add(sidePanel);
+
+            // ---------------- bottom: log + progress + status ----------------
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 200 };
             progress = new ProgressBar { Dock = DockStyle.Top, Height = 18 };
             var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 26 };
             lblStatus = new Label { Text = "就绪", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DarkBlue };
-            btnLlama = new Button { Text = "停止llama", Dock = DockStyle.Right, Width = 95 };
-            btnRestoreCn = new Button { Text = "恢复汉化", Dock = DockStyle.Right, Width = 90 };
-            btnCheck = new Button { Text = "检查翻译", Dock = DockStyle.Right, Width = 90 };
             statusBar.Controls.Add(lblStatus);
-            statusBar.Controls.Add(btnLlama);
-            statusBar.Controls.Add(btnRestoreCn);
-            statusBar.Controls.Add(btnCheck);
             log = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, Font = new Font("Consolas", 9) };
             bottom.Controls.Add(log);
             bottom.Controls.Add(statusBar);
             bottom.Controls.Add(progress);
-            progress.Dock = DockStyle.Bottom;
-            log.Dock = DockStyle.Fill;
 
-            var mid = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
-            mid.Panel1.Controls.Add(list);
-            mid.Panel2.Controls.Add(bottom);
-            mid.SplitterDistance = 380;
-
-            Controls.Add(mid);
+            Controls.Add(mainSplit);
             Controls.Add(bottom);
             Controls.Add(top);
+            Controls.Add(menu);
+            mainSplit.SplitterDistance = Math.Max(900, ClientSize.Width - 300);
 
+            // ---------------- events ----------------
             btnScan.Click += (s, e) => { var p = txtScanPath.Text.Trim(); if (p != "") ScanRoot(p); };
             btnScanFolder.Click += (s, e) => ChooseScanFolder();
             btnAdd.Click += (s, e) => AddGame();
@@ -165,6 +232,10 @@ namespace GameTranslator
             btnCheck.Click += (s, e) => CheckTranslation();
             btnRestoreCn.Click += (s, e) => RestoreChinese();
             btnLlama.Click += (s, e) => ToggleLlama();
+            btnSettings.Click += (s, e) => OpenSettings(0);
+            btnPromptSettings.Click += (s, e) => OpenSettings(1);
+            btnToggleSide.Click += (s, e) => ToggleSidePanel();
+            DetectHardware();
 
             var ctx = new ContextMenuStrip();
             ctx.Items.Add("启动游戏", null, (s, e) => LaunchSelected());
@@ -175,6 +246,40 @@ namespace GameTranslator
             ctx.Items.Add("刷新状态", null, (s, e) => RefreshStatus());
             ctx.Items.Add("一键还原选中", null, (s, e) => RestoreSelected());
             list.ContextMenuStrip = ctx;
+        }
+
+        private void ToggleSidePanel()
+        {
+            if (mainSplit == null) return;
+            mainSplit.Panel2Collapsed = !mainSplit.Panel2Collapsed;
+            btnToggleSide.Text = mainSplit.Panel2Collapsed ? "显示设置面板" : "隐藏设置面板";
+            Log(mainSplit.Panel2Collapsed ? "设置面板已隐藏（仍可从菜单 设置→llama 高级设置 使用）" : "设置面板已显示");
+        }
+
+        private void OpenHelp()
+        {
+            var p = Path.Combine(appDir, "使用说明.txt");
+            if (!File.Exists(p)) { MessageBox.Show("未找到使用说明.txt"); return; }
+            try { Process.Start(new ProcessStartInfo(p) { UseShellExecute = true }); }
+            catch (Exception ex) { Log("打开使用说明失败: " + ex.Message); }
+        }
+
+        private void OpenSettings(int tab)
+        {
+            var f = new SettingsForm(settings, tab);
+            if (f.ShowDialog(this) == DialogResult.OK)
+            {
+                settings = f.Result;
+                NormalizeSettings();
+                SaveSettings();
+                llamaMemLimitMB = settings.MaxMemoryMB > 0 ? settings.MaxMemoryMB : AutoMemLimitMB();
+                if (llamaProcess != null && !llamaProcess.HasExited)
+                {
+                    KillLlama();
+                    Log("设置已保存；llama 已停止，新参数将在下次启动时生效");
+                }
+                else Log("设置已保存（llama 未运行，新参数将在启动时生效）");
+            }
         }
 
         // ---------------- settings ----------------
@@ -191,6 +296,26 @@ namespace GameTranslator
                 if (settings == null) settings = new Settings();
             }
             catch { settings = new Settings(); }
+            NormalizeSettings();
+        }
+
+        private void NormalizeSettings()
+        {
+            if (string.IsNullOrEmpty(settings.ModelDir)) settings.ModelDir = "D:\\galtrans";
+            if (string.IsNullOrEmpty(settings.LlamaDir)) settings.LlamaDir = "D:\\GameTranslator\\llama";
+            if (string.IsNullOrEmpty(settings.Device)) settings.Device = "gpu";
+            if (string.IsNullOrEmpty(settings.ScanPath)) settings.ScanPath = "K:\\";
+            if (settings.Port < 1024 || settings.Port > 65535) settings.Port = 18080;
+            if (settings.LlamaContext < 512 || settings.LlamaContext > 65536) settings.LlamaContext = 4096;
+            if (settings.LlamaGpuLayers < 0 || settings.LlamaGpuLayers > 999) settings.LlamaGpuLayers = 99;
+            if (settings.LlamaBatch < 32 || settings.LlamaBatch > 8192) settings.LlamaBatch = 512;
+            if (settings.LlamaUbatch < 16 || settings.LlamaUbatch > 4096) settings.LlamaUbatch = 256;
+            if (settings.LlamaThreads < 0 || settings.LlamaThreads > 256) settings.LlamaThreads = 0;
+            if (settings.LlamaPoll < 0 || settings.LlamaPoll > 100) settings.LlamaPoll = 0;
+            if (string.IsNullOrEmpty(settings.LlamaFlashAttn)) settings.LlamaFlashAttn = "auto";
+            if (string.IsNullOrEmpty(settings.LlamaCacheK)) settings.LlamaCacheK = "f16";
+            if (string.IsNullOrEmpty(settings.LlamaCacheV)) settings.LlamaCacheV = "f16";
+            if (string.IsNullOrWhiteSpace(settings.Prompt)) settings.Prompt = Settings.DefaultPrompt;
         }
 
         private void SaveSettings()
@@ -284,15 +409,15 @@ namespace GameTranslator
                 Log("未找到内置 llama-server（已尝试: " + Path.Combine(appDir, "llama") + " 与 " + settings.LlamaDir + "）。请确认 D:\\GameTranslator\\llama 存在，或修改 settings.json 的 LlamaDir。");
                 return false;
             }
-            var ngl = settings.Device == "cpu" ? 0 : 99;
             Log("启动内置 llama（" + (settings.Device == "cpu" ? "CPU" : "GPU/CUDA") + "）：" + Path.GetFileName(modelPath));
             var psi = new ProcessStartInfo(server)
             {
-                Arguments = "-m \"" + modelPath + "\" --host 127.0.0.1 --port " + settings.Port + " -c 4096 -ngl " + ngl + " -b 512 -ub 256 --no-webui",
+                Arguments = BuildLlamaArgs(modelPath),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
+            Log("llama 参数: " + psi.Arguments);
             try { llamaProcess = Process.Start(psi); }
             catch (Exception ex) { Log("启动 llama 失败: " + ex.Message); return false; }
             llamaJob = CreateJobObject(IntPtr.Zero, null);
@@ -343,6 +468,41 @@ namespace GameTranslator
             currentModel = "";
             SetLlamaStatus("未启动");
             if (btnLlama != null) btnLlama.Text = "启动llama";
+        }
+
+        private string BuildLlamaArgs(string modelPath)
+        {
+            int ngl = settings.Device == "cpu" ? 0 : settings.LlamaGpuLayers;
+            // CUDA 后端下若让线程自动分配，所有 CPU 线程都会参与等待/搬运数据，
+            // 表现为 CPU 占用暴增而 GPU 利用率不高；GPU 模式默认限制为 4 个线程，
+            // 用户可在“设置 → llama 高级设置”中调整。
+            int threads = settings.Device == "cpu"
+                ? settings.LlamaThreads
+                : (settings.LlamaThreads > 0 ? settings.LlamaThreads : 4);
+            var sb = new StringBuilder();
+            sb.Append("-m \"").Append(modelPath).Append("\" --host 127.0.0.1 --port ").Append(settings.Port)
+              .Append(" -c ").Append(settings.LlamaContext)
+              .Append(" -ngl ").Append(ngl)
+              .Append(" -b ").Append(settings.LlamaBatch)
+              .Append(" -ub ").Append(settings.LlamaUbatch);
+            if (threads > 0) sb.Append(" -t ").Append(threads);
+            // 默认 0：关闭 CPU 忙等轮询，显著降低 CUDA 推理时的 CPU 空转。
+            sb.Append(" --poll ").Append(Math.Max(0, Math.Min(100, settings.LlamaPoll)));
+            string fa = (settings.LlamaFlashAttn ?? "auto").ToLowerInvariant();
+            if (fa == "on" || fa == "off") sb.Append(" -fa ").Append(fa);
+            string ck = (settings.LlamaCacheK ?? "f16").ToLowerInvariant();
+            string cv = (settings.LlamaCacheV ?? "f16").ToLowerInvariant();
+            if (ValidKvType(ck)) sb.Append(" -ctk ").Append(ck);
+            if (ValidKvType(cv)) sb.Append(" -ctv ").Append(cv);
+            sb.Append(" --no-webui");
+            return sb.ToString();
+        }
+
+        private static bool ValidKvType(string t)
+        {
+            string[] ok = { "f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1" };
+            foreach (var x in ok) if (x == t) return true;
+            return false;
         }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
@@ -671,6 +831,7 @@ namespace GameTranslator
                 try { if (File.Exists(flag)) File.Delete(flag); } catch { }
                 paused = false;
                 btnPause.Text = "暂停";
+                if (miPause != null) miPause.Text = "暂停";
                 Log("已继续");
             }
             else
@@ -678,6 +839,7 @@ namespace GameTranslator
                 try { File.WriteAllText(flag, "1"); } catch (Exception ex) { Log("暂停失败: " + ex.Message); return; }
                 paused = true;
                 btnPause.Text = "继续";
+                if (miPause != null) miPause.Text = "继续";
                 Log("已暂停（当前批次完成后生效）");
             }
         }
@@ -831,9 +993,17 @@ namespace GameTranslator
             SetStatus(g, "汉化中…");
             Log("开始翻译: " + g.Dir + "（模型 " + modelName + "）");
             var work = WorkDir();
+            var promptFile = Path.Combine(work, "prompt.txt");
+            try
+            {
+                File.WriteAllText(promptFile,
+                    string.IsNullOrWhiteSpace(settings.Prompt) ? Settings.DefaultPrompt : settings.Prompt,
+                    new UTF8Encoding(false));
+            }
+            catch (Exception ex) { Log("写入提示词文件失败: " + ex.Message); }
             var psi = new ProcessStartInfo(nodePath)
             {
-                Arguments = "\"" + Path.Combine(appDir, "game-pipeline.js") + "\" \"" + g.Dir + "\" \"" + modelName + "\" \"" + work + "\" " + settings.Port,
+                Arguments = "\"" + Path.Combine(appDir, "game-pipeline.js") + "\" \"" + g.Dir + "\" \"" + modelName + "\" \"" + work + "\" " + settings.Port + " translate \"" + promptFile + "\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -1110,6 +1280,199 @@ namespace GameTranslator
                 "pause"
             };
             File.WriteAllLines(bat, lines, new UTF8Encoding(false));
+        }
+    }
+
+    public class SettingsForm : Form
+    {
+        private static readonly string[] KvTypes = { "f16", "q8_0", "q4_0", "bf16", "f32" };
+        private readonly Settings _work;
+        private TabControl tabs;
+        private NumericUpDown nudCtx, nudNgl, nudBatch, nudUbatch, nudThreads, nudPoll, nudMem, nudPort;
+        private ComboBox cmbFa, cmbK, cmbV;
+        private TextBox txtPrompt;
+
+        public Settings Result { get; private set; }
+
+        public SettingsForm(Settings current, int selectedTab)
+        {
+            _work = Clone(current);
+            Text = "GameTranslator 设置";
+            Width = 660;
+            Height = 620;
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            Font = new Font("Microsoft YaHei", 9f);
+
+            tabs = new TabControl { Dock = DockStyle.Fill };
+            tabs.TabPages.Add(BuildLlamaTab());
+            tabs.TabPages.Add(BuildPromptTab());
+            tabs.SelectedIndex = selectedTab == 1 ? 1 : 0;
+
+            var btns = new Panel { Dock = DockStyle.Bottom, Height = 54 };
+            var btnOk = new Button { Text = "保存", Width = 90, Location = new Point(430, 12), Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
+            var btnCancel = new Button { Text = "取消", Width = 90, Location = new Point(530, 12), Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
+            btnOk.Click += (s, e) => { if (Collect()) { Result = _work; DialogResult = DialogResult.OK; Close(); } };
+            btnCancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
+            btns.Controls.Add(btnOk);
+            btns.Controls.Add(btnCancel);
+
+            Controls.Add(tabs);
+            Controls.Add(btns);
+        }
+
+        private TabPage BuildLlamaTab()
+        {
+            var tp = new TabPage("llama 运行参数");
+            var tbl = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12), AutoScroll = true };
+            tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+            tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+            nudCtx = Num(512, 65536, _work.LlamaContext);
+            nudNgl = Num(0, 999, _work.LlamaGpuLayers);
+            nudBatch = Num(32, 8192, _work.LlamaBatch);
+            nudUbatch = Num(16, 4096, _work.LlamaUbatch);
+            nudThreads = Num(0, 256, _work.LlamaThreads);
+            nudPoll = Num(0, 100, _work.LlamaPoll);
+            nudMem = Num(0, 1048576, _work.MaxMemoryMB);
+            nudPort = Num(1024, 65535, _work.Port);
+            cmbFa = Combo(new[] { "auto", "on", "off" }, _work.LlamaFlashAttn ?? "auto");
+            cmbK = Combo(KvTypes, _work.LlamaCacheK ?? "f16");
+            cmbV = Combo(KvTypes, _work.LlamaCacheV ?? "f16");
+
+            AddRow(tbl, "-c 上下文长度", nudCtx, "建议 4096；越大占显存越多");
+            AddRow(tbl, "-ngl GPU 层数", nudNgl, "99 = 全部层进显存；显存不足时降低");
+            AddRow(tbl, "-b 批大小", nudBatch, "提示词处理的逻辑批大小，CUDA 可调大");
+            AddRow(tbl, "-ub 物理批大小", nudUbatch, "每次实际送入 GPU 的批大小");
+            AddRow(tbl, "-t CPU 线程数", nudThreads, "0 = 自动（CUDA 模式自动用 4，降低 CPU 占用）");
+            AddRow(tbl, "--poll 轮询等级", nudPoll, "0 = 省 CPU（推荐），50 = 默认，100 = 响应最快");
+            AddRow(tbl, "-fa FlashAttention", cmbFa, "auto 让 llama 自动决定");
+            AddRow(tbl, "-ctk K 缓存类型", cmbK, "q8_0 可省约一半 KV 显存");
+            AddRow(tbl, "-ctv V 缓存类型", cmbV, "q8_0 可省约一半 KV 显存");
+            AddRow(tbl, "服务端口", nudPort, "重启 llama 后生效");
+            AddRow(tbl, "llama 内存上限(MB)", nudMem, "0 = 自动（总内存-4GB）");
+
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44 };
+            var btnReset = new Button { Text = "恢复默认参数", Width = 130, Location = new Point(12, 8) };
+            btnReset.Click += (s, e) => ResetLlamaDefaults();
+            bottom.Controls.Add(btnReset);
+
+            tp.Controls.Add(tbl);
+            tp.Controls.Add(bottom);
+            return tp;
+        }
+
+        private TabPage BuildPromptTab()
+        {
+            var tp = new TabPage("翻译提示词");
+            var lbl = new Label
+            {
+                Dock = DockStyle.Top,
+                Height = 64,
+                Padding = new Padding(6),
+                Text = "发给翻译模型的主提示词。提示词中的 {lines} 会被替换为待翻译的编号行；若不包含 {lines}，待翻译行会自动追加在末尾。留空保存将恢复默认提示词。"
+            };
+            txtPrompt = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ScrollBars = ScrollBars.Both,
+                AcceptsReturn = true,
+                Font = new Font("Microsoft YaHei", 10f)
+            };
+            var btnDef = new Button { Text = "恢复默认提示词", Width = 140, Dock = DockStyle.Bottom, Height = 38 };
+            btnDef.Click += (s, e) => txtPrompt.Text = Settings.DefaultPrompt;
+            txtPrompt.Text = string.IsNullOrWhiteSpace(_work.Prompt) ? Settings.DefaultPrompt : _work.Prompt;
+            tp.Controls.Add(txtPrompt);
+            tp.Controls.Add(lbl);
+            tp.Controls.Add(btnDef);
+            return tp;
+        }
+
+        private static NumericUpDown Num(int min, int max, int val)
+        {
+            return new NumericUpDown { Minimum = min, Maximum = max, Value = Math.Max(min, Math.Min(max, val)), Width = 160 };
+        }
+
+        private static ComboBox Combo(string[] items, string val)
+        {
+            var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+            c.Items.AddRange(items);
+            if (!c.Items.Contains(val)) val = (string)items[0];
+            c.SelectedItem = val;
+            return c;
+        }
+
+        private static void AddRow(TableLayoutPanel tbl, string label, Control ctrl, string hint)
+        {
+            int row = tbl.RowCount++;
+            tbl.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+            var l = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left };
+            var h = new Label { Text = hint, AutoSize = true, ForeColor = Color.Gray };
+            var wrap = new Panel { Dock = DockStyle.Fill };
+            ctrl.Location = new Point(0, 3);
+            h.Location = new Point(172, 8);
+            wrap.Controls.Add(ctrl);
+            wrap.Controls.Add(h);
+            tbl.Controls.Add(l, 0, row);
+            tbl.Controls.Add(wrap, 1, row);
+        }
+
+        private bool Collect()
+        {
+            _work.LlamaContext = (int)nudCtx.Value;
+            _work.LlamaGpuLayers = (int)nudNgl.Value;
+            _work.LlamaBatch = (int)nudBatch.Value;
+            _work.LlamaUbatch = (int)nudUbatch.Value;
+            _work.LlamaThreads = (int)nudThreads.Value;
+            _work.LlamaPoll = (int)nudPoll.Value;
+            _work.LlamaFlashAttn = (string)cmbFa.SelectedItem;
+            _work.LlamaCacheK = (string)cmbK.SelectedItem;
+            _work.LlamaCacheV = (string)cmbV.SelectedItem;
+            _work.Port = (int)nudPort.Value;
+            _work.MaxMemoryMB = (int)nudMem.Value;
+            _work.Prompt = string.IsNullOrWhiteSpace(txtPrompt.Text) ? Settings.DefaultPrompt : txtPrompt.Text;
+            return true;
+        }
+
+        private void ResetLlamaDefaults()
+        {
+            nudCtx.Value = 4096;
+            nudNgl.Value = 99;
+            nudBatch.Value = 512;
+            nudUbatch.Value = 256;
+            nudThreads.Value = 0;
+            nudPoll.Value = 0;
+            cmbFa.SelectedItem = "auto";
+            cmbK.SelectedItem = "f16";
+            cmbV.SelectedItem = "f16";
+            nudPort.Value = 18080;
+            nudMem.Value = 0;
+        }
+
+        private static Settings Clone(Settings src)
+        {
+            return new Settings
+            {
+                ModelDir = src.ModelDir,
+                LlamaDir = src.LlamaDir,
+                Device = src.Device,
+                MaxMemoryMB = src.MaxMemoryMB,
+                ScanPath = src.ScanPath,
+                Port = src.Port,
+                LlamaContext = src.LlamaContext,
+                LlamaGpuLayers = src.LlamaGpuLayers,
+                LlamaBatch = src.LlamaBatch,
+                LlamaUbatch = src.LlamaUbatch,
+                LlamaThreads = src.LlamaThreads,
+                LlamaPoll = src.LlamaPoll,
+                LlamaFlashAttn = src.LlamaFlashAttn,
+                LlamaCacheK = src.LlamaCacheK,
+                LlamaCacheV = src.LlamaCacheV,
+                Prompt = src.Prompt
+            };
         }
     }
 
