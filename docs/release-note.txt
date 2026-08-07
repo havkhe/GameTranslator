@@ -1,0 +1,78 @@
+# 🎮 GameTranslator v2.3.1（预览版）—— 修复设置保存 + RTX 内置最优预设
+
+> **v2.2.6 仍为正式稳定版；v2.3.1 是 v2.3.0 的修复预览版**，重点解决“llama 设置无法保存”与“RTX 没有内置最优参数”的问题。
+
+## 📥 下载 / Downloads
+
+- `GameTranslator-v2.3.1-Vulkan-Generic.zip` —— Vulkan 通用版，适合 GTX 10 系列及各种支持 Vulkan 的显卡（NVIDIA / AMD / Intel）
+- `GameTranslator-v2.3.1-CUDA12-RTX.zip` —— CUDA 12.4 版，适合 NVIDIA RTX 20 / 30 / 40 / 50 系列（sm_70+）
+
+## ✨ 本版修复与新增
+
+- **RTX 内置最优预设**：首次启动检测到 RTX 显卡且未手动调整过 llama 参数时，
+  自动启用 `FlashAttention + q8_0 KV 缓存 + 2048/512 批次 + 4 CPU 线程 + 关闭轮询`，
+  让 RTX 用户开箱即用；仍可在“设置 → llama 高级设置”中修改。
+- **高级设置界面新增“性能预设”下拉**：RTX 高性能 / 通用均衡 / 省显存 / 自定义，
+  选择后自动填入对应参数；手动修改任意参数会自动切换为“自定义”。
+- **明确“点保存才生效”**：修改参数后必须点击“保存”才会应用并重启 llama，
+  点“取消”全部丢弃；保存成功会弹出当前生效参数，失败会弹出具体错误。
+- **修复设置保存**：若程序目录不可写（如只读目录 / Program Files），
+  设置自动改存到 `%APPDATA%\GameTranslator\settings.json`，不再静默丢失。
+
+## ✅ v2.3.0 已包含的功能保持不变
+
+- llama 高级设置（上下文、GPU 层数、批大小、物理批、线程、轮询、FlashAttention、KV 缓存、端口、内存上限）
+- CUDA 模式 CPU 占用修复（GPU 模式默认 4 线程 + 关闭轮询）
+- 自定义翻译提示词（默认预填，支持 `{lines}` 占位符）
+- 菜单栏 + 双行工具栏 + 右侧可折叠设置面板
+- RPG Maker MV / MZ / VX Ace 内嵌式汉化、断点续翻、检查翻译、原版/汉化切换
+
+## 🚀 使用方法
+
+1. 解压到任意目录；
+2. 将 GGUF 模型放入 `D:\galtrans`（或启动后设置模型目录）；
+3. 运行 `GameTranslator.exe`；
+4. RTX 用户直接开始汉化即可；也可到 设置 → llama 高级设置 选择预设或手动微调。
+
+---
+
+# 🎮 GameTranslator v2.3.1 (Preview) — Save Fix + Built-in RTX Presets
+
+> **v2.2.6 remains the stable release. v2.3.1 is a bug-fix preview on top of v2.3.0**, addressing "llama settings won't save" and "no optimal defaults for RTX".
+
+## 📥 Downloads
+
+- `GameTranslator-v2.3.1-Vulkan-Generic.zip` — Vulkan generic build for GTX 10-series and any Vulkan-capable GPU (NVIDIA / AMD / Intel)
+- `GameTranslator-v2.3.1-CUDA12-RTX.zip` — CUDA 12.4 build for NVIDIA RTX 20 / 30 / 40 / 50 series (sm_70+)
+
+## ✨ What's Fixed / New
+
+- **Built-in RTX preset**: on first launch, if an RTX GPU is detected and llama settings are untouched,
+  the app auto-applies `FlashAttention + q8_0 KV cache + 2048/512 batch + 4 CPU threads + polling off`.
+- **Preset selector** in llama Advanced Settings: RTX High-Performance / Balanced / VRAM-Saving / Custom;
+  manual edits switch the selector to Custom automatically.
+- **Explicit Save semantics**: changes only apply after clicking Save (Cancel discards everything);
+  a confirmation shows the effective llama arguments, and failures show the exact error.
+- **More robust saving**: if the program folder is read-only, settings now fall back to
+  `%APPDATA%\GameTranslator\settings.json` instead of being silently lost.
+
+## ✅ v2.3.0 Features (unchanged)
+
+- llama advanced settings (context, GPU layers, batch, ubatch, threads, polling, FlashAttention, KV cache, port, memory limit)
+- CUDA CPU-usage fix (4 threads + polling off by default on GPU mode)
+- Custom translation prompt (pre-filled default, `{lines}` placeholder)
+- Menu bar + two-row toolbar + collapsible right settings panel
+- In-place localization for MV / MZ / VX Ace, resume, translation check, original/localized switching
+
+## 🚀 Usage
+
+1. Extract to any folder.
+2. Put GGUF models into `D:\galtrans` (or set the model directory in the UI).
+3. Run `GameTranslator.exe`.
+4. RTX users can start right away; tune settings via Settings → llama Advanced if needed.
+
+---
+
+![GameTranslator Banner 1](https://github.com/havkhe/GameTranslator/releases/download/v2.3.1/banner-1.png)
+
+![GameTranslator Banner 2](https://github.com/havkhe/GameTranslator/releases/download/v2.3.1/banner-2.jpg)
