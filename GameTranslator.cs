@@ -32,13 +32,14 @@ namespace GameTranslator
         [DataMember] public string LlamaDir = "D:\\GameTranslator\\llama";
         [DataMember] public string Device = "gpu";
         [DataMember] public int MaxMemoryMB = 0;
+        [DataMember] public string ScanPath = "K:\\";
         [DataMember] public int Port = 18080;
     }
 
     public class MainForm : Form
     {
         private ListView list;
-        private Button btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore,
+        private Button btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore, btnRefresh,
             btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop;
         private ComboBox cmbModel, cmbDevice;
         private TextBox txtScanPath;
@@ -62,7 +63,7 @@ namespace GameTranslator
         public MainForm()
         {
             Text = "RPG Maker 汉化管理器 v2.2";
-            Width = 1740;
+            Width = 1840;
             Height = 720;
             StartPosition = FormStartPosition.CenterScreen;
             AllowDrop = true;
@@ -74,6 +75,7 @@ namespace GameTranslator
             BuildUi();
             ResolveNode();
             LoadModels();
+            LoadGamesCache();
             SetLlamaStatus("未启动");
             Log("llama 内存上限: " + llamaMemLimitMB + " MB（可在 settings.json 的 MaxMemoryMB 调整，0=自动）");
         }
@@ -81,7 +83,7 @@ namespace GameTranslator
         private void BuildUi()
         {
             var top = new Panel { Dock = DockStyle.Top, Height = 42 };
-            txtScanPath = new TextBox { Location = new Point(10, 9), Width = 320, Text = "K:\\" };
+            txtScanPath = new TextBox { Location = new Point(10, 9), Width = 320, Text = settings.ScanPath };
             btnScanFolder = new Button { Text = "选择文件夹…", Width = 95, Location = new Point(336, 8) };
             btnScan = new Button { Text = "扫描", Width = 55, Location = new Point(437, 8) };
             btnAdd = new Button { Text = "添加游戏(选Game.exe)", Width = 145, Location = new Point(498, 8) };
@@ -95,7 +97,8 @@ namespace GameTranslator
             btnStart = new Button { Text = "开始汉化选中", Width = 105, Location = new Point(1499, 8), BackColor = Color.FromArgb(210, 235, 255) };
             btnPause = new Button { Text = "暂停", Width = 60, Location = new Point(1610, 8) };
             btnStop = new Button { Text = "终止", Width = 60, Location = new Point(1676, 8), BackColor = Color.FromArgb(255, 220, 220) };
-            top.Controls.AddRange(new Control[] { txtScanPath, btnScanFolder, btnScan, btnAdd, btnSelectAll, btnStartAll, btnRestore, cmbModel, cmbDevice, btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop });
+            btnRefresh = new Button { Text = "刷新状态", Width = 80, Location = new Point(1742, 8) };
+            top.Controls.AddRange(new Control[] { txtScanPath, btnScanFolder, btnScan, btnAdd, btnSelectAll, btnStartAll, btnRestore, cmbModel, cmbDevice, btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop, btnRefresh });
             DetectHardware();
 
             list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = true };
@@ -132,10 +135,19 @@ namespace GameTranslator
             btnStartAll.Click += (s, e) => StartTranslate(true);
             btnRestore.Click += (s, e) => RestoreSelected();
             btnStart.Click += (s, e) => StartTranslate(false);
+            btnRefresh.Click += (s, e) => RefreshStatus();
             btnRefreshModels.Click += (s, e) => LoadModels();
             btnModelDir.Click += (s, e) => ChooseModelDir();
             btnPause.Click += (s, e) => TogglePause();
             btnStop.Click += (s, e) => StopTranslate();
+
+            var ctx = new ContextMenuStrip();
+            ctx.Items.Add("启动游戏", null, (s, e) => LaunchSelected());
+            ctx.Items.Add("在资源管理器中打开目录", null, (s, e) => OpenInExplorer());
+            ctx.Items.Add(new ToolStripSeparator());
+            ctx.Items.Add("刷新状态", null, (s, e) => RefreshStatus());
+            ctx.Items.Add("一键还原选中", null, (s, e) => RestoreSelected());
+            list.ContextMenuStrip = ctx;
         }
 
         // ---------------- settings ----------------
@@ -398,6 +410,7 @@ namespace GameTranslator
             if (gi == null) { Log("不是可识别的 RPG Maker MV/MZ/VX Ace 游戏: " + dir); return; }
             if (games.Any(g => string.Equals(g.Dir, dir, StringComparison.OrdinalIgnoreCase))) { Log("已在列表中：" + dir); return; }
             games.Add(gi);
+            SaveGamesCache();
             Log("已添加：" + gi.Dir + " [" + gi.Kind + (gi.AlreadyCn ? ", 已汉化]" : "]"));
         }
 
@@ -428,21 +441,39 @@ namespace GameTranslator
             try
             {
                 IEnumerable<string> files;
-                if (kind == "VXAce") files = Directory.GetFiles(Path.Combine(dir, "Data"), "*.rvdata2").Take(8);
-                else files = Directory.GetFiles(data, "*.json").Take(8);
+                if (kind == "VXAce") files = Directory.GetFiles(Path.Combine(dir, "Data"), "*.rvdata2");
+                else files = Directory.GetFiles(data, "*.json");
+                long budget = 8L * 1024 * 1024, used = 0;
                 foreach (var f in files)
                 {
-                    var t = File.ReadAllText(f, Encoding.UTF8);
+                    var fi = new FileInfo(f);
+                    long sz = fi.Length;
+                    string t;
+                    if (used + sz > budget)
+                    {
+                        using (var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                        {
+                            int take = (int)Math.Min(budget - used, sz);
+                            var buf = new byte[take];
+                            fs.Read(buf, 0, take);
+                            t = Encoding.UTF8.GetString(buf);
+                        }
+                        used = budget;
+                    }
+                    else { t = File.ReadAllText(f, Encoding.UTF8); used += sz; }
                     foreach (var ch in t)
                     {
                         int c = (int)ch;
                         if (c >= 0x4e00 && c <= 0x9fff) cn++;
                         else if (c >= 0x3040 && c <= 0x30ff) kana++;
                     }
+                    if (used >= budget) break;
                 }
             }
             catch { }
-            return new GameItem { Dir = dir, Kind = kind, DataBytes = bytes, AlreadyCn = cn > 200 && cn > kana * 3 };
+            bool hasBackup = Directory.Exists(Path.Combine(dir, "data_原版备份"));
+            bool already = hasBackup || (cn > 500 && kana < cn * 0.2);
+            return new GameItem { Dir = dir, Kind = kind, DataBytes = bytes, AlreadyCn = already, Status = already ? "已汉化(跳过)" : "待汉化" };
         }
 
         private void ChooseScanFolder()
@@ -469,7 +500,10 @@ namespace GameTranslator
             {
                 games.Clear();
                 Walk(root, 0);
-                BeginInvoke(new Action(() => { RefreshList(); lblStatus.Text = "扫描完成"; busy = false; }));
+                settings.ScanPath = root;
+                SaveSettings();
+                SaveGamesCache();
+                BeginInvoke(new Action(() => { RefreshList(); lblStatus.Text = "扫描完成（共 " + games.Count + " 个游戏）"; busy = false; }));
             });
             th.IsBackground = true;
             th.Start();
@@ -515,13 +549,73 @@ namespace GameTranslator
 
         private void RefreshStatus()
         {
-            foreach (ListViewItem it in list.Items)
+            if (busy) return;
+            lblStatus.Text = "刷新状态中…";
+            var th = new Thread(() =>
             {
-                var g = games[it.Index];
-                var bak = Path.Combine(g.Dir, "data_原版备份");
-                g.Status = g.AlreadyCn ? "已汉化(跳过)" : (Directory.Exists(bak) ? "有备份" : "待汉化");
-                it.SubItems[2].Text = g.Status;
+                foreach (var g in games)
+                {
+                    var d = Detect(g.Dir);
+                    if (d != null) { g.Kind = d.Kind; g.AlreadyCn = d.AlreadyCn; g.DataBytes = d.DataBytes; g.Status = d.Status; }
+                }
+                SaveGamesCache();
+                BeginInvoke(new Action(() => { RefreshList(); lblStatus.Text = "刷新完成"; }));
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        // ---------------- games cache / context menu ----------------
+        private string GamesCachePath() { return Path.Combine(WorkDir(), "games-cache.json"); }
+
+        private void SaveGamesCache()
+        {
+            try
+            {
+                var ser = new DataContractJsonSerializer(typeof(List<GameItem>));
+                using (var fs = File.Create(GamesCachePath())) ser.WriteObject(fs, games);
             }
+            catch { }
+        }
+
+        private void LoadGamesCache()
+        {
+            try
+            {
+                var p = GamesCachePath();
+                if (!File.Exists(p)) return;
+                var ser = new DataContractJsonSerializer(typeof(List<GameItem>));
+                using (var fs = File.OpenRead(p))
+                {
+                    var g = (List<GameItem>)ser.ReadObject(fs);
+                    if (g != null) { games = g; RefreshList(); Log("已加载上次扫描列表（" + games.Count + " 个游戏）"); }
+                }
+            }
+            catch { }
+        }
+
+        private GameItem SelectedSingle()
+        {
+            var sel = SelectedGames();
+            return sel.Count > 0 ? sel[0] : null;
+        }
+
+        private void LaunchSelected()
+        {
+            var g = SelectedSingle();
+            if (g == null) { MessageBox.Show("请先选择一个游戏"); return; }
+            var exe = Path.Combine(g.Dir, "Game.exe");
+            if (!File.Exists(exe)) { Log("未找到 Game.exe: " + g.Dir); return; }
+            try { Process.Start(exe); Log("已启动: " + exe); }
+            catch (Exception ex) { Log("启动失败: " + ex.Message); }
+        }
+
+        private void OpenInExplorer()
+        {
+            var g = SelectedSingle();
+            if (g == null) { MessageBox.Show("请先选择一个游戏"); return; }
+            try { Process.Start("explorer.exe", "\"" + g.Dir + "\""); }
+            catch (Exception ex) { Log("打开资源管理器失败: " + ex.Message); }
         }
 
         // ---------------- pause / stop ----------------
