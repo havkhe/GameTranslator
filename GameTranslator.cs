@@ -40,7 +40,8 @@ namespace GameTranslator
         private ListView list;
         private Button btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore,
             btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop;
-        private ComboBox cmbDrive, cmbModel, cmbDevice;
+        private ComboBox cmbModel, cmbDevice;
+        private TextBox txtScanPath;
         private ProgressBar progress;
         private Label lblStatus;
         private RichTextBox log;
@@ -61,7 +62,7 @@ namespace GameTranslator
         public MainForm()
         {
             Text = "RPG Maker 汉化管理器 v2.2";
-            Width = 1500;
+            Width = 1740;
             Height = 720;
             StartPosition = FormStartPosition.CenterScreen;
             AllowDrop = true;
@@ -80,23 +81,21 @@ namespace GameTranslator
         private void BuildUi()
         {
             var top = new Panel { Dock = DockStyle.Top, Height = 42 };
-            cmbDrive = new ComboBox { Location = new Point(10, 8), Width = 76, DropDownStyle = ComboBoxStyle.DropDownList };
-            foreach (var d in DriveInfo.GetDrives()) if (d.IsReady) cmbDrive.Items.Add(d.Name);
-            if (cmbDrive.Items.Count > 0) cmbDrive.SelectedIndex = 0;
-            btnScan = new Button { Text = "扫描", Width = 55, Location = new Point(92, 8) };
-            btnScanFolder = new Button { Text = "选择文件夹", Width = 92, Location = new Point(152, 8) };
-            btnAdd = new Button { Text = "添加游戏(选Game.exe)", Width = 140, Location = new Point(250, 8) };
-            btnSelectAll = new Button { Text = "全选", Width = 58, Location = new Point(396, 8) };
-            btnStartAll = new Button { Text = "全部汉化", Width = 86, Location = new Point(460, 8), BackColor = Color.FromArgb(200, 255, 200) };
-            btnRestore = new Button { Text = "一键还原选中", Width = 104, Location = new Point(552, 8) };
-            cmbModel = new ComboBox { Location = new Point(662, 10), Width = 140, DropDownStyle = ComboBoxStyle.DropDownList };
-            cmbDevice = new ComboBox { Location = new Point(808, 10), Width = 240, DropDownStyle = ComboBoxStyle.DropDownList };
-            btnRefreshModels = new Button { Text = "刷新模型", Width = 70, Location = new Point(1054, 8) };
-            btnModelDir = new Button { Text = "模型目录…", Width = 82, Location = new Point(1130, 8) };
-            btnStart = new Button { Text = "开始汉化选中", Width = 100, Location = new Point(1218, 8), BackColor = Color.FromArgb(210, 235, 255) };
-            btnPause = new Button { Text = "暂停", Width = 58, Location = new Point(1324, 8) };
-            btnStop = new Button { Text = "终止", Width = 58, Location = new Point(1388, 8), BackColor = Color.FromArgb(255, 220, 220) };
-            top.Controls.AddRange(new Control[] { cmbDrive, btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore, cmbModel, cmbDevice, btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop });
+            txtScanPath = new TextBox { Location = new Point(10, 9), Width = 320, Text = "K:\\" };
+            btnScanFolder = new Button { Text = "选择文件夹…", Width = 95, Location = new Point(336, 8) };
+            btnScan = new Button { Text = "扫描", Width = 55, Location = new Point(437, 8) };
+            btnAdd = new Button { Text = "添加游戏(选Game.exe)", Width = 145, Location = new Point(498, 8) };
+            btnSelectAll = new Button { Text = "全选", Width = 58, Location = new Point(649, 8) };
+            btnStartAll = new Button { Text = "全部汉化", Width = 86, Location = new Point(713, 8), BackColor = Color.FromArgb(200, 255, 200) };
+            btnRestore = new Button { Text = "一键还原选中", Width = 104, Location = new Point(805, 8) };
+            cmbModel = new ComboBox { Location = new Point(915, 10), Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbDevice = new ComboBox { Location = new Point(1071, 10), Width = 250, DropDownStyle = ComboBoxStyle.DropDownList };
+            btnRefreshModels = new Button { Text = "刷新模型", Width = 75, Location = new Point(1327, 8) };
+            btnModelDir = new Button { Text = "模型目录…", Width = 85, Location = new Point(1408, 8) };
+            btnStart = new Button { Text = "开始汉化选中", Width = 105, Location = new Point(1499, 8), BackColor = Color.FromArgb(210, 235, 255) };
+            btnPause = new Button { Text = "暂停", Width = 60, Location = new Point(1610, 8) };
+            btnStop = new Button { Text = "终止", Width = 60, Location = new Point(1676, 8), BackColor = Color.FromArgb(255, 220, 220) };
+            top.Controls.AddRange(new Control[] { txtScanPath, btnScanFolder, btnScan, btnAdd, btnSelectAll, btnStartAll, btnRestore, cmbModel, cmbDevice, btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop });
             DetectHardware();
 
             list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = true };
@@ -126,8 +125,8 @@ namespace GameTranslator
             Controls.Add(bottom);
             Controls.Add(top);
 
-            btnScan.Click += (s, e) => { var d = cmbDrive.SelectedItem as string; if (d != null) ScanRoot(d); };
-            btnScanFolder.Click += (s, e) => ScanFolder();
+            btnScan.Click += (s, e) => { var p = txtScanPath.Text.Trim(); if (p != "") ScanRoot(p); };
+            btnScanFolder.Click += (s, e) => ChooseScanFolder();
             btnAdd.Click += (s, e) => AddGame();
             btnSelectAll.Click += (s, e) => ToggleSelectAll();
             btnStartAll.Click += (s, e) => StartTranslate(true);
@@ -446,10 +445,19 @@ namespace GameTranslator
             return new GameItem { Dir = dir, Kind = kind, DataBytes = bytes, AlreadyCn = cn > 200 && cn > kana * 3 };
         }
 
-        private void ScanFolder()
+        private void ChooseScanFolder()
         {
-            var fbd = new FolderBrowserDialog { Description = "选择要扫描的文件夹（将递归查找 Game.exe）", SelectedPath = "K:\\" };
-            if (fbd.ShowDialog() == DialogResult.OK) ScanRoot(fbd.SelectedPath);
+            var cur = txtScanPath.Text.Trim();
+            var fbd = new FolderBrowserDialog
+            {
+                Description = "选择要扫描的文件夹（将递归查找 Game.exe）",
+                SelectedPath = Directory.Exists(cur) ? cur : "K:\\"
+            };
+            if (fbd.ShowDialog() == DialogResult.OK)
+            {
+                txtScanPath.Text = fbd.SelectedPath;
+                ScanRoot(fbd.SelectedPath);
+            }
         }
 
         private void ScanRoot(string root)
