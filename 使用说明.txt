@@ -1,5 +1,13 @@
-RPG Maker 汉化管理器（GameTranslator.exe）
+RPG Maker 汉化管理器（GameTranslator.exe） v2.1
 ============================================
+
+【v2.1 更新说明】
+  - 修复：不再翻译音频资源文件名（System.json 音效、地图 BGM/BGS/ME/SE、
+    VX Ace 的 RPG::AudioFile 等），避免汉化后游戏报 Loading Error。
+  - 修复：翻译提示词强化为“必须输出简体中文、禁止英文”，并增加英文输出
+    兜底检测，角色名标记 \N<名字> 原样保留。
+  - 本次修复只翻译角色名、对话、描述、选项等游戏文本；音频文件名、
+    图片文件名、脚本代码等资源引用一律跳过。
 
 一、支持的引擎
   - RPG Maker MV / MZ（www\data 下的 json 数据）

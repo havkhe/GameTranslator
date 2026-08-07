@@ -36,6 +36,13 @@ const looksTranslatable = (s) => {
   return true;
 };
 
+// Audio resource objects must never have their `name` translated: the file on
+// disk keeps the original name, so translating the reference breaks loading.
+const isAudioObject = (o) =>
+  !!o &&
+  typeof o === "object" &&
+  ["volume", "pitch", "pan", "loopLength", "loopStart"].some((k) => k in o);
+
 // ---------------- engine detection ----------------
 function detectEngine(dir) {
   const wwwData = path.join(dir, "www", "data");
@@ -150,6 +157,7 @@ function extractMV(dataDir) {
       return;
     }
     if (obj && typeof obj === "object") {
+      if (isAudioObject(obj)) return; // skip audio resource objects entirely
       for (const k of Object.keys(obj)) {
         const v = obj[k];
         if (typeof v === "string") {
@@ -294,6 +302,7 @@ function patchMV(dataDir, entries, translations) {
       return;
     }
     if (obj && typeof obj === "object") {
+      if (isAudioObject(obj)) return; // never patch audio resource names
       for (const k of Object.keys(obj)) {
         const v = obj[k];
         if (typeof v === "string") {
@@ -335,6 +344,17 @@ function cleanOutput(s) {
   if (/^注意：必须原样保留/.test(t)) return null;
   if (t.length > 0 && t.length < 3) return null;
   return t;
+}
+
+// A Japanese source should never come back as English. If the answer is
+// dominated by latin letters (and isn't mostly control codes), treat it as a
+// failed translation and force a retry.
+function looksLikeEnglish(t) {
+  if (!t || typeof t !== "string") return false;
+  const letters = (t.match(/[A-Za-z]/g) || []).length;
+  const cjk = (t.match(/[\u3400-\u9fff]/g) || []).length;
+  const control = (t.match(/\\[NVI]|<\/?[^>]{1,12}>/g) || []).length;
+  return letters > 0 && letters >= cjk && letters > control;
 }
 
 function askLocal(content) {
@@ -463,8 +483,8 @@ async function translate(entries) {
     const batch = pending.slice(i, i + BATCH);
     const lines = batch.map((e, j) => j + 1 + ". " + e.text).join("\n");
     const prompt =
-      "将下列每行日文翻译成简体中文。必须原样保留 \\N[1]、\\V[1] 等控制代码，不得增删行数。\n" +
-      '只输出一个JSON对象，键为行号，值为译文，例如{"1":"译文一","2":"译文二"}，不要输出其他内容。\n\n' +
+      "将下列每行日文翻译成简体中文（禁止翻译成英文，只能输出简体中文）。必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码与角色名标记，不得增删行数。\n" +
+      '只输出一个JSON对象，键为行号，值为简体中文译文，例如{"1":"译文一","2":"译文二"}，不要输出其他内容。\n\n' +
       lines;
     let result = null;
     for (let attempt = 0; attempt < 3 && !result; attempt++) {
@@ -481,7 +501,7 @@ async function translate(entries) {
               break;
             }
             const c = cleanOutput(v);
-            if (c === null) {
+            if (c === null || looksLikeEnglish(c)) {
               ok = false;
               break;
             }
@@ -507,12 +527,16 @@ async function translate(entries) {
     console.log("RETRY_SINGLE", missing.length);
     for (const e of missing) {
       let done = false;
-      for (const prompt of ["请翻译：\n" + e.text, "将下面日文翻译成简体中文：\n" + e.text, "翻译成中文：\n" + e.text]) {
+      for (const prompt of [
+        "请将下面日文翻译成简体中文（禁止输出英文）：\n" + e.text,
+        "将下面日文翻译成简体中文（只能输出中文）：\n" + e.text,
+        "翻译成简体中文（禁止英文）：\n" + e.text,
+      ]) {
         if (done) break;
         try {
           const resp = await ask(prompt);
           const c = cleanOutput(resp);
-          if (c && !/^注意：/.test(c) && c.length >= 2) {
+          if (c && !/^注意：/.test(c) && c.length >= 2 && !looksLikeEnglish(c)) {
             translations[e.id] = c;
             done = true;
           }

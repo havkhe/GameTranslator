@@ -7,6 +7,12 @@ require_relative "vxace_stubs"
 TEXT_IVARS = %w[@name @nickname @description @profile
                 @message1 @message2 @message3 @message4 @message5]
 
+# RPG::AudioFile / BGM / BGS / ME / SE: their @name is a file reference and
+# must never be translated (the on-disk file keeps the original name).
+def audio_object?(node)
+  [RPG::AudioFile, RPG::BGM, RPG::BGS, RPG::ME, RPG::SE].any? { |k| node.is_a?(k) }
+end
+
 def normalize(s)
   enc = s.encoding
   if enc == Encoding::UTF_8
@@ -98,6 +104,8 @@ def main
             end
           when 402
             walk.call(params[1], "#{path} @choice") if params[1]
+          when 241, 245, 249, 250
+            next # audio playback commands: parameters are audio file refs
           end
           next
         elsif node.is_a?(RPG::System::Terms)
@@ -111,7 +119,7 @@ def main
           node.instance_variables.each do |ivar|
             v = node.instance_variable_get(ivar)
             if v.is_a?(String)
-              if TEXT_IVARS.include?(ivar.to_s)
+              if TEXT_IVARS.include?(ivar.to_s) && !(audio_object?(node) && ivar.to_s == "@name")
                 walk.call(v, "#{path} #{ivar}")
               end
             else
