@@ -308,7 +308,7 @@ namespace GameTranslator
             currentModel = modelPath;
             SetLlamaStatus("模型加载中…");
             var sw = Stopwatch.StartNew();
-            while (sw.Elapsed < TimeSpan.FromSeconds(120))
+            while (sw.Elapsed < TimeSpan.FromSeconds(300))
             {
                 if (llamaProcess.HasExited) { Log("llama-server 异常退出（代码 " + llamaProcess.ExitCode + "）"); KillLlama(); return false; }
                 try
@@ -327,7 +327,7 @@ namespace GameTranslator
                 catch { }
                 Thread.Sleep(500);
             }
-            Log("等待 llama 就绪超时（120秒）");
+            Log("等待 llama 就绪超时（300秒）");
             return false;
         }
 
@@ -710,13 +710,25 @@ namespace GameTranslator
             var modelPath = modelMap[modelName];
             settings.Device = cmbDevice.SelectedIndex == 1 ? "cpu" : "gpu";
             SaveSettings();
-            if (!EnsureLlama(modelPath)) { MessageBox.Show("内置 llama 启动失败，请查看日志"); return; }
 
             busy = true;
             btnStart.Enabled = false;
             btnStartAll.Enabled = false;
+            lblStatus.Text = "启动模型…";
             var th = new Thread(() =>
             {
+                if (!EnsureLlama(modelPath))
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        busy = false;
+                        btnStart.Enabled = true;
+                        btnStartAll.Enabled = true;
+                        lblStatus.Text = "就绪";
+                        MessageBox.Show("内置 llama 启动失败，请查看日志");
+                    }));
+                    return;
+                }
                 bool stopped = false;
                 foreach (var g in sel)
                 {
@@ -725,6 +737,51 @@ namespace GameTranslator
                     try { TranslateGame(g, modelName, ref stopped); }
                     catch (Exception ex) { Log("处理失败: " + g.Dir + " " + ex.Message); SetStatus(g, "失败"); }
                 }
+                BeginInvoke(new Action(() =>
+                {
+                    busy = false;
+                    btnStart.Enabled = true;
+                    btnStartAll.Enabled = true;
+                    if (paused) { paused = false; btnPause.Text = "暂停"; }
+                    lblStatus.Text = "完成";
+                }));
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        private void StartTranslateGame(GameItem g)
+        {
+            if (busy) return;
+            if (nodePath == "") { MessageBox.Show("未找到 node.exe"); return; }
+            if (cmbModel.SelectedItem == null) { MessageBox.Show("没有可用模型，请检查模型目录"); return; }
+
+            var modelName = (string)cmbModel.SelectedItem;
+            var modelPath = modelMap[modelName];
+            settings.Device = cmbDevice.SelectedIndex == 1 ? "cpu" : "gpu";
+            SaveSettings();
+
+            busy = true;
+            btnStart.Enabled = false;
+            btnStartAll.Enabled = false;
+            lblStatus.Text = "启动模型…";
+            var th = new Thread(() =>
+            {
+                if (!EnsureLlama(modelPath))
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        busy = false;
+                        btnStart.Enabled = true;
+                        btnStartAll.Enabled = true;
+                        lblStatus.Text = "就绪";
+                        MessageBox.Show("内置 llama 启动失败，请查看日志");
+                    }));
+                    return;
+                }
+                bool stopped = false;
+                try { TranslateGame(g, modelName, ref stopped); }
+                catch (Exception ex) { Log("处理失败: " + g.Dir + " " + ex.Message); SetStatus(g, "失败"); }
                 BeginInvoke(new Action(() =>
                 {
                     busy = false;
@@ -772,6 +829,7 @@ namespace GameTranslator
             }
             WriteRestoreBat(g.Dir);
             SetStatus(g, "汉化中…");
+            Log("开始翻译: " + g.Dir + "（模型 " + modelName + "）");
             var work = WorkDir();
             var psi = new ProcessStartInfo(nodePath)
             {
@@ -818,6 +876,7 @@ namespace GameTranslator
             var g = SelectedSingle();
             if (g == null) { MessageBox.Show("请先选择一个游戏"); return; }
             if (nodePath == "") { MessageBox.Show("未找到 node.exe"); return; }
+            busy = true;
             lblStatus.Text = "检查翻译中…";
             var work = WorkDir();
             var psi = new ProcessStartInfo(nodePath)
@@ -845,7 +904,7 @@ namespace GameTranslator
                 }
                 catch (Exception ex) { Log("检查失败: " + ex.Message); }
                 var uf = Path.Combine(work, GameWorkName(g.Dir) + "-untranslated.json");
-                if (!File.Exists(uf)) { BeginInvoke(new Action(() => { lblStatus.Text = "检查完成（未生成结果）"; })); return; }
+                if (!File.Exists(uf)) { BeginInvoke(new Action(() => { busy = false; lblStatus.Text = "检查完成（未生成结果）"; })); return; }
                 int badN = 0, pendN = 0;
                 try
                 {
@@ -863,12 +922,13 @@ namespace GameTranslator
                 catch (Exception ex) { Log("读取检查结果失败: " + ex.Message); }
                 BeginInvoke(new Action(() =>
                 {
+                    busy = false;
                     lblStatus.Text = "检查完成";
                     Log("检查翻译完成：" + g.Dir + " —— 翻译不全 " + badN + " 条，未翻译 " + pendN + " 条");
                     if (badN + pendN > 0 &&
                         MessageBox.Show("发现翻译不全 " + badN + " 条、未翻译 " + pendN + " 条。是否立即重新翻译这些内容？", "检查翻译", MessageBoxButtons.YesNo) == DialogResult.Yes)
                     {
-                        StartTranslate(false);
+                        StartTranslateGame(g);
                     }
                 }));
             });
