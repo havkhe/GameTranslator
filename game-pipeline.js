@@ -1,4 +1,5 @@
-// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port]
+// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode]
+//   mode: translate (default) | check (only scan for untranslated content)
 //   Requires a local llama-server (llama.cpp) already running on 127.0.0.1:<port>.
 // Extracts RPG Maker MV/MZ (www/data json) or VX Ace (Data/*.rvdata2 / Game.rgss3a)
 // text, translates with Ollama and/or a network API, patches in place, and resumes
@@ -15,6 +16,7 @@ const GAME_DIR = process.argv[2];
 const MODEL = process.argv[3] || "model";
 const WORK = process.argv[4] || path.join(__dirname, "pipeline-work");
 const PORT = process.argv[5] || "18080";
+const MODE = process.argv[6] || "translate";
 const PAUSE_FLAG = path.join(WORK, "pause.flag");
 const STOP_FLAG = path.join(WORK, "stop.flag");
 
@@ -111,6 +113,7 @@ const name = path.basename(GAME_DIR).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "_");
 const EXTRACT = path.join(WORK, name + "-extract.json");
 const TRANS = path.join(WORK, name + "-translations.json");
 const FAIL = path.join(WORK, name + "-failures.json");
+const UNTRANS = path.join(WORK, name + "-untranslated.json");
 
 // ---------------- MV/MZ extraction ----------------
 function extractMV(dataDir) {
@@ -356,6 +359,38 @@ function looksLikeEnglish(t) {
   return letters > 0 && letters >= cjk && letters > control;
 }
 
+function hasKana(s) {
+  return typeof s === "string" && /[\u3040-\u30ff]/.test(s);
+}
+
+// English-heavy text (after stripping control codes) counts as untranslated.
+function looksLikeEnglishText(s) {
+  if (!s || typeof s !== "string") return false;
+  const stripped = s
+    .replace(/\\[NVI][^\\]*/g, "")
+    .replace(/<[^>]{1,20}>/g, "")
+    .replace(/[0-9\s.,!?%()'"\-+*#/\\:;=~^|&_@$<>{}[\]·。、，！？：；""''（）《》【】]/g, "");
+  const letters = (stripped.match(/[A-Za-z]/g) || []).length;
+  const cjk = (stripped.match(/[\u3400-\u9fff]/g) || []).length;
+  return stripped.length > 8 && letters > 0 && letters >= cjk * 2;
+}
+
+function checkUntranslated(entries) {
+  const translations = fs.existsSync(TRANS) ? JSON.parse(fs.readFileSync(TRANS, "utf8")) : {};
+  const bad = [];
+  const pending = [];
+  for (const e of entries) {
+    const tr = translations[e.id];
+    if (tr === undefined) { pending.push({ id: e.id, text: e.text, reason: "pending" }); continue; }
+    if (hasKana(tr)) bad.push({ id: e.id, text: e.text, trans: tr, reason: "kana" });
+    else if (looksLikeEnglishText(tr)) bad.push({ id: e.id, text: e.text, trans: tr, reason: "english" });
+    else if (tr === e.text) bad.push({ id: e.id, text: e.text, trans: tr, reason: "unchanged" });
+  }
+  fs.writeFileSync(UNTRANS, JSON.stringify({ bad, pending }), "utf8");
+  console.log("UNTRANSLATED bad=" + bad.length + " pending=" + pending.length);
+  return { bad, pending };
+}
+
 function askLocal(content) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
@@ -431,6 +466,26 @@ async function translate(entries) {
   if (fs.existsSync(PAUSE_FLAG)) fs.rmSync(PAUSE_FLAG);
   if (fs.existsSync(STOP_FLAG)) fs.rmSync(STOP_FLAG);
   const translations = fs.existsSync(TRANS) ? JSON.parse(fs.readFileSync(TRANS, "utf8")) : {};
+  // Re-translate entries flagged as incomplete by a previous "check" run.
+  if (fs.existsSync(UNTRANS)) {
+    try {
+      const u = JSON.parse(fs.readFileSync(UNTRANS, "utf8"));
+      if (u && Array.isArray(u.bad)) {
+        let removed = 0;
+        for (const b of u.bad) {
+          if (b && b.id !== undefined && translations[b.id] !== undefined) {
+            delete translations[b.id];
+            removed++;
+          }
+        }
+        if (removed > 0) {
+          console.log("CHECK_FIX_REMOVE", removed);
+          fs.writeFileSync(TRANS, JSON.stringify(translations), "utf8");
+        }
+      }
+    } catch (e) {}
+    fs.rmSync(UNTRANS);
+  }
   let failures = fs.existsSync(FAIL) ? JSON.parse(fs.readFileSync(FAIL, "utf8")) : [];
   const pending = entries.filter((e) => !(e.id in translations));
   console.log("TOTAL", entries.length, "DONE", entries.length - pending.length, "PENDING", pending.length);
@@ -531,9 +586,6 @@ async function translate(entries) {
   }
   console.log("ENGINE", engine.kind + (engine.isPacked ? " (packed)" : ""));
 
-  ensureBackup(engine);
-  writeRestoreBat();
-
   let entries;
   let dataDir = engine.dataDir;
   let vxWork = null;
@@ -549,6 +601,15 @@ async function translate(entries) {
     entries = extractVxAce(dataDir);
   }
   console.log("EXTRACTED", entries.length);
+
+  if (MODE === "check") {
+    checkUntranslated(entries);
+    console.log("CHECK_DONE");
+    process.exit(0);
+  }
+
+  ensureBackup(engine);
+  writeRestoreBat();
 
   const translations = await translate(entries);
 

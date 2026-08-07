@@ -36,11 +36,27 @@ namespace GameTranslator
         [DataMember] public int Port = 18080;
     }
 
+    [DataContract]
+    public class BadItem
+    {
+        [DataMember] public int id;
+        [DataMember] public string text;
+        [DataMember] public string trans;
+        [DataMember] public string reason;
+    }
+
+    [DataContract]
+    public class UntranslatedResult
+    {
+        [DataMember] public BadItem[] bad;
+        [DataMember] public BadItem[] pending;
+    }
+
     public class MainForm : Form
     {
         private ListView list;
         private Button btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore, btnRefresh,
-            btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop;
+            btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop, btnCheck, btnRestoreCn, btnLlama;
         private ComboBox cmbModel, cmbDevice;
         private TextBox txtScanPath;
         private ProgressBar progress;
@@ -89,7 +105,7 @@ namespace GameTranslator
             btnAdd = new Button { Text = "添加游戏(选Game.exe)", Width = 145, Location = new Point(498, 8) };
             btnSelectAll = new Button { Text = "全选", Width = 58, Location = new Point(649, 8) };
             btnStartAll = new Button { Text = "全部汉化", Width = 86, Location = new Point(713, 8), BackColor = Color.FromArgb(200, 255, 200) };
-            btnRestore = new Button { Text = "一键还原选中", Width = 104, Location = new Point(805, 8) };
+            btnRestore = new Button { Text = "卸载汉化", Width = 90, Location = new Point(805, 8) };
             cmbModel = new ComboBox { Location = new Point(915, 10), Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
             cmbDevice = new ComboBox { Location = new Point(1071, 10), Width = 250, DropDownStyle = ComboBoxStyle.DropDownList };
             btnRefreshModels = new Button { Text = "刷新模型", Width = 75, Location = new Point(1327, 8) };
@@ -109,9 +125,15 @@ namespace GameTranslator
 
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 200 };
             progress = new ProgressBar { Dock = DockStyle.Top, Height = 18 };
-            var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 22 };
+            var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 26 };
             lblStatus = new Label { Text = "就绪", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DarkBlue };
+            btnLlama = new Button { Text = "停止llama", Dock = DockStyle.Right, Width = 95 };
+            btnRestoreCn = new Button { Text = "恢复汉化", Dock = DockStyle.Right, Width = 90 };
+            btnCheck = new Button { Text = "检查翻译", Dock = DockStyle.Right, Width = 90 };
             statusBar.Controls.Add(lblStatus);
+            statusBar.Controls.Add(btnLlama);
+            statusBar.Controls.Add(btnRestoreCn);
+            statusBar.Controls.Add(btnCheck);
             log = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, Font = new Font("Consolas", 9) };
             bottom.Controls.Add(log);
             bottom.Controls.Add(statusBar);
@@ -140,11 +162,16 @@ namespace GameTranslator
             btnModelDir.Click += (s, e) => ChooseModelDir();
             btnPause.Click += (s, e) => TogglePause();
             btnStop.Click += (s, e) => StopTranslate();
+            btnCheck.Click += (s, e) => CheckTranslation();
+            btnRestoreCn.Click += (s, e) => RestoreChinese();
+            btnLlama.Click += (s, e) => ToggleLlama();
 
             var ctx = new ContextMenuStrip();
             ctx.Items.Add("启动游戏", null, (s, e) => LaunchSelected());
             ctx.Items.Add("在资源管理器中打开目录", null, (s, e) => OpenInExplorer());
             ctx.Items.Add(new ToolStripSeparator());
+            ctx.Items.Add("检查翻译", null, (s, e) => CheckTranslation());
+            ctx.Items.Add("恢复汉化", null, (s, e) => RestoreChinese());
             ctx.Items.Add("刷新状态", null, (s, e) => RefreshStatus());
             ctx.Items.Add("一键还原选中", null, (s, e) => RestoreSelected());
             list.ContextMenuStrip = ctx;
@@ -229,6 +256,19 @@ namespace GameTranslator
             else lblStatus.Text = s;
         }
 
+        private void ToggleLlama()
+        {
+            if (llamaProcess != null && !llamaProcess.HasExited)
+            {
+                KillLlama();
+                Log("llama 已停止（显存已释放）");
+                return;
+            }
+            if (cmbModel.SelectedItem == null) { MessageBox.Show("没有可用模型"); return; }
+            var modelPath = modelMap[(string)cmbModel.SelectedItem];
+            if (EnsureLlama(modelPath)) Log("llama 已启动，模型已加载");
+        }
+
         private bool EnsureLlama(string modelPath)
         {
             if (llamaProcess != null && !llamaProcess.HasExited && currentModel == modelPath)
@@ -280,6 +320,7 @@ namespace GameTranslator
                         {
                             SetLlamaStatus("就绪: " + Path.GetFileName(modelPath));
                             Log("llama 就绪");
+                            if (btnLlama != null) btnLlama.Text = "停止llama";
                             return true;
                         }
                 }
@@ -301,6 +342,7 @@ namespace GameTranslator
             if (llamaJob != IntPtr.Zero) { try { CloseHandle(llamaJob); } catch { } llamaJob = IntPtr.Zero; }
             currentModel = "";
             SetLlamaStatus("未启动");
+            if (btnLlama != null) btnLlama.Text = "启动llama";
         }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
@@ -758,8 +800,80 @@ namespace GameTranslator
                 Log("已按用户要求终止，后续游戏跳过");
                 return;
             }
+            BackupChinese(g);
+            WriteRestoreCnBat(g.Dir);
             SetStatus(g, "已完成");
             Log("完成: " + g.Dir);
+        }
+
+        private string GameWorkName(string dir)
+        {
+            var b = Path.GetFileName(dir.TrimEnd('\\', '/'));
+            return Regex.Replace(b, @"[^a-zA-Z0-9\u4e00-\u9fff]", "_");
+        }
+
+        private void CheckTranslation()
+        {
+            if (busy) return;
+            var g = SelectedSingle();
+            if (g == null) { MessageBox.Show("请先选择一个游戏"); return; }
+            if (nodePath == "") { MessageBox.Show("未找到 node.exe"); return; }
+            lblStatus.Text = "检查翻译中…";
+            var work = WorkDir();
+            var psi = new ProcessStartInfo(nodePath)
+            {
+                Arguments = "\"" + Path.Combine(appDir, "game-pipeline.js") + "\" \"" + g.Dir + "\" dummy \"" + work + "\" " + settings.Port + " check",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            var th = new Thread(() =>
+            {
+                try
+                {
+                    using (var p = Process.Start(psi))
+                    {
+                        p.OutputDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) Log(e.Data); };
+                        p.ErrorDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) Log("ERR: " + e.Data); };
+                        p.BeginOutputReadLine();
+                        p.BeginErrorReadLine();
+                        p.WaitForExit(30 * 60 * 1000);
+                    }
+                }
+                catch (Exception ex) { Log("检查失败: " + ex.Message); }
+                var uf = Path.Combine(work, GameWorkName(g.Dir) + "-untranslated.json");
+                if (!File.Exists(uf)) { BeginInvoke(new Action(() => { lblStatus.Text = "检查完成（未生成结果）"; })); return; }
+                int badN = 0, pendN = 0;
+                try
+                {
+                    var ser = new DataContractJsonSerializer(typeof(UntranslatedResult));
+                    using (var fs = File.OpenRead(uf))
+                    {
+                        var r = (UntranslatedResult)ser.ReadObject(fs);
+                        if (r != null)
+                        {
+                            badN = r.bad != null ? r.bad.Length : 0;
+                            pendN = r.pending != null ? r.pending.Length : 0;
+                        }
+                    }
+                }
+                catch (Exception ex) { Log("读取检查结果失败: " + ex.Message); }
+                BeginInvoke(new Action(() =>
+                {
+                    lblStatus.Text = "检查完成";
+                    Log("检查翻译完成：" + g.Dir + " —— 翻译不全 " + badN + " 条，未翻译 " + pendN + " 条");
+                    if (badN + pendN > 0 &&
+                        MessageBox.Show("发现翻译不全 " + badN + " 条、未翻译 " + pendN + " 条。是否立即重新翻译这些内容？", "检查翻译", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                    {
+                        StartTranslate(false);
+                    }
+                }));
+            });
+            th.IsBackground = true;
+            th.Start();
         }
 
         private void UpdateProgress(string line, GameItem g)
@@ -808,6 +922,65 @@ namespace GameTranslator
             }
         }
 
+        private void RestoreChinese()
+        {
+            if (busy) return;
+            foreach (var g in SelectedGames())
+            {
+                var bak = Path.Combine(g.Dir, "data_汉化备份");
+                if (!Directory.Exists(bak)) { Log("无汉化备份，无法恢复: " + g.Dir); continue; }
+                try
+                {
+                    if (File.Exists(Path.Combine(bak, "Game.rgss3a")))
+                        File.Copy(Path.Combine(bak, "Game.rgss3a"), Path.Combine(g.Dir, "Game.rgss3a"), true);
+                    if (Directory.Exists(Path.Combine(bak, "Data")))
+                    {
+                        var data = Path.Combine(g.Dir, "Data");
+                        if (Directory.Exists(data)) Directory.Delete(data, true);
+                        CopyDir(Path.Combine(bak, "Data"), data);
+                    }
+                    if (Directory.Exists(Path.Combine(bak, "www", "data")))
+                    {
+                        var data = Path.Combine(g.Dir, "www", "data");
+                        if (Directory.Exists(data)) Directory.Delete(data, true);
+                        CopyDir(Path.Combine(bak, "www", "data"), data);
+                    }
+                    Log("已恢复汉化版: " + g.Dir);
+                    SetStatus(g, "已恢复汉化");
+                }
+                catch (Exception ex) { Log("恢复汉化失败: " + g.Dir + " " + ex.Message); }
+            }
+        }
+
+        private void BackupChinese(GameItem g)
+        {
+            try
+            {
+                var bak = Path.Combine(g.Dir, "data_汉化备份");
+                if (g.Kind == "VXAce")
+                {
+                    Directory.CreateDirectory(bak);
+                    var arch = Path.Combine(g.Dir, "Game.rgss3a");
+                    if (File.Exists(arch)) File.Copy(arch, Path.Combine(bak, "Game.rgss3a"), true);
+                    else if (Directory.Exists(Path.Combine(g.Dir, "Data")))
+                    {
+                        var d = Path.Combine(bak, "Data");
+                        if (Directory.Exists(d)) Directory.Delete(d, true);
+                        CopyDir(Path.Combine(g.Dir, "Data"), d);
+                    }
+                }
+                else
+                {
+                    var d = Path.Combine(bak, "www", "data");
+                    var src = Path.Combine(g.Dir, "www", "data");
+                    if (Directory.Exists(d)) Directory.Delete(d, true);
+                    CopyDir(src, d);
+                }
+                Log("已备份汉化版: " + bak);
+            }
+            catch (Exception ex) { Log("备份汉化版失败: " + ex.Message); }
+        }
+
         private static void CopyDir(string src, string dst)
         {
             Directory.CreateDirectory(dst);
@@ -822,10 +995,10 @@ namespace GameTranslator
         private static void WriteRestoreBat(string gameDir)
         {
             var bat = Path.Combine(gameDir, "一键还原汉化前.bat");
-            if (File.Exists(bat)) return;
             var lines = new[]
             {
                 "@echo off",
+                "chcp 65001 >nul",
                 "taskkill /f /im Game.exe >nul 2>&1",
                 "cd /d \"%~dp0\"",
                 "if exist \"data_原版备份\\Game.rgss3a\" (",
@@ -846,7 +1019,37 @@ namespace GameTranslator
                 "echo 还原完成！游戏数据已恢复为汉化前的原版。",
                 "pause"
             };
-            File.WriteAllLines(bat, lines, Encoding.GetEncoding(936));
+            File.WriteAllLines(bat, lines, new UTF8Encoding(false));
+        }
+
+        private static void WriteRestoreCnBat(string gameDir)
+        {
+            var bat = Path.Combine(gameDir, "一键恢复汉化.bat");
+            var lines = new[]
+            {
+                "@echo off",
+                "chcp 65001 >nul",
+                "taskkill /f /im Game.exe >nul 2>&1",
+                "cd /d \"%~dp0\"",
+                "if exist \"data_汉化备份\\Game.rgss3a\" (",
+                "  del /f /q \"Game.rgss3a\" >nul 2>&1",
+                "  copy /y \"data_汉化备份\\Game.rgss3a\" \"Game.rgss3a\" >nul",
+                ")",
+                "if exist \"data_汉化备份\\Data\" (",
+                "  if exist \"Data\" rmdir /s /q \"Data\"",
+                "  mkdir \"Data\" >nul 2>&1",
+                "  xcopy /e /i /y \"data_汉化备份\\Data\\*\" \"Data\" >nul",
+                ")",
+                "if exist \"data_汉化备份\\www\\data\\Map001.json\" (",
+                "  if exist \"www\\data\" rmdir /s /q \"www\\data\"",
+                "  mkdir \"www\\data\" >nul 2>&1",
+                "  xcopy /e /i /y \"data_汉化备份\\www\\data\\*\" \"www\\data\" >nul",
+                ")",
+                "echo.",
+                "echo 已恢复汉化版！",
+                "pause"
+            };
+            File.WriteAllLines(bat, lines, new UTF8Encoding(false));
         }
     }
 
