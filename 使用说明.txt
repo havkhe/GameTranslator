@@ -1,41 +1,38 @@
-RPG Maker 汉化管理器（GameTranslator.exe） v2.1
+RPG Maker 汉化管理器（GameTranslator.exe） v2.2
 ============================================
 
-【v2.1 更新说明】
-  - 修复：不再翻译音频资源文件名（System.json 音效、地图 BGM/BGS/ME/SE、
-    VX Ace 的 RPG::AudioFile 等），避免汉化后游戏报 Loading Error。
-  - 修复：翻译提示词强化为“必须输出简体中文、禁止英文”，并增加英文输出
-    兜底检测，角色名标记 \N<名字> 原样保留。
-  - 本次修复只翻译角色名、对话、描述、选项等游戏文本；音频文件名、
-    图片文件名、脚本代码等资源引用一律跳过。
+【v2.2 更新说明】
+  - 内置 llama.cpp（CUDA/GPU）运行时，点“开始汉化”自动加载所选模型，
+    无需再手动启动 Ollama；退出软件时自动停止；切换模型自动重启。
+  - 已删除全部联网翻译 / API 相关功能（不再需要 API 地址、密钥）。
+  - “扫描 K:\”改为盘符下拉 + “扫描”，或“选择文件夹”自定义扫描目录。
+  - 模型下拉自动检测模型目录中的 *.gguf（默认 D:\galtrans），
+    可点“模型目录…”选择其他位置，点“刷新模型”重新扫描。
+  - 新增“暂停 / 继续”与“终止”按钮：暂停在批次间生效，终止保留进度可续翻。
+  - 设置保存在 settings.json（模型目录、端口）。
 
 一、支持的引擎
   - RPG Maker MV / MZ（www\data 下的 json 数据）
   - RPG Maker VX Ace（Data\*.rvdata2 散装数据，或加密包 Game.rgss3a，
     会自动解包 → 汉化 → 重新打包，并保留原版加密包备份）
 
-二、翻译模型
-  - 本地 Ollama 模型：hy-mt2-1.8b:q8_0（快）、sakura-gatransl-7b-v3.7:iq4_xs（质量）、
-    murasaki-4b-v0.3:q6_k（文学），需先启动 Ollama。
-  - 网络 API：任何 OpenAI 兼容接口（如阿里云百炼
-    https://dashscope.aliyuncs.com/compatible-mode/v1）。
-    在界面下方“API设置”行选择模式：
-      本地Ollama      ：只用本地模型
-      网络API         ：只用网络模型
-      本地+API混合    ：本地失败/超时时自动改用网络 API
-    填写 API 地址、密钥、模型名后点“保存API设置”，设置保存在 api-config.json。
+二、模型
+  - 模型为 GGUF 文件，默认从 D:\galtrans 加载（可改）。
+  - 内置 llama.cpp CUDA 版，自动使用 NVIDIA 显卡推理。
 
 三、使用方法
-  1. 点击“扫描 K:\”或“添加游戏(选Game.exe)”把游戏加入列表（拖拽 Game.exe 也可）。
-  2. 在列表选择游戏（“全选”按钮可一键全选/取消）。
-  3. 选择模型/API 模式后，点“开始汉化选中”或“全部汉化”。
+  1. 选择盘符点“扫描”，或“选择文件夹”/拖拽 Game.exe 加入游戏列表。
+  2. 选择模型（自动列出模型目录中的 GGUF）。
+  3. 点“开始汉化选中”或“全部汉化”；第一次会自动加载模型（等待就绪）。
   4. 汉化前自动备份：游戏目录下生成 data_原版备份 和“一键还原汉化前.bat”，
      出错时双击该 bat 或点“一键还原选中”即可恢复原版。
-  5. 断点续翻：中断后重新对同一游戏执行汉化，会自动跳过已翻译的条目继续。
+  5. 暂停 / 继续：批次间生效；终止：保存进度后停止，可断点续翻。
+  6. 断点续翻：中断后重新对同一游戏执行汉化，会自动跳过已翻译的条目继续。
 
 四、说明
   - 已汉化（中文明显多于日文）的游戏会被自动跳过。
   - 非 RPG Maker 游戏不会被识别，也不会被改动。
-  - 目录结构：game-pipeline.js（汉化管线）、ruby\（便携 Ruby，处理 .rvdata2）、
+  - 目录结构：GameTranslator.exe（界面）、game-pipeline.js（汉化管线）、
+    llama\（内置 llama.cpp 运行时）、ruby\（便携 Ruby，处理 .rvdata2）、
     vxace_*.rb（VX Ace 数据读写）、rgss3a.js（Game.rgss3a 解包/重打包）。
   - 翻译进度保存在软件目录 work\<游戏名>-translations.json。

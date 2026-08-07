@@ -1,5 +1,5 @@
-// Usage: node game-pipeline.js <gameDir> <model> <workDir> [mode] [apiBase] [apiKey] [apiModel]
-//   mode: local (default, Ollama) | api (network OpenAI-compatible) | hybrid (local with api fallback)
+// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port]
+//   Requires a local llama-server (llama.cpp) already running on 127.0.0.1:<port>.
 // Extracts RPG Maker MV/MZ (www/data json) or VX Ace (Data/*.rvdata2 / Game.rgss3a)
 // text, translates with Ollama and/or a network API, patches in place, and resumes
 // from translations.json when re-run.
@@ -12,12 +12,11 @@ const { spawnSync } = require("child_process");
 const { readArchive, extractFile, writeArchiveTo } = require("./rgss3a.js");
 
 const GAME_DIR = process.argv[2];
-const MODEL = process.argv[3] || "hy-mt2-1.8b:q8_0";
+const MODEL = process.argv[3] || "model";
 const WORK = process.argv[4] || path.join(__dirname, "pipeline-work");
-const MODE = (process.argv[5] || "local").toLowerCase();
-const API_BASE = process.argv[6] || "";
-const API_KEY = process.argv[7] || "";
-const API_MODEL = process.argv[8] || "";
+const PORT = process.argv[5] || "18080";
+const PAUSE_FLAG = path.join(WORK, "pause.flag");
+const STOP_FLAG = path.join(WORK, "stop.flag");
 
 const RUBY = process.env.VXACE_RUBY || path.join(__dirname, "ruby", "bin", "ruby.exe");
 const VX_EXTRACT = path.join(__dirname, "vxace_extract.rb");
@@ -360,21 +359,24 @@ function looksLikeEnglish(t) {
 function askLocal(content) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: MODEL,
+      model: "local",
       messages: [{ role: "user", content }],
+      temperature: 0.3,
+      max_tokens: 2048,
       stream: false,
-      options: { temperature: 0.3, repeat_penalty: 1.05, num_predict: 2048 },
     });
     const req = http.request(
-      { host: "127.0.0.1", port: 11434, path: "/api/chat", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } },
+      { host: "127.0.0.1", port: PORT, path: "/v1/chat/completions", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } },
       (res) => {
         let d = "";
         res.on("data", (c) => (d += c));
         res.on("end", () => {
           try {
             const j = JSON.parse(d);
-            if (j.error) return reject(new Error(j.error));
-            resolve(j.message.content);
+            if (j.error) return reject(new Error(typeof j.error === "string" ? j.error : JSON.stringify(j.error)));
+            const text = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+            if (!text) return reject(new Error("llama 无返回内容"));
+            resolve(text);
           } catch (e) {
             reject(e);
           }
@@ -388,65 +390,17 @@ function askLocal(content) {
   });
 }
 
-function askApi(content) {
-  return new Promise((resolve, reject) => {
-    if (!API_BASE || !API_KEY || !API_MODEL) return reject(new Error("API 配置不完整 (base/key/model)"));
-    let url = API_BASE.replace(/\/+$/, "");
-    if (!/\/chat\/completions$/i.test(url)) url += "/chat/completions";
-    const body = JSON.stringify({
-      model: API_MODEL,
-      messages: [{ role: "user", content }],
-      temperature: 0.3,
-      stream: false,
-    });
-    const mod = url.startsWith("https:") ? https : http;
-    const u = new URL(url);
-    const req = mod.request(
-      {
-        hostname: u.hostname,
-        port: u.port || (u.protocol === "https:" ? 443 : 80),
-        path: u.pathname + u.search,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer " + API_KEY,
-          "Content-Length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        let d = "";
-        res.on("data", (c) => (d += c));
-        res.on("end", () => {
-          if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error("API HTTP " + res.statusCode + ": " + d.slice(0, 300)));
-          try {
-            const j = JSON.parse(d);
-            const text = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-            if (!text) return reject(new Error("API 无返回内容: " + d.slice(0, 300)));
-            resolve(text);
-          } catch (e) {
-            reject(e);
-          }
-        });
-      }
-    );
-    req.on("error", reject);
-    req.setTimeout(240000, () => req.destroy(new Error("api timeout")));
-    req.write(body);
-    req.end();
-  });
-}
+async function ask(content) { return askLocal(content); }
 
-async function ask(content) {
-  if (MODE === "api") return askApi(content);
-  if (MODE === "hybrid") {
-    try {
-      return await askLocal(content);
-    } catch (e) {
-      console.log("LOCAL_FAIL fallback api: " + e.message);
-      return askApi(content);
-    }
+// Pause: wait while pause.flag exists. Stop: exit gracefully at batch boundary.
+function checkFlags() {
+  while (fs.existsSync(PAUSE_FLAG)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
-  return askLocal(content);
+  if (fs.existsSync(STOP_FLAG)) {
+    console.log("STOPPED_BY_USER");
+    process.exit(0);
+  }
 }
 
 function parseResult(text) {
@@ -474,12 +428,15 @@ function parseResult(text) {
 }
 
 async function translate(entries) {
+  if (fs.existsSync(PAUSE_FLAG)) fs.rmSync(PAUSE_FLAG);
+  if (fs.existsSync(STOP_FLAG)) fs.rmSync(STOP_FLAG);
   const translations = fs.existsSync(TRANS) ? JSON.parse(fs.readFileSync(TRANS, "utf8")) : {};
   let failures = fs.existsSync(FAIL) ? JSON.parse(fs.readFileSync(FAIL, "utf8")) : [];
   const pending = entries.filter((e) => !(e.id in translations));
   console.log("TOTAL", entries.length, "DONE", entries.length - pending.length, "PENDING", pending.length);
   let batchCount = 0;
   for (let i = 0; i < pending.length; i += BATCH) {
+    checkFlags();
     const batch = pending.slice(i, i + BATCH);
     const lines = batch.map((e, j) => j + 1 + ". " + e.text).join("\n");
     const prompt =
@@ -567,7 +524,6 @@ async function translate(entries) {
 (async () => {
   console.log("GAME", GAME_DIR);
   console.log("MODEL", MODEL);
-  console.log("MODE", MODE, API_MODEL ? "API_MODEL=" + API_MODEL : "");
   const engine = detectEngine(GAME_DIR);
   if (!engine) {
     console.error("NOT_SUPPORTED 无法识别的游戏引擎（需要 MV/MZ 的 www/data 或 VX Ace 的 Data/Game.rgss3a）");

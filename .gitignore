@@ -1,6 +1,9 @@
 # API 配置包含密钥，不纳入版本管理
 api-config.json
 
+# 本地运行设置（模型目录、端口）
+settings.json
+
 # 翻译进度/缓存
 work/
 
