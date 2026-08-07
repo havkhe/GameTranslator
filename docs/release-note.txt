@@ -1,31 +1,24 @@
-# 🎮 GameTranslator v2.3.1（预览版）—— 修复设置保存 + RTX 内置最优预设
+# 🎮 GameTranslator v2.3.2（正式版）—— 确定按钮 + 热切换提示
 
-> **v2.2.6 仍为正式稳定版；v2.3.1 是 v2.3.0 的修复预览版**，重点解决“llama 设置无法保存”与“RTX 没有内置最优参数”的问题。
+> **v2.3.2 为最新正式稳定版**（v2.2.6 / v2.3.0 / v2.3.1 仍可下载）。
 
 ## 📥 下载 / Downloads
 
-- `GameTranslator-v2.3.1-Vulkan-Generic.zip` —— Vulkan 通用版，适合 GTX 10 系列及各种支持 Vulkan 的显卡（NVIDIA / AMD / Intel）
-- `GameTranslator-v2.3.1-CUDA12-RTX.zip` —— CUDA 12.4 版，适合 NVIDIA RTX 20 / 30 / 40 / 50 系列（sm_70+）
+- `GameTranslator-v2.3.2-Vulkan-Generic.zip` —— Vulkan 通用版，适合 GTX 10 系列及各种支持 Vulkan 的显卡（NVIDIA / AMD / Intel）
+- `GameTranslator-v2.3.2-CUDA12-RTX.zip` —— CUDA 12.4 版，适合 NVIDIA RTX 20 / 30 / 40 / 50 系列（sm_70+）
 
-## ✨ 本版修复与新增
+## ✨ 本版更新
 
-- **RTX 内置最优预设**：首次启动检测到 RTX 显卡且未手动调整过 llama 参数时，
-  自动启用 `FlashAttention + q8_0 KV 缓存 + 2048/512 批次 + 4 CPU 线程 + 关闭轮询`，
-  让 RTX 用户开箱即用；仍可在“设置 → llama 高级设置”中修改。
-- **高级设置界面新增“性能预设”下拉**：RTX 高性能 / 通用均衡 / 省显存 / 自定义，
-  选择后自动填入对应参数；手动修改任意参数会自动切换为“自定义”。
-- **明确“点保存才生效”**：修改参数后必须点击“保存”才会应用并重启 llama，
-  点“取消”全部丢弃；保存成功会弹出当前生效参数，失败会弹出具体错误。
-- **修复设置保存**：若程序目录不可写（如只读目录 / Program Files），
-  设置自动改存到 `%APPDATA%\GameTranslator\settings.json`，不再静默丢失。
-
-## ✅ v2.3.0 已包含的功能保持不变
-
-- llama 高级设置（上下文、GPU 层数、批大小、物理批、线程、轮询、FlashAttention、KV 缓存、端口、内存上限）
-- CUDA 模式 CPU 占用修复（GPU 模式默认 4 线程 + 关闭轮询）
+- **llama 高级设置新增“确定修改llama设置”按钮**：切换预设或修改参数后，
+  点击该按钮（或底部“保存”）才会写入并生效；对话框同时保留“取消”可全部丢弃。
+- **明确热切换限制**：llama 不支持运行中热切换模型或参数。
+  切换模型时日志会提示“将在下次开始汉化时自动重启并加载新模型”；
+  设置页会提示“修改后需重启 llama 生效”；保存后弹窗会说明新参数在下次汉化时应用。
+- RTX 内置最优预设（自动检测 RTX + FlashAttention + q8_0 KV + 2048/512 批次 + 4 线程 + 关闭轮询）
+- 设置保存失败时明确报错，并在程序目录不可写时自动改存到 `%APPDATA%\GameTranslator\settings.json`
 - 自定义翻译提示词（默认预填，支持 `{lines}` 占位符）
 - 菜单栏 + 双行工具栏 + 右侧可折叠设置面板
-- RPG Maker MV / MZ / VX Ace 内嵌式汉化、断点续翻、检查翻译、原版/汉化切换
+- RPG Maker MV / MZ / VX Ace 内嵌式汉化、断点续翻、检查翻译、原版/汉化一键切换、llama 启停释放显存
 
 ## 🚀 使用方法
 
@@ -36,33 +29,27 @@
 
 ---
 
-# 🎮 GameTranslator v2.3.1 (Preview) — Save Fix + Built-in RTX Presets
+# 🎮 GameTranslator v2.3.2 (Stable) — Confirm Button + Hot-Switch Notice
 
-> **v2.2.6 remains the stable release. v2.3.1 is a bug-fix preview on top of v2.3.0**, addressing "llama settings won't save" and "no optimal defaults for RTX".
+> **v2.3.2 is the latest stable release** (v2.2.6 / v2.3.0 / v2.3.1 remain downloadable).
 
 ## 📥 Downloads
 
-- `GameTranslator-v2.3.1-Vulkan-Generic.zip` — Vulkan generic build for GTX 10-series and any Vulkan-capable GPU (NVIDIA / AMD / Intel)
-- `GameTranslator-v2.3.1-CUDA12-RTX.zip` — CUDA 12.4 build for NVIDIA RTX 20 / 30 / 40 / 50 series (sm_70+)
+- `GameTranslator-v2.3.2-Vulkan-Generic.zip` — Vulkan generic build for GTX 10-series and any Vulkan-capable GPU (NVIDIA / AMD / Intel)
+- `GameTranslator-v2.3.2-CUDA12-RTX.zip` — CUDA 12.4 build for NVIDIA RTX 20 / 30 / 40 / 50 series (sm_70+)
 
-## ✨ What's Fixed / New
+## ✨ What's New
 
-- **Built-in RTX preset**: on first launch, if an RTX GPU is detected and llama settings are untouched,
-  the app auto-applies `FlashAttention + q8_0 KV cache + 2048/512 batch + 4 CPU threads + polling off`.
-- **Preset selector** in llama Advanced Settings: RTX High-Performance / Balanced / VRAM-Saving / Custom;
-  manual edits switch the selector to Custom automatically.
-- **Explicit Save semantics**: changes only apply after clicking Save (Cancel discards everything);
-  a confirmation shows the effective llama arguments, and failures show the exact error.
-- **More robust saving**: if the program folder is read-only, settings now fall back to
-  `%APPDATA%\GameTranslator\settings.json` instead of being silently lost.
-
-## ✅ v2.3.0 Features (unchanged)
-
-- llama advanced settings (context, GPU layers, batch, ubatch, threads, polling, FlashAttention, KV cache, port, memory limit)
-- CUDA CPU-usage fix (4 threads + polling off by default on GPU mode)
+- **Explicit "Apply llama settings" button** in llama Advanced Settings: switching a preset or editing
+  parameters only takes effect after pressing this button (or Save); Cancel discards everything.
+- **Hot-switch limitation is now clearly communicated**: llama cannot hot-swap models or settings at runtime.
+  Switching models logs a notice that the server will restart with the new model on the next translation;
+  the settings page shows a reminder, and the save dialog states that new parameters apply on the next run.
+- Built-in RTX preset (auto-detected RTX + FlashAttention + q8_0 KV + 2048/512 batch + 4 threads + polling off)
+- Visible save errors with fallback to `%APPDATA%\GameTranslator\settings.json` when the program folder is read-only
 - Custom translation prompt (pre-filled default, `{lines}` placeholder)
 - Menu bar + two-row toolbar + collapsible right settings panel
-- In-place localization for MV / MZ / VX Ace, resume, translation check, original/localized switching
+- In-place localization for MV / MZ / VX Ace, resume, translation check, original/localized switching, llama on/off to free VRAM
 
 ## 🚀 Usage
 
@@ -73,6 +60,6 @@
 
 ---
 
-![GameTranslator Banner 1](https://github.com/havkhe/GameTranslator/releases/download/v2.3.1/banner-1.png)
+![GameTranslator Banner 1](https://github.com/havkhe/GameTranslator/releases/download/v2.3.2/banner-1.png)
 
-![GameTranslator Banner 2](https://github.com/havkhe/GameTranslator/releases/download/v2.3.1/banner-2.jpg)
+![GameTranslator Banner 2](https://github.com/havkhe/GameTranslator/releases/download/v2.3.2/banner-2.jpg)

@@ -98,7 +98,7 @@ namespace GameTranslator
 
         public MainForm()
         {
-            Text = "RPG Maker 汉化管理器 v2.3.1";
+            Text = "RPG Maker 汉化管理器 v2.3.2";
             Width = 1720;
             Height = 760;
             MinimumSize = new Size(1280, 640);
@@ -148,7 +148,7 @@ namespace GameTranslator
             mSet.DropDownItems.Add("显示/隐藏设置面板", null, (s, e) => ToggleSidePanel());
             var mHelp = new ToolStripMenuItem("帮助(&H)");
             mHelp.DropDownItems.Add("使用说明", null, (s, e) => OpenHelp());
-            mHelp.DropDownItems.Add("关于", null, (s, e) => MessageBox.Show("RPG Maker 汉化管理器 v2.3.1\n\n内置 llama.cpp 本地翻译引擎\n支持 MV / MZ / VX Ace\n支持自定义 llama 参数、RTX 预设与翻译提示词", "关于 GameTranslator"));
+            mHelp.DropDownItems.Add("关于", null, (s, e) => MessageBox.Show("RPG Maker 汉化管理器 v2.3.2\n\n内置 llama.cpp 本地翻译引擎\n支持 MV / MZ / VX Ace\n支持自定义 llama 参数、RTX 预设与翻译提示词", "关于 GameTranslator"));
             menu.Items.AddRange(new ToolStripItem[] { mFile, mTrans, mSet, mHelp });
             MainMenuStrip = menu;
 
@@ -165,6 +165,15 @@ namespace GameTranslator
             // ---------------- top toolbar: row 2 (model + actions) ----------------
             var lblModel = new Label { Text = "模型:", Location = new Point(10, 50), AutoSize = true };
             cmbModel = new ComboBox { Location = new Point(52, 46), Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbModel.SelectedIndexChanged += (s, e) =>
+            {
+                if (llamaProcess != null && !llamaProcess.HasExited && cmbModel.SelectedItem != null)
+                {
+                    var m = (string)cmbModel.SelectedItem;
+                    if (modelMap.ContainsKey(m) && modelMap[m] != currentModel)
+                        Log("提示：模型已切换为 " + m + "；llama 不支持运行中热切换，将在下次开始汉化时自动重启并加载新模型。");
+                }
+            };
             btnRefreshModels = new Button { Text = "刷新模型", Width = 80, Location = new Point(318, 45) };
             btnModelDir = new Button { Text = "模型目录…", Width = 90, Location = new Point(404, 45) };
             btnStart = new Button { Text = "开始汉化选中", Width = 110, Location = new Point(510, 45), BackColor = Color.FromArgb(210, 235, 255) };
@@ -1397,7 +1406,7 @@ namespace GameTranslator
             var btns = new Panel { Dock = DockStyle.Bottom, Height = 54 };
             var btnOk = new Button { Text = "保存", Width = 90, Location = new Point(430, 12), Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
             var btnCancel = new Button { Text = "取消", Width = 90, Location = new Point(530, 12), Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
-            btnOk.Click += (s, e) => { if (Collect()) { Result = _work; DialogResult = DialogResult.OK; Close(); } };
+            btnOk.Click += (s, e) => SaveAndClose();
             btnCancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             btns.Controls.Add(btnOk);
             btns.Controls.Add(btnCancel);
@@ -1445,12 +1454,24 @@ namespace GameTranslator
             AddRow(tbl, "服务端口", nudPort, "重启 llama 后生效");
             AddRow(tbl, "llama 内存上限(MB)", nudMem, "0 = 自动（总内存-4GB）");
 
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44 };
-            var btnReset = new Button { Text = "恢复默认参数", Width = 130, Location = new Point(12, 8) };
+            var note = new Label
+            {
+                Dock = DockStyle.Bottom,
+                Height = 46,
+                Padding = new Padding(6),
+                ForeColor = Color.DarkOrange,
+                Text = "注意：llama 不支持运行中热切换模型或参数。修改后请点击“确定修改llama设置”，llama 会重启，新参数在下次开始汉化时生效。"
+            };
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 58 };
+            var btnOkLlama = new Button { Text = "确定修改llama设置", Width = 200, Location = new Point(12, 12) };
+            btnOkLlama.Click += (s, e) => SaveAndClose();
+            var btnReset = new Button { Text = "恢复默认参数", Width = 130, Location = new Point(230, 12) };
             btnReset.Click += (s, e) => ResetLlamaDefaults();
+            bottom.Controls.Add(btnOkLlama);
             bottom.Controls.Add(btnReset);
 
             tp.Controls.Add(tbl);
+            tp.Controls.Add(note);
             tp.Controls.Add(bottom);
             return tp;
         }
@@ -1566,6 +1587,16 @@ namespace GameTranslator
         {
             if (_applyingPreset || cmbPreset == null) return;
             if ((string)cmbPreset.SelectedItem != "自定义") cmbPreset.SelectedItem = "自定义";
+        }
+
+        private void SaveAndClose()
+        {
+            if (Collect())
+            {
+                Result = _work;
+                DialogResult = DialogResult.OK;
+                Close();
+            }
         }
 
         private bool Collect()
