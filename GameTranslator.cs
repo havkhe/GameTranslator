@@ -5,6 +5,8 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Management;
+using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
@@ -28,15 +30,17 @@ namespace GameTranslator
     {
         [DataMember] public string ModelDir = "D:\\galtrans";
         [DataMember] public string LlamaDir = "D:\\GameTranslator\\llama";
+        [DataMember] public string Device = "gpu";
+        [DataMember] public int MaxMemoryMB = 0;
         [DataMember] public int Port = 18080;
     }
 
     public class MainForm : Form
     {
         private ListView list;
-        private Button btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore, btnRefresh,
+        private Button btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore,
             btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop;
-        private ComboBox cmbDrive, cmbModel;
+        private ComboBox cmbDrive, cmbModel, cmbDevice;
         private ProgressBar progress;
         private Label lblStatus;
         private RichTextBox log;
@@ -47,13 +51,17 @@ namespace GameTranslator
         private bool busy;
         private bool paused;
         private Process llamaProcess;
+        private IntPtr llamaJob = IntPtr.Zero;
+        private long llamaMemLimitMB;
         private string currentModel = "";
+        private string cpuName = "未知 CPU";
+        private string gpuName = "未知 GPU";
         private Settings settings = new Settings();
 
         public MainForm()
         {
             Text = "RPG Maker 汉化管理器 v2.2";
-            Width = 1400;
+            Width = 1500;
             Height = 720;
             StartPosition = FormStartPosition.CenterScreen;
             AllowDrop = true;
@@ -61,10 +69,12 @@ namespace GameTranslator
             DragDrop += OnDrop;
             FormClosed += (s, e) => KillLlama();
             LoadSettings();
+            llamaMemLimitMB = settings.MaxMemoryMB > 0 ? settings.MaxMemoryMB : AutoMemLimitMB();
             BuildUi();
             ResolveNode();
             LoadModels();
             SetLlamaStatus("未启动");
+            Log("llama 内存上限: " + llamaMemLimitMB + " MB（可在 settings.json 的 MaxMemoryMB 调整，0=自动）");
         }
 
         private void BuildUi()
@@ -79,15 +89,15 @@ namespace GameTranslator
             btnSelectAll = new Button { Text = "全选", Width = 58, Location = new Point(396, 8) };
             btnStartAll = new Button { Text = "全部汉化", Width = 86, Location = new Point(460, 8), BackColor = Color.FromArgb(200, 255, 200) };
             btnRestore = new Button { Text = "一键还原选中", Width = 104, Location = new Point(552, 8) };
-            cmbModel = new ComboBox { Location = new Point(662, 10), Width = 170, DropDownStyle = ComboBoxStyle.DropDownList };
-            btnRefreshModels = new Button { Text = "刷新模型", Width = 70, Location = new Point(838, 8) };
-            btnModelDir = new Button { Text = "模型目录…", Width = 82, Location = new Point(914, 8) };
-            btnStart = new Button { Text = "开始汉化选中", Width = 100, Location = new Point(1002, 8), BackColor = Color.FromArgb(210, 235, 255) };
-            btnPause = new Button { Text = "暂停", Width = 58, Location = new Point(1108, 8) };
-            btnStop = new Button { Text = "终止", Width = 58, Location = new Point(1172, 8), BackColor = Color.FromArgb(255, 220, 220) };
-            btnRefresh = new Button { Text = "刷新状态", Width = 76, Location = new Point(1236, 8) };
-            lblStatus = new Label { Text = "就绪", Location = new Point(1320, 12), AutoSize = true, ForeColor = Color.DarkBlue };
-            top.Controls.AddRange(new Control[] { cmbDrive, btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore, cmbModel, btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop, btnRefresh, lblStatus });
+            cmbModel = new ComboBox { Location = new Point(662, 10), Width = 140, DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbDevice = new ComboBox { Location = new Point(808, 10), Width = 240, DropDownStyle = ComboBoxStyle.DropDownList };
+            btnRefreshModels = new Button { Text = "刷新模型", Width = 70, Location = new Point(1054, 8) };
+            btnModelDir = new Button { Text = "模型目录…", Width = 82, Location = new Point(1130, 8) };
+            btnStart = new Button { Text = "开始汉化选中", Width = 100, Location = new Point(1218, 8), BackColor = Color.FromArgb(210, 235, 255) };
+            btnPause = new Button { Text = "暂停", Width = 58, Location = new Point(1324, 8) };
+            btnStop = new Button { Text = "终止", Width = 58, Location = new Point(1388, 8), BackColor = Color.FromArgb(255, 220, 220) };
+            top.Controls.AddRange(new Control[] { cmbDrive, btnScan, btnScanFolder, btnAdd, btnSelectAll, btnStartAll, btnRestore, cmbModel, cmbDevice, btnRefreshModels, btnModelDir, btnStart, btnPause, btnStop });
+            DetectHardware();
 
             list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = true };
             list.Columns.Add("游戏目录", 920);
@@ -97,8 +107,12 @@ namespace GameTranslator
 
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 200 };
             progress = new ProgressBar { Dock = DockStyle.Top, Height = 18 };
+            var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 22 };
+            lblStatus = new Label { Text = "就绪", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DarkBlue };
+            statusBar.Controls.Add(lblStatus);
             log = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, Font = new Font("Consolas", 9) };
             bottom.Controls.Add(log);
+            bottom.Controls.Add(statusBar);
             bottom.Controls.Add(progress);
             progress.Dock = DockStyle.Bottom;
             log.Dock = DockStyle.Fill;
@@ -119,7 +133,6 @@ namespace GameTranslator
             btnStartAll.Click += (s, e) => StartTranslate(true);
             btnRestore.Click += (s, e) => RestoreSelected();
             btnStart.Click += (s, e) => StartTranslate(false);
-            btnRefresh.Click += (s, e) => RefreshStatus();
             btnRefreshModels.Click += (s, e) => LoadModels();
             btnModelDir.Click += (s, e) => ChooseModelDir();
             btnPause.Click += (s, e) => TogglePause();
@@ -153,6 +166,51 @@ namespace GameTranslator
         }
 
         // ---------------- llama management ----------------
+        private void DetectHardware()
+        {
+            try
+            {
+                var mo = new ManagementObjectSearcher("SELECT Name FROM Win32_Processor");
+                foreach (ManagementObject o in mo.Get()) { cpuName = Convert.ToString(o["Name"]); break; }
+            }
+            catch { }
+            try
+            {
+                var psi = new ProcessStartInfo("nvidia-smi", "--query-gpu=name --format=csv,noheader") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+                using (var p = Process.Start(psi))
+                {
+                    p.WaitForExit(5000);
+                    var line = p.StandardOutput.ReadToEnd().Trim();
+                    if (!string.IsNullOrEmpty(line)) gpuName = line.Split('\n')[0].Trim();
+                }
+            }
+            catch { }
+            if (gpuName == "未知 GPU")
+            {
+                try
+                {
+                    var mo = new ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");
+                    foreach (ManagementObject o in mo.Get()) { var n = Convert.ToString(o["Name"]); if (!string.IsNullOrEmpty(n)) { gpuName = n; break; } }
+                }
+                catch { }
+            }
+            cmbDevice.Items.Add("GPU (" + gpuName + ")");
+            cmbDevice.Items.Add("CPU (" + cpuName + ")");
+            cmbDevice.SelectedIndex = settings.Device == "cpu" ? 1 : 0;
+        }
+
+        private long AutoMemLimitMB()
+        {
+            long totalMB = 8192;
+            try
+            {
+                var mo = new ManagementObjectSearcher("SELECT TotalPhysicalMemory FROM Win32_ComputerSystem");
+                foreach (ManagementObject o in mo.Get()) { totalMB = Convert.ToInt64(o["TotalPhysicalMemory"]) / (1024 * 1024); break; }
+            }
+            catch { }
+            return Math.Max(4096, totalMB - 4096);
+        }
+
         private void SetLlamaStatus(string s)
         {
             if (lblStatus == null) return;
@@ -175,16 +233,27 @@ namespace GameTranslator
                 Log("未找到内置 llama-server（已尝试: " + Path.Combine(appDir, "llama") + " 与 " + settings.LlamaDir + "）。请确认 D:\\GameTranslator\\llama 存在，或修改 settings.json 的 LlamaDir。");
                 return false;
             }
-            Log("启动内置 llama（CUDA）：" + Path.GetFileName(modelPath));
+            var ngl = settings.Device == "cpu" ? 0 : 99;
+            Log("启动内置 llama（" + (settings.Device == "cpu" ? "CPU" : "GPU/CUDA") + "）：" + Path.GetFileName(modelPath));
             var psi = new ProcessStartInfo(server)
             {
-                Arguments = "-m \"" + modelPath + "\" --host 127.0.0.1 --port " + settings.Port + " -c 4096 -ngl 99 --no-webui",
+                Arguments = "-m \"" + modelPath + "\" --host 127.0.0.1 --port " + settings.Port + " -c 4096 -ngl " + ngl + " -b 512 -ub 256 --no-webui",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
             try { llamaProcess = Process.Start(psi); }
             catch (Exception ex) { Log("启动 llama 失败: " + ex.Message); return false; }
+            llamaJob = CreateJobObject(IntPtr.Zero, null);
+            if (llamaJob != IntPtr.Zero)
+            {
+                var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+                info.ProcessMemoryLimit = llamaMemLimitMB * 1024 * 1024;
+                info.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+                if (SetInformationJobObject(llamaJob, 9, ref info, (uint)Marshal.SizeOf(info)))
+                    AssignProcessToJobObject(llamaJob, llamaProcess.Handle);
+                Log("llama 内存上限已生效: " + llamaMemLimitMB + " MB");
+            }
             currentModel = modelPath;
             SetLlamaStatus("模型加载中…");
             var sw = Stopwatch.StartNew();
@@ -218,9 +287,38 @@ namespace GameTranslator
                 try { llamaProcess.Dispose(); } catch { }
                 llamaProcess = null;
             }
+            if (llamaJob != IntPtr.Zero) { try { CloseHandle(llamaJob); } catch { } llamaJob = IntPtr.Zero; }
             currentModel = "";
             SetLlamaStatus("未启动");
         }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+        [DllImport("kernel32.dll")]
+        private static extern bool SetInformationJobObject(IntPtr hJob, int JobObjectInfoClass, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION lpJobObjectInfo, uint cbJobObjectInfoLength);
+        [DllImport("kernel32.dll")]
+        private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public UIntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+            public long ProcessMemoryLimit;
+            public long JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
+        private const uint JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100;
 
         // ---------------- model list ----------------
         private void LoadModels()
@@ -259,7 +357,7 @@ namespace GameTranslator
 
         private void ResolveNode()
         {
-            string[] cands = { @"D:\nodejs\node.exe", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\nodejs\node.exe"), @"C:\Program Files\nodejs\node.exe" };
+            string[] cands = { Path.Combine(appDir, "node", "node.exe"), @"D:\nodejs\node.exe", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\nodejs\node.exe"), @"C:\Program Files\nodejs\node.exe" };
             foreach (var c in cands)
                 if (File.Exists(c)) { nodePath = c; return; }
             try
@@ -268,7 +366,7 @@ namespace GameTranslator
                 using (var p = Process.Start(psi)) { p.WaitForExit(3000); if (p.ExitCode == 0) nodePath = "node"; }
             }
             catch { }
-            if (nodePath == "") Log("警告：未找到 node.exe（首选位置 D:\\nodejs\\node.exe），汉化功能将不可用。");
+            if (nodePath == "") Log("警告：未找到 node.exe（已尝试 exe 旁 node\\、D:\\nodejs\\node.exe 等），汉化功能将不可用。");
             else Log("Node: " + nodePath);
             string ruby = Path.Combine(appDir, "ruby", "bin", "ruby.exe");
             if (!File.Exists(ruby)) Log("警告：未找到便携 Ruby（" + ruby + "），VX Ace 游戏将无法汉化。");
@@ -466,6 +564,8 @@ namespace GameTranslator
 
             var modelName = (string)cmbModel.SelectedItem;
             var modelPath = modelMap[modelName];
+            settings.Device = cmbDevice.SelectedIndex == 1 ? "cpu" : "gpu";
+            SaveSettings();
             if (!EnsureLlama(modelPath)) { MessageBox.Show("内置 llama 启动失败，请查看日志"); return; }
 
             busy = true;

@@ -38,7 +38,7 @@ if (Test-Path -LiteralPath $oldApi) {
 # Default settings.json (do not overwrite user config)
 $settings = Join-Path $Dest "settings.json"
 if (-not (Test-Path -LiteralPath $settings)) {
-    '{"ModelDir":"D:\\galtrans","LlamaDir":"D:\\GameTranslator\\llama","Port":18080}' | Set-Content -LiteralPath $settings -Encoding UTF8
+    '{"ModelDir":"D:\\galtrans","LlamaDir":"D:\\GameTranslator\\llama","Device":"gpu","MaxMemoryMB":0,"Port":18080}' | Set-Content -LiteralPath $settings -Encoding UTF8
     Write-Host "Created default settings.json"
 }
 

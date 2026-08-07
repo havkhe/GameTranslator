@@ -1,6 +1,16 @@
 RPG Maker 汉化管理器（GameTranslator.exe） v2.2
 ============================================
 
+【v2.2.2 更新说明】
+  - 内置 llama 改用 Vulkan 后端：新版 CUDA 预编译包已不支持 GTX 10 系
+    （Pascal），会静默退回 CPU；Vulkan 版可让 GTX 1060 等老显卡真正使用 GPU。
+  - 界面新增“运行设备”下拉：显示检测到的真实 CPU / GPU 型号
+    （如 GPU (NVIDIA GeForce GTX 1060 6GB)），可选 GPU 或 CPU 运行；
+    默认 GPU（-ngl 99），CPU 模式不加载显存（-ngl 0）。
+  - 新增 llama 内存硬限制：启动时通过 Windows 任务对象限制进程内存，
+    默认自动 = 总内存 - 4GB（本机 16GB → 上限 12GB），可在 settings.json
+    的 MaxMemoryMB 调整（0=自动）。同时限制 batch 大小降低内存峰值。
+
 【v2.2 更新说明】
   - 内置 llama.cpp（CUDA/GPU）运行时，点“开始汉化”自动加载所选模型，
     无需再手动启动 Ollama；退出软件时自动停止；切换模型自动重启。
@@ -18,7 +28,7 @@ RPG Maker 汉化管理器（GameTranslator.exe） v2.2
 
 二、模型
   - 模型为 GGUF 文件，默认从 D:\galtrans 加载（可改）。
-  - 内置 llama.cpp CUDA 版，自动使用 NVIDIA 显卡推理。
+  - 内置 llama.cpp Vulkan 版，自动使用独立显卡推理（GTX 10 系等老卡可用）。
 
 三、使用方法
   1. 选择盘符点“扫描”，或“选择文件夹”/拖拽 Game.exe 加入游戏列表。
