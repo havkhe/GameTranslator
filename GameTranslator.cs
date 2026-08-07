@@ -49,6 +49,7 @@ namespace GameTranslator
         [DataMember] public string LlamaCacheK = "f16";
         [DataMember] public string LlamaCacheV = "f16";
         [DataMember] public string Prompt = DefaultPrompt;
+        [DataMember] public string LlamaPreset = "auto";
     }
 
     [DataContract]
@@ -97,7 +98,7 @@ namespace GameTranslator
 
         public MainForm()
         {
-            Text = "RPG Maker 汉化管理器 v2.3";
+            Text = "RPG Maker 汉化管理器 v2.3.1";
             Width = 1720;
             Height = 760;
             MinimumSize = new Size(1280, 640);
@@ -147,7 +148,7 @@ namespace GameTranslator
             mSet.DropDownItems.Add("显示/隐藏设置面板", null, (s, e) => ToggleSidePanel());
             var mHelp = new ToolStripMenuItem("帮助(&H)");
             mHelp.DropDownItems.Add("使用说明", null, (s, e) => OpenHelp());
-            mHelp.DropDownItems.Add("关于", null, (s, e) => MessageBox.Show("RPG Maker 汉化管理器 v2.3\n\n内置 llama.cpp 本地翻译引擎\n支持 MV / MZ / VX Ace\n支持自定义 llama 参数与翻译提示词", "关于 GameTranslator"));
+            mHelp.DropDownItems.Add("关于", null, (s, e) => MessageBox.Show("RPG Maker 汉化管理器 v2.3.1\n\n内置 llama.cpp 本地翻译引擎\n支持 MV / MZ / VX Ace\n支持自定义 llama 参数、RTX 预设与翻译提示词", "关于 GameTranslator"));
             menu.Items.AddRange(new ToolStripItem[] { mFile, mTrans, mSet, mHelp });
             MainMenuStrip = menu;
 
@@ -236,6 +237,7 @@ namespace GameTranslator
             btnPromptSettings.Click += (s, e) => OpenSettings(1);
             btnToggleSide.Click += (s, e) => ToggleSidePanel();
             DetectHardware();
+            ApplyOptimalDefaults();
 
             var ctx = new ContextMenuStrip();
             ctx.Items.Add("启动游戏", null, (s, e) => LaunchSelected());
@@ -267,23 +269,31 @@ namespace GameTranslator
         private void OpenSettings(int tab)
         {
             var f = new SettingsForm(settings, tab);
-            if (f.ShowDialog(this) == DialogResult.OK)
+            // 只有点击“保存”才会应用修改；“取消”直接丢弃。
+            if (f.ShowDialog(this) != DialogResult.OK) return;
+            settings = f.Result;
+            NormalizeSettings();
+            SaveSettings();
+            llamaMemLimitMB = settings.MaxMemoryMB > 0 ? settings.MaxMemoryMB : AutoMemLimitMB();
+            var preview = BuildLlamaArgs(Path.Combine(settings.ModelDir, "model.gguf"));
+            Log("llama 设置已保存，当前参数: " + preview);
+            string note;
+            if (llamaProcess != null && !llamaProcess.HasExited)
             {
-                settings = f.Result;
-                NormalizeSettings();
-                SaveSettings();
-                llamaMemLimitMB = settings.MaxMemoryMB > 0 ? settings.MaxMemoryMB : AutoMemLimitMB();
-                if (llamaProcess != null && !llamaProcess.HasExited)
-                {
-                    KillLlama();
-                    Log("设置已保存；llama 已停止，新参数将在下次启动时生效");
-                }
-                else Log("设置已保存（llama 未运行，新参数将在启动时生效）");
+                KillLlama();
+                note = "llama 已停止，将在下次启动/汉化时应用新参数。";
             }
+            else note = "llama 未运行，将在启动时应用新参数。";
+            MessageBox.Show("设置已保存，点击“保存”后才会生效。\n\n当前 llama 参数：\n" + preview + "\n\n" + note, "GameTranslator");
         }
 
         // ---------------- settings ----------------
-        private string SettingsPath() { return Path.Combine(appDir, "settings.json"); }
+        private string SettingsPath()
+        {
+            var p = Path.Combine(appDir, "settings.json");
+            if (File.Exists(p)) return p;
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GameTranslator", "settings.json");
+        }
 
         private void LoadSettings()
         {
@@ -316,16 +326,87 @@ namespace GameTranslator
             if (string.IsNullOrEmpty(settings.LlamaCacheK)) settings.LlamaCacheK = "f16";
             if (string.IsNullOrEmpty(settings.LlamaCacheV)) settings.LlamaCacheV = "f16";
             if (string.IsNullOrWhiteSpace(settings.Prompt)) settings.Prompt = Settings.DefaultPrompt;
+            if (string.IsNullOrEmpty(settings.LlamaPreset)) settings.LlamaPreset = "auto";
         }
 
         private void SaveSettings()
         {
             try
             {
+                var p = SettingsPath();
+                var dir = Path.GetDirectoryName(p);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 var ser = new DataContractJsonSerializer(typeof(Settings));
-                using (var fs = File.Create(SettingsPath())) ser.WriteObject(fs, settings);
+                using (var fs = File.Create(p)) ser.WriteObject(fs, settings);
             }
-            catch (Exception ex) { Log("保存设置失败: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Log("保存设置失败: " + ex.Message);
+                MessageBox.Show("保存设置失败：" + ex.Message + "\n\n请确认程序目录可写（例如不要放在 Program Files 或只读目录）。",
+                    "GameTranslator");
+            }
+        }
+
+        // ---------------- presets / auto-optimize ----------------
+        private bool LlamaFieldsAreDefaults()
+        {
+            return settings.LlamaContext == 4096 && settings.LlamaGpuLayers == 99 &&
+                   settings.LlamaBatch == 512 && settings.LlamaUbatch == 256 &&
+                   settings.LlamaThreads == 0 && settings.LlamaPoll == 0 &&
+                   (settings.LlamaFlashAttn ?? "auto") == "auto" &&
+                   (settings.LlamaCacheK ?? "f16") == "f16" &&
+                   (settings.LlamaCacheV ?? "f16") == "f16";
+        }
+
+        private void ApplyOptimalDefaults()
+        {
+            if (settings.LlamaPreset != "auto") return;
+            bool rtx = gpuName.IndexOf("RTX", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!rtx || !LlamaFieldsAreDefaults()) return;
+            ApplyPreset("rtx");
+            settings.LlamaPreset = "rtx";
+            SaveSettings();
+            Log("检测到 RTX 显卡，已自动应用 RTX 优化参数（FlashAttention + q8_0 KV + 2048/512 批次），可在 设置 → llama 高级设置 修改");
+        }
+
+        private void ApplyPreset(string preset)
+        {
+            if (preset == "rtx")
+            {
+                settings.LlamaContext = 4096;
+                settings.LlamaGpuLayers = 99;
+                settings.LlamaBatch = 2048;
+                settings.LlamaUbatch = 512;
+                settings.LlamaThreads = 4;
+                settings.LlamaPoll = 0;
+                settings.LlamaFlashAttn = "on";
+                settings.LlamaCacheK = "q8_0";
+                settings.LlamaCacheV = "q8_0";
+            }
+            else if (preset == "vram")
+            {
+                settings.LlamaContext = 4096;
+                settings.LlamaGpuLayers = 99;
+                settings.LlamaBatch = 256;
+                settings.LlamaUbatch = 128;
+                settings.LlamaThreads = 2;
+                settings.LlamaPoll = 0;
+                settings.LlamaFlashAttn = "on";
+                settings.LlamaCacheK = "q8_0";
+                settings.LlamaCacheV = "q8_0";
+            }
+            else
+            {
+                settings.LlamaContext = 4096;
+                settings.LlamaGpuLayers = 99;
+                settings.LlamaBatch = 512;
+                settings.LlamaUbatch = 256;
+                settings.LlamaThreads = 0;
+                settings.LlamaPoll = 0;
+                settings.LlamaFlashAttn = "auto";
+                settings.LlamaCacheK = "f16";
+                settings.LlamaCacheV = "f16";
+            }
         }
 
         // ---------------- llama management ----------------
@@ -1290,6 +1371,8 @@ namespace GameTranslator
         private TabControl tabs;
         private NumericUpDown nudCtx, nudNgl, nudBatch, nudUbatch, nudThreads, nudPoll, nudMem, nudPort;
         private ComboBox cmbFa, cmbK, cmbV;
+        private ComboBox cmbPreset;
+        private bool _applyingPreset;
         private TextBox txtPrompt;
 
         public Settings Result { get; private set; }
@@ -1330,6 +1413,12 @@ namespace GameTranslator
             tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
             tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
+            cmbPreset = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+            cmbPreset.Items.AddRange(new object[] { "RTX 高性能", "通用均衡", "省显存", "自定义" });
+            cmbPreset.SelectedIndex = PresetIndex(_work.LlamaPreset);
+            cmbPreset.SelectedIndexChanged += (s, e) => ApplyPresetSelection();
+            AddRow(tbl, "性能预设", cmbPreset, "RTX 高性能 = FlashAttention + q8_0 KV + 2048/512 批次");
+
             nudCtx = Num(512, 65536, _work.LlamaContext);
             nudNgl = Num(0, 999, _work.LlamaGpuLayers);
             nudBatch = Num(32, 8192, _work.LlamaBatch);
@@ -1341,6 +1430,8 @@ namespace GameTranslator
             cmbFa = Combo(new[] { "auto", "on", "off" }, _work.LlamaFlashAttn ?? "auto");
             cmbK = Combo(KvTypes, _work.LlamaCacheK ?? "f16");
             cmbV = Combo(KvTypes, _work.LlamaCacheV ?? "f16");
+            WireCustom(nudCtx); WireCustom(nudNgl); WireCustom(nudBatch); WireCustom(nudUbatch);
+            WireCustom(nudThreads); WireCustom(nudPoll); WireCustom(cmbFa); WireCustom(cmbK); WireCustom(cmbV);
 
             AddRow(tbl, "-c 上下文长度", nudCtx, "建议 4096；越大占显存越多");
             AddRow(tbl, "-ngl GPU 层数", nudNgl, "99 = 全部层进显存；显存不足时降低");
@@ -1420,6 +1511,63 @@ namespace GameTranslator
             tbl.Controls.Add(wrap, 1, row);
         }
 
+        private static int PresetIndex(string preset)
+        {
+            switch (preset)
+            {
+                case "rtx": return 0;
+                case "balanced": return 1;
+                case "vram": return 2;
+                case "custom": return 3;
+                default: return 1; // auto 显示为通用均衡
+            }
+        }
+
+        private static string PresetKey(string sel)
+        {
+            switch (sel)
+            {
+                case "RTX 高性能": return "rtx";
+                case "省显存": return "vram";
+                case "通用均衡": return "balanced";
+                default: return "custom";
+            }
+        }
+
+        private void ApplyPresetSelection()
+        {
+            var sel = (string)cmbPreset.SelectedItem;
+            _applyingPreset = true;
+            try
+            {
+                if (sel == "RTX 高性能") SetControls(4096, 99, 2048, 512, 4, 0, "on", "q8_0", "q8_0");
+                else if (sel == "省显存") SetControls(4096, 99, 256, 128, 2, 0, "on", "q8_0", "q8_0");
+                else if (sel == "通用均衡") SetControls(4096, 99, 512, 256, 0, 0, "auto", "f16", "f16");
+            }
+            finally { _applyingPreset = false; }
+        }
+
+        private void SetControls(int ctx, int ngl, int b, int ub, int t, int poll, string fa, string k, string v)
+        {
+            nudCtx.Value = ctx; nudNgl.Value = ngl; nudBatch.Value = b; nudUbatch.Value = ub;
+            nudThreads.Value = t; nudPoll.Value = poll;
+            cmbFa.SelectedItem = fa; cmbK.SelectedItem = k; cmbV.SelectedItem = v;
+        }
+
+        private void WireCustom(Control c)
+        {
+            var n = c as NumericUpDown;
+            if (n != null) { n.ValueChanged += (s, e) => MarkCustom(); return; }
+            var cb = c as ComboBox;
+            if (cb != null) cb.SelectedIndexChanged += (s, e) => MarkCustom();
+        }
+
+        private void MarkCustom()
+        {
+            if (_applyingPreset || cmbPreset == null) return;
+            if ((string)cmbPreset.SelectedItem != "自定义") cmbPreset.SelectedItem = "自定义";
+        }
+
         private bool Collect()
         {
             _work.LlamaContext = (int)nudCtx.Value;
@@ -1434,20 +1582,16 @@ namespace GameTranslator
             _work.Port = (int)nudPort.Value;
             _work.MaxMemoryMB = (int)nudMem.Value;
             _work.Prompt = string.IsNullOrWhiteSpace(txtPrompt.Text) ? Settings.DefaultPrompt : txtPrompt.Text;
+            _work.LlamaPreset = PresetKey((string)cmbPreset.SelectedItem);
             return true;
         }
 
         private void ResetLlamaDefaults()
         {
-            nudCtx.Value = 4096;
-            nudNgl.Value = 99;
-            nudBatch.Value = 512;
-            nudUbatch.Value = 256;
-            nudThreads.Value = 0;
-            nudPoll.Value = 0;
-            cmbFa.SelectedItem = "auto";
-            cmbK.SelectedItem = "f16";
-            cmbV.SelectedItem = "f16";
+            cmbPreset.SelectedItem = "通用均衡";
+            _applyingPreset = true;
+            SetControls(4096, 99, 512, 256, 0, 0, "auto", "f16", "f16");
+            _applyingPreset = false;
             nudPort.Value = 18080;
             nudMem.Value = 0;
         }
@@ -1471,7 +1615,8 @@ namespace GameTranslator
                 LlamaFlashAttn = src.LlamaFlashAttn,
                 LlamaCacheK = src.LlamaCacheK,
                 LlamaCacheV = src.LlamaCacheV,
-                Prompt = src.Prompt
+                Prompt = src.Prompt,
+                LlamaPreset = src.LlamaPreset
             };
         }
     }
