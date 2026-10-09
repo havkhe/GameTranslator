@@ -1219,6 +1219,12 @@ function splitMultilineEntries(list) {
 
 function packGroups(list) {
   const groups = [];
+  // A group may add more lines while it holds only *parts* (no complete entry):
+  // the parts of one entry must travel in the same request, and short parts may
+  // share that request with other entries. Once a whole entry is in the group,
+  // close it — appending a lone part after a complete entry would strand that
+  // part's siblings.
+  const canAdd = (g) => g.every((x) => x.part);
   for (const e of splitMultilineEntries(list)) {
     if (e.text.length > SINGLE_CHARS) {
       const parts = splitLongText(e.text, SINGLE_CHARS);
@@ -1227,7 +1233,7 @@ function packGroups(list) {
     }
     const last = groups[groups.length - 1];
     const lastChars = last ? last.reduce((a, x) => a + x.text.length, 0) : Infinity;
-    if (last && last.length < BATCH && lastChars + e.text.length <= BATCH_CHARS && !last[0].part) last.push(e);
+    if (last && last.length < BATCH && lastChars + e.text.length <= BATCH_CHARS && canAdd(last)) last.push(e);
     else groups.push([e]);
   }
   return groups;
