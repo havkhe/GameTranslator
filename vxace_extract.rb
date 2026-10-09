@@ -1,8 +1,29 @@
 # vxace_extract.rb <dataDir> <outJson>
-# Load every *.rvdata2, walk the object graph, collect translatable Japanese
-# strings, and write [{id, file, path, text}] as UTF-8 JSON.
+# Load every *.rvdata2 (VX Ace) / *.rvdata (VX), walk the object graph, collect
+# translatable Japanese strings, and write [{id, file, path, text}] as UTF-8 JSON.
+# Both engines use the same Ruby Marshal layout (only the file extension and
+# archive container differ), so one walker covers them.
 require "json"
 require_relative "vxace_stubs"
+
+# Data file extensions by engine. VX Ace = .rvdata2, VX = .rvdata.
+DATA_EXT_RE = /\.rvdata2?\z/i
+# `Scripts` holds the game's Ruby source, never player-visible text.
+def script_file?(base)
+  base.match?(/\AScripts\.rvdata2?\z/i)
+end
+
+# NOTE: deliberately not `Dir[...]` globbing. Game folders routinely contain
+# glob metacharacters (`[輪々処] …`), and a literal `[...]` in the path makes
+# Ruby treat it as a character class, silently matching zero files.
+def data_files(dir)
+  return [] unless File.directory?(dir)
+  Dir.children(dir)
+     .select { |f| f.match?(DATA_EXT_RE) }
+     .reject { |f| script_file?(f) }
+     .map { |f| File.join(dir, f) }
+     .sort
+end
 
 # Fields that hold player-visible text. Must stay identical to the list in
 # vxace_patch.rb: a field collected here but not patched there (or vice versa)
@@ -50,8 +71,8 @@ def main
   out_json = ARGV[1]
   raise "usage: vxace_extract.rb <dataDir> <outJson>" unless data_dir && out_json
 
-  files = Dir[File.join(data_dir, "*.rvdata2")].sort.reject { |f| File.basename(f).match?(/\AScripts\.rvdata2\z/i) }
-  raise "no .rvdata2 files in #{data_dir}" if files.empty?
+  files = data_files(data_dir)
+  raise "no .rvdata2/.rvdata files in #{data_dir}" if files.empty?
 
   entries = []
   text_ids = {}
@@ -133,7 +154,7 @@ def main
         end
       end
     end
-    walk.call(obj, File.basename(fp, ".rvdata2"))
+    walk.call(obj, File.basename(fp).sub(/\.rvdata2?\z/i, ""))
   end
 
   File.write(out_json, JSON.generate(entries), encoding: Encoding::UTF_8)

@@ -1,9 +1,27 @@
 # vxace_patch.rb <dataDir> <extractJson> <translationsJson> [reportJson]
-# Replace translated strings inside every *.rvdata2 (marshal round-trip).
-# The translation cache is keyed by the normalized source text (v2.4+); older
-# id-keyed caches are still accepted so existing progress is not lost.
+# Replace translated strings inside every *.rvdata2 (VX Ace) / *.rvdata (VX)
+# (marshal round-trip). The translation cache is keyed by the normalized source
+# text (v2.4+); older id-keyed caches are still accepted so existing progress is
+# not lost.
 require "json"
 require_relative "vxace_stubs"
+
+# Must match vxace_extract.rb exactly (see the comment there).
+DATA_EXT_RE = /\.rvdata2?\z/i
+
+def script_file?(base)
+  base.match?(/\AScripts\.rvdata2?\z/i)
+end
+
+# See the note in vxace_extract.rb: no globbing, paths may contain `[...]`.
+def data_files(dir)
+  return [] unless File.directory?(dir)
+  Dir.children(dir)
+     .select { |f| f.match?(DATA_EXT_RE) }
+     .reject { |f| script_file?(f) }
+     .map { |f| File.join(dir, f) }
+     .sort
+end
 
 # Must match vxace_extract.rb exactly (see the comment there).
 TEXT_IVARS = %w[@name @nickname @description @profile
@@ -67,7 +85,7 @@ def main
     end
   end
 
-  files = Dir[File.join(data_dir, "*.rvdata2")].sort.reject { |f| File.basename(f).match?(/\AScripts\.rvdata2\z/i) }
+  files = data_files(data_dir)
   replaced = 0
   missing = 0
   errors = []
@@ -169,7 +187,7 @@ def main
   if report_json
     begin
       File.write(report_json, JSON.generate({
-        "engine" => "VXAce",
+        "engine" => files.any? { |f| f.downcase.end_with?(".rvdata") } ? "VX" : "VXAce",
         "replacedStrings" => replaced,
         "translatedEntries" => text_map.size,
         "entriesWithoutTextKey" => missing,

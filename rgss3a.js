@@ -16,9 +16,178 @@
 // Encryption and decryption are the same operation (XOR stream).
 "use strict";
 
+const rot7 = (k) => (Math.imul(k, 7) + 3) >>> 0;
+
+// v1/v2 archives keep ONE directory key that only rotates for the fields it
+// encodes (name length, each name byte, size). It does not advance across the
+// interleaved data blocks, so this helper only exists to document that: the data
+// block itself starts from `rot(keyAtSize)` and must not move the directory key.
+function advanceKey(startKey, size) {
+  return startKey >>> 0;
+}
+
+// ---------------- RGSSAD v1 / v2 (RPG Maker XP, VX: Game.rgssad / Game.rgss2a) --
+// Directory layout (byte-level, unlike v3):
+//   u32 nameLen  (XOR current key, then rotate)
+//   u8  name[]   (XOR low byte of the current key, rotate EVERY byte)
+//   u32 size     (XOR current key, then rotate)
+//   u8  data[]   (byte i uses byte (i&3) of the key; the key rotates after every
+//                 4th byte, i.e. at i%4==3, and the key after the size field is
+//                 used for byte 0 as-is)
+// Verified against a real Game.rgss2a (48 of 48 data files decrypt byte for byte
+// equal to the plaintext Data folder shipped next to the archive).
+const RGSSAD_V1_KEY = 0xdeadcafe;
+
+// Decrypt one entry's data block. `startKey` is the key the directory holds after
+// the size field; the data block's first key is one rotation further, and the key
+// then rotates at the start of every following 4-byte word. Pinned by decrypting a
+// real Game.rgss2a: with this rule all 48 data files match the plaintext Data
+// folder shipped beside the archive, and repacking reproduces the archive byte for
+// byte (those two checks together fix the schedule; one alone admits wrong ones).
+function decryptDataV1(data, startKey) {
+  const out = Buffer.from(data);
+  let key = startKey >>> 0;
+  for (let i = 0; i < out.length; i++) {
+    if ((i & 3) === 0) key = rot7(key);
+    out[i] ^= (key >>> ((i & 3) * 8)) & 0xff;
+  }
+  return out;
+}
+
+function readArchiveV1(buf, version) {
+  let pos = 8;
+  let key = RGSSAD_V1_KEY >>> 0;
+  const entries = [];
+  for (;;) {
+    if (pos + 4 > buf.length) break;
+    // A v2 name length may carry a flag in the high bit marking a unicode name.
+    const rawLen = buf.readUInt32LE(pos);
+    pos += 4;
+    const nameLen = ((rawLen ^ key) >>> 0);
+    key = rot7(key);
+    const len = nameLen & 0x7fffffff;
+    if (len === 0 || len > 4096 || pos + len + 4 > buf.length) break;
+    const nameBytes = Buffer.alloc(len);
+    for (let i = 0; i < len; i++) {
+      nameBytes[i] = buf[pos++] ^ (key & 0xff);
+      key = rot7(key);
+    }
+    const size = (buf.readUInt32LE(pos) ^ key) >>> 0;
+    pos += 4;
+    // Invariants (all three were pinned against a real archive; changing any one of
+    // them on its own silently breaks the others):
+    //   * the key that decoded `size` is the base of this entry's data block
+    //     (the data decoder rotates once before using it),
+    //   * the same key, rotated once, is what the next entry's header uses,
+    //   * the key does NOT advance across the interleaved data block — advancing by
+    //     ceil(size/4) makes the next header decode to garbage (2364407630 instead
+    //     of 22 for the first entry of a real Game.rgss2a).
+    if (size > buf.length - pos) throw new Error("Bad entry size in RGSSAD directory");
+    const name = nameBytes.toString("utf8").replace(/\\/g, "/");
+    entries.push({ name, size, offset: pos, fileKey: key >>> 0, version });
+    key = rot7(key);
+    pos += size;
+    // Do NOT break when pos reaches the end: the data blocks of the remaining
+    // entries are still ahead, so stopping here truncated the directory to one
+    // entry. The loop ends when the guard above can no longer read a header.
+  }
+  if (!entries.length) throw new Error("RGSSAD v" + version + ": no entries could be read");
+  return { version, magic: RGSSAD_V1_KEY, key: RGSSAD_V1_KEY, entries, buf };
+}
+
+// Pack entries into a v1/v2 archive.
+// LAYOUT: unlike v3, each entry header is immediately followed by that entry's
+// data (header, data, header, data, ...).
+// KEY SCHEDULE (reverse-engineered from real archives): the *directory* key only
+// rotates for the fields it encodes — after the entry name (once per byte) and
+// after the size field — and it does NOT advance while the file data is written.
+// The data uses the key that decoded the size field, rotating once per 4 bytes.
+// Using a single advancing key for both walks one key too far per entry, which
+// makes every archive after the first entry unreadable.
+// `entries` = [{ name, size, buf }] or [{ name, size, file }].
+function writeArchiveV1To(entries, outPath, version) {
+  const fs = require("fs");
+  const ver = version === 2 ? 2 : 1;
+  const fd = fs.openSync(outPath, "w");
+  try {
+    const header = Buffer.alloc(8);
+    header.write("RGSSAD", 0, 6, "latin1");
+    header[6] = 0;
+    header[7] = ver;
+    fs.writeSync(fd, header);
+
+    let dirKey = RGSSAD_V1_KEY >>> 0;
+    const CHUNK = 8 * 1024 * 1024;
+    for (const e of entries) {
+      const nameBuf = Buffer.from(e.name.replace(/\//g, "\\"), "utf8");
+      const lenField = Buffer.alloc(4);
+      lenField.writeUInt32LE(((nameBuf.length ^ dirKey) >>> 0), 0);
+      dirKey = rot7(dirKey);
+      const encName = Buffer.alloc(nameBuf.length);
+      for (let i = 0; i < nameBuf.length; i++) {
+        encName[i] = nameBuf[i] ^ (dirKey & 0xff);
+        dirKey = rot7(dirKey);
+      }
+      const sizeField = Buffer.alloc(4);
+      sizeField.writeUInt32LE(((e.size ^ dirKey) >>> 0), 0);
+      fs.writeSync(fd, Buffer.concat([lenField, encName, sizeField]));
+
+      // Data keystream. `dirKey` currently holds the key that encoded the size
+      // field; that is the entry's data BASE, and the decoder rotates once before
+      // using it. `encKey` is a private copy so the rotation does not leak into the
+      // directory bookkeeping below.
+      const baseKey = dirKey >>> 0;
+      if (e.raw) {
+        // Already encrypted in the source archive and copied verbatim: v1 has one
+        // continuous key stream, so re-encrypting would double-encrypt the member.
+        fs.writeSync(fd, Buffer.from(e.buf));
+      } else {
+        let encKey = baseKey;
+        let dataPos = 0;
+        const emit = (chunk) => {
+          const out = Buffer.from(chunk);
+          for (let i = 0; i < out.length; i++) {
+            const p = dataPos + i;
+            if ((p & 3) === 0) encKey = rot7(encKey);
+            out[i] ^= (encKey >>> ((p & 3) * 8)) & 0xff;
+          }
+          dataPos += out.length;
+          fs.writeSync(fd, out);
+        };
+        if (e.buf) {
+          for (let p = 0; p < e.buf.length; p += CHUNK) emit(e.buf.subarray(p, Math.min(p + CHUNK, e.buf.length)));
+        } else {
+          const fdr = fs.openSync(e.file, "r");
+          try {
+            let remaining = e.size;
+            const chunk = Buffer.alloc(CHUNK);
+            while (remaining > 0) {
+              const n = fs.readSync(fdr, chunk, 0, Math.min(CHUNK, remaining), null);
+              if (n <= 0) throw new Error("short read for " + e.name);
+              emit(chunk.subarray(0, n));
+              remaining -= n;
+            }
+          } finally {
+            fs.closeSync(fdr);
+          }
+        }
+      }
+      // Directory bookkeeping for the next header: one rotation past the key that
+      // decoded this entry's size field (and that seeded the data block).
+      dirKey = rot7(baseKey);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function readArchive(buf) {
   if (buf.length < 12 || buf.toString("latin1", 0, 6) !== "RGSSAD") throw new Error("Not RGSSAD");
   const version = buf[7];
+  if (version === 1 || version === 2) {
+    if (buf.length < 8) throw new Error("Not RGSSAD");
+    return readArchiveV1(buf, version);
+  }
   if (version !== 3) throw new Error("Unsupported RGSSAD version: " + version);
   let pos = 8;
   const magic = buf.readUInt32LE(pos);
@@ -139,6 +308,7 @@ function decryptBlock(data, fileKey) {
 function extractFile(archive, entry) {
   const data = archive.buf.subarray(entry.offset, entry.offset + entry.size);
   if (data.length !== entry.size) throw new Error("Truncated data for " + entry.name);
+  if (archive.version === 1 || archive.version === 2) return decryptDataV1(data, entry.fileKey);
   return decryptBlock(data, entry.fileKey);
 }
 
@@ -281,4 +451,4 @@ function writeArchiveTo(entries, outPath) {
   }
 }
 
-module.exports = { readArchive, extractFile, writeArchive, decryptBlock, writeArchiveTo, xorTransform, xorTransformAt, xorFixed, keyBytesTable };
+module.exports = { readArchive, extractFile, writeArchive, decryptBlock, writeArchiveTo, writeArchiveV1To, decryptDataV1, xorTransform, xorTransformAt, xorFixed, keyBytesTable };

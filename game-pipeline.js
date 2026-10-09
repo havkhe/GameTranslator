@@ -15,7 +15,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const { spawnSync } = require("child_process");
-const { readArchive, extractFile, writeArchiveTo } = require("./rgss3a.js");
+const { readArchive, extractFile, writeArchiveTo, writeArchiveV1To } = require("./rgss3a.js");
 
 const GAME_DIR = process.argv[2];
 const MODEL = process.argv[3] || "model";
@@ -157,23 +157,45 @@ function findDataDir(dir) {
   return null;
 }
 
+// RGSS family archive names. VX Ace packs into Game.rgss3a (RGSSAD v3), VX into
+// Game.rgss2a (v1/v2), XP into Game.rgssad (v1/v2).
+const ARCHIVE_NAMES = ["Game.rgss3a", "Game.rgss2a", "Game.rgssad"];
+function findArchive(dir) {
+  for (const n of ARCHIVE_NAMES) {
+    const p = path.join(dir, n);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function detectEngine(dir) {
-  // VX Ace archives win over a stray Data/ folder, but a `data/*.json` tree is
-  // always MV/MZ (Windows paths are case-insensitive, so `data` == `Data`; the
+  // VX/Wolf-era archives win over a stray Data/ folder, but a `data/*.json` tree
+  // is always MV/MZ (Windows paths are case-insensitive, so `data` == `Data`; the
   // file extension is what distinguishes the engines).
   const loose = path.join(dir, "Data");
-  const vxLoose = (() => {
+  const dataExts = (() => {
     try {
-      return fs.existsSync(loose) && fs.readdirSync(loose).some((f) => f.endsWith(".rvdata2"));
+      if (!fs.existsSync(loose)) return [];
+      return fs.readdirSync(loose).map((f) => f.toLowerCase());
     } catch (e) {
-      return false;
+      return [];
     }
   })();
   const jsonData = findDataDir(dir);
   if (jsonData) return { kind: "MV", dataDir: jsonData };
-  const archive = path.join(dir, "Game.rgss3a");
-  if (fs.existsSync(archive)) return { kind: "VXAce", dataDir: null, isPacked: true, archive };
-  if (vxLoose) return { kind: "VXAce", dataDir: loose, isPacked: false, archive: null };
+  const archive = findArchive(dir);
+  if (archive) {
+    // The filename alone does not decide the engine: read the version byte.
+    let version = 0;
+    try {
+      version = fs.readFileSync(archive).readUInt8(7);
+    } catch (e) {}
+    const kind = version === 3 ? "VXAce" : "VX";
+    return { kind, dataDir: null, isPacked: true, archive, archiveVersion: version };
+  }
+  if (dataExts.some((f) => f.endsWith(".rvdata2"))) return { kind: "VXAce", dataDir: loose, isPacked: false, archive: null };
+  if (dataExts.some((f) => f.endsWith(".rvdata"))) return { kind: "VX", dataDir: loose, isPacked: false, archive: null };
+  if (dataExts.some((f) => f.endsWith(".rxdata"))) return { kind: "XP", dataDir: loose, isPacked: false, archive: null };
   return null;
 }
 
@@ -185,8 +207,9 @@ function ensureBackup(engine) {
     fs.cpSync(engine.dataDir, BAK_DIR, { recursive: true });
     console.log("BACKUP_CREATED " + BAK_DIR);
   } else if (engine.isPacked) {
-    fs.copyFileSync(engine.archive, path.join(BAK_DIR, "Game.rgss3a"));
-    console.log("BACKUP_CREATED " + path.join(BAK_DIR, "Game.rgss3a"));
+    // Keep the original archive name: VX uses Game.rgss2a, VX Ace Game.rgss3a.
+    fs.copyFileSync(engine.archive, path.join(BAK_DIR, path.basename(engine.archive)));
+    console.log("BACKUP_CREATED " + path.join(BAK_DIR, path.basename(engine.archive)));
   } else {
     fs.cpSync(engine.dataDir, path.join(BAK_DIR, "Data"), { recursive: true });
     console.log("BACKUP_CREATED " + path.join(BAK_DIR, "Data"));
@@ -202,9 +225,12 @@ function writeRestoreBat() {
     "chcp 65001 >nul",
     "taskkill /f /im Game.exe >nul 2>&1",
     'cd /d "%~dp0"',
-    'if exist "data_原版备份\\Game.rgss3a" (',
-    '  del /f /q "Game.rgss3a" >nul 2>&1',
-    '  copy /y "data_原版备份\\Game.rgss3a" "Game.rgss3a" >nul',
+    // every RGSS container name (v3 for VX Ace, v1/v2 for VX/XP)
+    'for %%A in (Game.rgss3a Game.rgss2a Game.rgssad) do (',
+    '  if exist "data_原版备份\\%%A" (',
+    '    del /f /q "%%A" >nul 2>&1',
+    '    copy /y "data_原版备份\\%%A" "%%A" >nul',
+    '  )',
     ')',
     'if exist "data_原版备份\\Data" (',
     '  if exist "Data" rmdir /s /q "Data"',
@@ -485,6 +511,10 @@ function unpackVxAce(engine, vxWork, sourceArchive) {
     fs.mkdirSync(path.dirname(fp), { recursive: true });
     fs.writeFileSync(fp, data);
   }
+  // Remember which container format we unpacked so repacking uses the same one
+  // (v1/v2 vs v3). Older work dirs without this file default to v3.
+  fs.writeFileSync(path.join(vxWork, "archive.json"),
+    JSON.stringify({ name: path.basename(archive), version: arch.version }));
   fs.writeFileSync(manifestPath, JSON.stringify(manifest));
   return { outDir, manifestPath };
 }
@@ -505,17 +535,26 @@ function repackVxAce(engine, vxWork) {
       const fp = path.join(outDir, rel);
       const st = fs.statSync(fp);
       entries.push({ name: m.name, size: st.size, file: fp });
+    } else if (arch.version === 1 || arch.version === 2) {
+      // v1/v2 has ONE continuous key stream over the whole archive, so the raw
+      // bytes of an already-encrypted member cannot be re-encrypted (that would
+      // double-encrypt them). They must be copied through verbatim — which is
+      // exactly what the writer does for `raw: true` entries.
+      const raw = Buffer.from(origBuf.subarray(orig.offset, orig.offset + orig.size));
+      entries.push({ name: m.name, size: orig.size, buf: raw, raw: true });
     } else {
       // Non-data members (Graphics/Audio) are already encrypted in the source
       // archive; copy their raw bytes instead of decrypting and re-encrypting
-      // hundreds of megabytes for nothing.
+      // hundreds of megabytes for nothing. v3 keys each entry independently, so
+      // re-encrypting the raw bytes is a no-op there.
       const raw = origBuf.subarray(orig.offset, orig.offset + orig.size);
       entries.push({ name: m.name, size: orig.size, buf: raw });
     }
   }
   const outTmp = engine.archive + ".new";
   console.log("REPACKING " + engine.archive);
-  writeArchiveTo(entries, outTmp);
+  if (arch.version === 1 || arch.version === 2) writeArchiveV1To(entries, outTmp, arch.version);
+  else writeArchiveTo(entries, outTmp);
   fs.renameSync(outTmp, engine.archive);
 }
 
@@ -1641,9 +1680,11 @@ async function translate(entries) {
     }
     entries = extractVxAce(dataDir);
 
-    // Pristine VX Ace source for the quality pass: the backed-up archive, or a
-    // second extraction from the backed-up Data folder.
-    const bakArchive = path.join(BAK_DIR, "Game.rgss3a");
+    // Pristine VX Ace / VX source for the quality pass: the backed-up archive, or
+    // a second extraction from the backed-up Data folder.
+    const bakArchive = engine.archive
+      ? path.join(BAK_DIR, path.basename(engine.archive))
+      : path.join(BAK_DIR, "Game.rgss3a");
     const bakData = path.join(BAK_DIR, "Data");
     try {
       if (fs.existsSync(bakArchive)) {
