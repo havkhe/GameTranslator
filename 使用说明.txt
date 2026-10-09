@@ -2,7 +2,31 @@ RPG Maker 汉化管理器（GameTranslator.exe） v2.4
 ==============================================
 
 【v2.4 更新说明 —— 修复"断点续翻"、"已汉化"误判，以及"卡住"问题】
+  - 抽取范围修正（重要）：以前只扫描 data 目录**根层**的 json，且只认
+    name/description/message1… 这些固定字段名。实测发现不少多语言 MZ 游戏把
+    **全部剧本**放在 data\resources\<语言>\*.json（用插件自己的键名，
+    如 Hiroka_HEV1_000、SYSTEM_TITLE_ITEM_NEWGAME），旧版会**一条都抽不到**，
+    于是"汉化完成但游戏里还是日文"。现在：
+      · 递归扫描 data 下所有子目录（含 resources\<语言>\、js\plugins\ 等）；
+      · resources 下的文件按"显示文本"处理，所有字符串值都是候选，
+        但 metadata（语言/游戏名）块、素材路径、纯 ASCII 标识符**不动**；
+      · 抽取与回写共用同一份文件清单，扫到的文件就是会被写回的文件。
+    实测某游戏：抽取 2809 → 9323 条（另一款 12 714 条，其中 8953 条来自
+    resources）；英文语系（en-US）、备份目录（如 バックアップ、备份）不翻。
   - 抽取覆盖扩大（MV/MZ 与 VX Ace 同步）：
+      · MV/MZ 新增 message3/message4、displayName、currencyUnit、title、
+        terms.hint 等字段，以及运行中改名指令 320/324/325；
+      · 插件参数里的显示文本也会翻译（data\plugins.js 等），插件标识符与
+        <Icon: 5> 这类 ASCII 标记原样保留；
+      · VX Ace 新增 @note 与 @display_name；
+      · 数据库的 note 字段（MV/MZ）**故意不翻**：插件会把它当元数据解析，
+        翻译会破坏插件功能。
+  - 本工具**支持的游戏类型**（其余类型目前无法处理，会在日志里说明）：
+      · 支持：RPG Maker MV / MZ（含 www\data 与根目录 data 两种布局）、
+        RPG Maker VX Ace（Data\*.rvdata2，或未解包的 Game.rgss3a 自动解包）
+      · 不支持：RPG Maker VX（Data\*.rvdata / Game.rgss2a）、
+        RPG Maker XP（*.rxdata / Game.rgssad）、RPG Maker 2000/2003、
+        Wolf RPG（data.wolf）、Unity 等非 RPG Maker 引擎
       · MV/MZ 新增 message3/message4、displayName、currencyUnit、title、
         terms.hint 等字段，以及运行中改名指令 320/324/325；
       · 插件参数里的显示文本也会翻译（data\plugins.js 等），插件标识符与
