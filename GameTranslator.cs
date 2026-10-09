@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -23,6 +23,10 @@ namespace GameTranslator
         public string Status = "待汉化";
         public bool AlreadyCn;
         public long DataBytes;
+        // Where the engine data lives and how the game is laid out; both are
+        // needed to back up / restore the right folder.
+        public string DataDir;       // absolute path of the json data folder
+        public bool RootLayout;      // true when data/ sits next to Game.exe (no www/)
     }
 
     [DataContract]
@@ -98,7 +102,7 @@ namespace GameTranslator
 
         public MainForm()
         {
-            Text = "RPG Maker 汉化管理器 v2.3.2";
+            Text = "RPG Maker 汉化管理器 v2.4";
             Width = 1720;
             Height = 760;
             MinimumSize = new Size(1280, 640);
@@ -148,7 +152,7 @@ namespace GameTranslator
             mSet.DropDownItems.Add("显示/隐藏设置面板", null, (s, e) => ToggleSidePanel());
             var mHelp = new ToolStripMenuItem("帮助(&H)");
             mHelp.DropDownItems.Add("使用说明", null, (s, e) => OpenHelp());
-            mHelp.DropDownItems.Add("关于", null, (s, e) => MessageBox.Show("RPG Maker 汉化管理器 v2.3.2\n\n内置 llama.cpp 本地翻译引擎\n支持 MV / MZ / VX Ace\n支持自定义 llama 参数、RTX 预设与翻译提示词", "关于 GameTranslator"));
+            mHelp.DropDownItems.Add("关于", null, (s, e) => MessageBox.Show("RPG Maker 汉化管理器 v2.4\n\n内置 llama.cpp 本地翻译引擎\n支持 MV / MZ / VX Ace\n支持自定义 llama 参数、RTX 预设与翻译提示词", "关于 GameTranslator"));
             menu.Items.AddRange(new ToolStripItem[] { mFile, mTrans, mSet, mHelp });
             MainMenuStrip = menu;
 
@@ -708,14 +712,29 @@ namespace GameTranslator
 
         private GameItem Detect(string dir)
         {
-            var www = Path.Combine(dir, "www");
-            var data = Path.Combine(www, "data");
+            // MV/MZ data can live in www\data or directly in the game root (NW.js
+            // packaged MZ builds). VX Ace uses Data\*.rvdata2 or Game.rgss3a.
+            var dataDir = FindJsonDataDir(dir);
             string kind = null;
-            if (File.Exists(Path.Combine(www, "js", "rpg_core.js")) && Directory.Exists(data)) kind = "MV";
-            else if (File.Exists(Path.Combine(www, "js", "rmmz_core.js")) && Directory.Exists(data)) kind = "MZ";
-            else if (File.Exists(Path.Combine(dir, "Game.rgss3a")) || (Directory.Exists(Path.Combine(dir, "Data")) && Directory.GetFiles(Path.Combine(dir, "Data"), "*.rvdata2").Length > 0))
+            bool rootLayout = false;
+            if (dataDir != null)
+            {
+                rootLayout = string.Equals(dataDir, Path.Combine(dir, "data"), StringComparison.OrdinalIgnoreCase);
+                bool mz = File.Exists(Path.Combine(dir, "js", "rmmz_core.js")) ||
+                          (rootLayout && File.Exists(Path.Combine(dir, "js", "rmmz_core.js")));
+                if (mz) kind = "MZ";
+                else if (File.Exists(Path.Combine(dir, "www", "js", "rpg_core.js")) || rootLayout) kind = "MV";
+                else kind = "MV";
+            }
+            else if (File.Exists(Path.Combine(dir, "Game.rgss3a")) ||
+                     (Directory.Exists(Path.Combine(dir, "Data")) && Directory.GetFiles(Path.Combine(dir, "Data"), "*.rvdata2").Length > 0))
+            {
                 kind = "VXAce";
+                var vxData = Path.Combine(dir, "Data");
+                if (Directory.Exists(vxData)) { dataDir = vxData; rootLayout = true; }
+            }
             if (kind == null) return null;
+            if (kind == "VXAce") rootLayout = true;
 
             long bytes = 0;
             try
@@ -726,33 +745,64 @@ namespace GameTranslator
                     if (File.Exists(arch)) bytes = new FileInfo(arch).Length;
                     else foreach (var f in Directory.GetFiles(Path.Combine(dir, "Data"), "*.rvdata2")) bytes += new FileInfo(f).Length;
                 }
-                else foreach (var f in Directory.GetFiles(data, "*.json")) bytes += new FileInfo(f).Length;
+                else if (dataDir != null) foreach (var f in Directory.GetFiles(dataDir, "*.json")) bytes += new FileInfo(f).Length;
             }
             catch { }
-            int cn = 0, kana = 0;
+
+            bool already = IsAlreadyTranslated(dir, kind, dataDir);
+            return new GameItem
+            {
+                Dir = dir, Kind = kind, DataBytes = bytes, AlreadyCn = already,
+                DataDir = dataDir, RootLayout = rootLayout,
+                Status = already ? "已汉化(跳过)" : "待汉化"
+            };
+        }
+
+        // The json data folder for MV/MZ: www\data first, then <root>\data (NW.js
+        // packaged MZ builds ship the data folder next to Game.exe).
+        private static string FindJsonDataDir(string dir)
+        {
+            foreach (var cand in new[]
+            {
+                Path.Combine(dir, "www", "data"),
+                Path.Combine(dir, "data"),
+                Path.Combine(dir, "Data"),
+            })
+            {
+                try
+                {
+                    if (Directory.Exists(cand) && Directory.GetFiles(cand, "*.json").Length > 0) return cand;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        // "Already translated" must be decided from the data that is actually in
+        // the game *now*, never from the mere existence of a backup folder: a user
+        // who ran 卸载汉化(还原原版) still has data_原版备份 and would otherwise be
+        // skipped forever.
+        private static bool IsAlreadyTranslated(string dir, string kind, string dataDir)
+        {
+            if (kind == "VXAce") return false; // packed binary data: let 检查翻译 decide
+            if (dataDir == null) return false;
+            long cn = 0, kana = 0;
             try
             {
-                IEnumerable<string> files;
-                if (kind == "VXAce") files = Directory.GetFiles(Path.Combine(dir, "Data"), "*.rvdata2");
-                else files = Directory.GetFiles(data, "*.json");
                 long budget = 8L * 1024 * 1024, used = 0;
-                foreach (var f in files)
+                foreach (var f in Directory.GetFiles(dataDir, "*.json"))
                 {
                     var fi = new FileInfo(f);
-                    long sz = fi.Length;
+                    if (used >= budget) break;
                     string t;
-                    if (used + sz > budget)
+                    long take = Math.Min(budget - used, fi.Length);
+                    using (var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                     {
-                        using (var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                        {
-                            int take = (int)Math.Min(budget - used, sz);
-                            var buf = new byte[take];
-                            fs.Read(buf, 0, take);
-                            t = Encoding.UTF8.GetString(buf);
-                        }
-                        used = budget;
+                        var buf = new byte[take];
+                        int n = fs.Read(buf, 0, buf.Length);
+                        t = Encoding.UTF8.GetString(buf, 0, n);
                     }
-                    else { t = File.ReadAllText(f, Encoding.UTF8); used += sz; }
+                    used += take;
                     foreach (var ch in t)
                     {
                         int c = (int)ch;
@@ -762,10 +812,8 @@ namespace GameTranslator
                     if (used >= budget) break;
                 }
             }
-            catch { }
-            bool hasBackup = Directory.Exists(Path.Combine(dir, "data_原版备份"));
-            bool already = hasBackup || (cn > 500 && kana < cn * 0.2);
-            return new GameItem { Dir = dir, Kind = kind, DataBytes = bytes, AlreadyCn = already, Status = already ? "已汉化(跳过)" : "待汉化" };
+            catch { return false; }
+            return cn > 500 && kana < cn * 0.2;
         }
 
         private void ChooseScanFolder()
@@ -1077,7 +1125,7 @@ namespace GameTranslator
                     if (File.Exists(arch)) File.Copy(arch, Path.Combine(bak, "Game.rgss3a"));
                     else if (Directory.Exists(Path.Combine(g.Dir, "Data"))) CopyDir(Path.Combine(g.Dir, "Data"), Path.Combine(bak, "Data"));
                 }
-                else CopyDir(Path.Combine(g.Dir, "www", "data"), bak);
+                else CopyDir(string.IsNullOrEmpty(g.DataDir) ? Path.Combine(g.Dir, "www", "data") : g.DataDir, bak);
             }
             WriteRestoreBat(g.Dir);
             SetStatus(g, "汉化中…");
@@ -1231,7 +1279,12 @@ namespace GameTranslator
                     }
                     if (Directory.GetFiles(bak, "*.json").Length > 0)
                     {
-                        var data = Path.Combine(g.Dir, "www", "data");
+                        // MV/MZ backup is a flat copy of the data folder: restore
+                        // it into the folder the backup came from (www\data or
+                        // <root>\data for NW.js packaged builds).
+                        var data = string.IsNullOrEmpty(g.DataDir)
+                            ? Path.Combine(g.Dir, "www", "data")
+                            : g.DataDir;
                         if (Directory.Exists(data)) Directory.Delete(data, true);
                         CopyDir(bak, data);
                     }
@@ -1259,11 +1312,12 @@ namespace GameTranslator
                         if (Directory.Exists(data)) Directory.Delete(data, true);
                         CopyDir(Path.Combine(bak, "Data"), data);
                     }
-                    if (Directory.Exists(Path.Combine(bak, "www", "data")))
+                    if (Directory.Exists(Path.Combine(bak, "Map001.json")) || Directory.GetFiles(bak, "*.json").Length > 0)
                     {
-                        var data = Path.Combine(g.Dir, "www", "data");
+                        // Flat backup -> restore into the live data folder.
+                        var data = string.IsNullOrEmpty(g.DataDir) ? Path.Combine(g.Dir, "www", "data") : g.DataDir;
                         if (Directory.Exists(data)) Directory.Delete(data, true);
-                        CopyDir(Path.Combine(bak, "www", "data"), data);
+                        CopyDir(bak, data);
                     }
                     Log("已恢复汉化版: " + g.Dir);
                     SetStatus(g, "已恢复汉化");
@@ -1291,8 +1345,10 @@ namespace GameTranslator
                 }
                 else
                 {
-                    var d = Path.Combine(bak, "www", "data");
-                    var src = Path.Combine(g.Dir, "www", "data");
+                    // Flat layout, matching data_原版备份 so both backup folders
+                    // (and the restore bats) describe the same folder.
+                    var d = bak;
+                    var src = string.IsNullOrEmpty(g.DataDir) ? Path.Combine(g.Dir, "www", "data") : g.DataDir;
                     if (Directory.Exists(d)) Directory.Delete(d, true);
                     CopyDir(src, d);
                 }
@@ -1331,9 +1387,15 @@ namespace GameTranslator
                 "  xcopy /e /i /y \"data_原版备份\\Data\\*\" \"Data\" >nul",
                 ")",
                 "if exist \"data_原版备份\\Map001.json\" (",
-                "  if exist \"www\\data\" rmdir /s /q \"www\\data\"",
-                "  mkdir \"www\\data\" >nul 2>&1",
-                "  xcopy /e /i /y \"data_原版备份\\*\" \"www\\data\" >nul",
+                "  if exist \"www\\data\" (",
+                "    rmdir /s /q \"www\\data\"",
+                "    mkdir \"www\\data\" >nul 2>&1",
+                "    xcopy /e /i /y \"data_原版备份\\*\" \"www\\data\" >nul",
+                "  ) else (",
+                "    if exist \"data\" rmdir /s /q \"data\"",
+                "    mkdir \"data\" >nul 2>&1",
+                "    xcopy /e /i /y \"data_原版备份\\*\" \"data\" >nul",
+                "  )",
                 ")",
                 "echo.",
                 "echo 还原完成！游戏数据已恢复为汉化前的原版。",
@@ -1360,10 +1422,16 @@ namespace GameTranslator
                 "  mkdir \"Data\" >nul 2>&1",
                 "  xcopy /e /i /y \"data_汉化备份\\Data\\*\" \"Data\" >nul",
                 ")",
-                "if exist \"data_汉化备份\\www\\data\\Map001.json\" (",
-                "  if exist \"www\\data\" rmdir /s /q \"www\\data\"",
-                "  mkdir \"www\\data\" >nul 2>&1",
-                "  xcopy /e /i /y \"data_汉化备份\\www\\data\\*\" \"www\\data\" >nul",
+                "if exist \"data_汉化备份\\Map001.json\" (",
+                "  if exist \"www\\data\" (",
+                "    rmdir /s /q \"www\\data\"",
+                "    mkdir \"www\\data\" >nul 2>&1",
+                "    xcopy /e /i /y \"data_汉化备份\\*\" \"www\\data\" >nul",
+                "  ) else (",
+                "    if exist \"data\" rmdir /s /q \"data\"",
+                "    mkdir \"data\" >nul 2>&1",
+                "    xcopy /e /i /y \"data_汉化备份\\*\" \"data\" >nul",
+                "  )",
                 ")",
                 "echo.",
                 "echo 已恢复汉化版！",
