@@ -24,9 +24,15 @@ RPG Maker 汉化管理器（GameTranslator.exe） v2.4
   - 本工具**支持的游戏类型**（其余类型目前无法处理，会在日志里说明）：
       · 支持：RPG Maker MV / MZ（含 www\data 与根目录 data 两种布局）、
         RPG Maker VX Ace（Data\*.rvdata2，或未解包的 Game.rgss3a 自动解包）
-      · 不支持：RPG Maker VX（Data\*.rvdata / Game.rgss2a）、
-        RPG Maker XP（*.rxdata / Game.rgssad）、RPG Maker 2000/2003、
-        Wolf RPG（data.wolf）、Unity 等非 RPG Maker 引擎
+      · 支持：RPG Maker VX（Data\*.rvdata，或未解包的 Game.rgss2a 自动解包与
+        重新打包；RGSSAD v1/v2 容器）
+      · 不支持：RPG Maker XP（*.rxdata / Game.rgssad，容器同 v1/v2 但数据格式
+        是 rxdata）、RPG Maker 2000/2003、Wolf RPG（data.wolf）、Unity 等
+  - 容器与回滚说明：
+      · 备份目录 data_原版备份 会保留原归档（Game.rgss3a / Game.rgss2a），
+        「一键还原汉化前.bat」会按原名恢复
+      · VX/VX Ace 的图形/音频成员是**原样搬运**，不会被重新加密（避免体积翻倍
+        与二次加密）；只有 Data 下的数据文件会被改写
       · MV/MZ 新增 message3/message4、displayName、currencyUnit、title、
         terms.hint 等字段，以及运行中改名指令 320/324/325；
       · 插件参数里的显示文本也会翻译（data\plugins.js 等），插件标识符与
