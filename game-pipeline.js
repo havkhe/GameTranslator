@@ -733,12 +733,25 @@ function cleanOutput(s) {
 // A Japanese source should never come back as English. If the answer is
 // dominated by latin letters (and isn't mostly control codes), treat it as a
 // failed translation and force a retry.
-function looksLikeEnglish(t) {
+//
+// The source's own latin text must be allowed through: game text is full of
+// proper nouns plus tags ("プラグインテストHELP", "いろはBAD", "コールガールBAD"),
+// and the model keeps those words verbatim, so a correct answer can easily have
+// as many latin letters as Chinese characters. Counting them as "English" made
+// every such line fail — and because one bad line fails the whole group, those
+// lines sank entire batches and then every split level down to single entries
+// (measured: 4579 "request-failed" entries in one real run, all of this shape).
+function looksLikeEnglish(t, source) {
   if (!t || typeof t !== "string") return false;
+  const src = typeof source === "string" ? source : "";
   const letters = (t.match(/[A-Za-z]/g) || []).length;
+  if (!letters) return false;
+  const srcLetters = (src.match(/[A-Za-z]/g) || []).length;
   const cjk = (t.match(/[\u3400-\u9fff]/g) || []).length;
   const control = (t.match(/\\[NVI]|<\/?[^>]{1,12}>/g) || []).length;
-  return letters > 0 && letters >= cjk && letters > control;
+  // Latin letters that were already in the source are not evidence of English.
+  const invented = letters - Math.min(letters, srcLetters);
+  return invented >= cjk && invented > control;
 }
 
 function hasKana(s) {
@@ -746,15 +759,24 @@ function hasKana(s) {
 }
 
 // English-heavy text (after stripping control codes) counts as untranslated.
-function looksLikeEnglishText(s) {
+// Latin letters that the SOURCE already contained are not evidence of English:
+// game text is full of tags and proper nouns ("プラグインテストHELP",
+// "コールガールBAD"), and a correct answer keeps them verbatim — which made this
+// rule flag finished lines as untranslated (same defect as looksLikeEnglish).
+function looksLikeEnglishText(s, source) {
   if (!s || typeof s !== "string") return false;
-  const stripped = s
+  const clean = (x) => x
     .replace(/\\[A-Za-z]+(\[[^\]]*\])?/g, "")
     .replace(/<[^>]{1,20}>/g, "")
     .replace(/[0-9\s.,!?%()'"\-+*#/\\:;=~^|&_@$<>{}[\]·。、，！？：；""''（）《》【】]/g, "");
+  const stripped = clean(s);
+  const srcStripped = typeof source === "string" ? clean(source) : "";
   const letters = (stripped.match(/[A-Za-z]/g) || []).length;
+  if (!letters) return false;
+  const srcLetters = (srcStripped.match(/[A-Za-z]/g) || []).length;
   const cjk = (stripped.match(/[\u3400-\u9fff]/g) || []).length;
-  return stripped.length > 8 && letters > 0 && letters >= cjk * 2;
+  const invented = letters - Math.min(letters, srcLetters);
+  return stripped.length > 8 && invented > 0 && invented >= cjk * 2;
 }
 
 // ---------------- translation quality checks ----------------
@@ -850,14 +872,34 @@ function qualityCheck(src, dst) {
     else if (d.length > s.length * 3 && d.length - s.length >= 20) warn.push("too-long:" + d.length + ">" + s.length);
   }
 
-  // 5) runaway repetition (the "啊啊啊啊…" loop): most frequent char dominating
+  // 5) runaway repetition (the "啊啊啊啊…" loop). Degenerate generation means one
+  //    character DOMINATES the answer, so dominance is measured as a share of the
+  //    text, not as an absolute count: in a 900-character translation "汉" may
+  //    legitimately appear 50+ times (measured false positive on long lines).
+  //    The source's own repetition is allowed through — some games really do ship
+  //    a line like「これはとても長い台詞です。」×100.
   const counts = new Map();
   for (const ch of d) counts.set(ch, (counts.get(ch) || 0) + 1);
   let topChar = "", topCount = 0;
   for (const [ch, n] of counts) if (n > topCount) { topCount = n; topChar = ch; }
-  if (topCount > 20 && topChar !== "\n" && !/\s/.test(topChar)) {
+  const share = d.length ? topCount / d.length : 0;
+  if (topCount > 20 && share > 0.5 && topChar !== "\n" && !/\s/.test(topChar)) {
     const srcCount = countMatches(s, new RegExp(escapeRe(topChar), "g"));
-    if (topCount > Math.max(srcCount * 2, 20)) fatal.push("repetition:" + topChar + "×" + topCount);
+    if (topCount > srcCount * 2) fatal.push("repetition:" + topChar + "×" + topCount);
+  }
+  // A repeated whole PHRASE is the other half of the same failure mode, and it
+  // needs a high bar: a long translation legitimately reuses wording (and a mock
+  // or a lazy model cycling a fixed set of phrases must not be mistaken for a
+  // loop). Real loops repeat ONE phrase many times over most of the answer.
+  if (d.length >= 120) {
+    const phrase = longestRepeatedPhrase(d, 4, 12);
+    if (phrase) {
+      const n = countMatches(d, new RegExp(escapeRe(phrase), "g"));
+      if (n >= 8 && (n * phrase.length) / d.length >= 0.5) {
+        const srcCount = countMatches(s, new RegExp(escapeRe(phrase), "g"));
+        if (srcCount < n / 2) fatal.push("repetition-phrase:" + phrase.slice(0, 8) + "×" + n);
+      }
+    }
   }
 
   // 6) newline conservation (players see a broken text box otherwise)
@@ -904,6 +946,26 @@ function qualityCheck(src, dst) {
   }
 
   return { fatal, warn };
+}
+
+// Longest substring (up to `maxLen`) that repeats at least `minCount` times in a
+// short-ish text. Used to spot a model looping on a whole phrase rather than one
+// character ("我不知道我不知道我不知道…"). Deliberately simple: the texts here are
+// a paragraph at most, so the quadratic scan is cheap and only runs on texts long
+// enough for repetition to be suspicious.
+function longestRepeatedPhrase(text, minLen, maxLen) {
+  const n = text.length;
+  if (n < minLen * 2) return "";
+  for (let len = Math.min(maxLen, n >> 1); len >= minLen; len--) {
+    const counts = new Map();
+    for (let i = 0; i + len <= n; i++) {
+      const sub = text.slice(i, i + len);
+      const c = (counts.get(sub) || 0) + 1;
+      counts.set(sub, c);
+      if (c >= 5) return sub;
+    }
+  }
+  return "";
 }
 
 // Text that genuinely needs translating. Mirrors the layer-0 skip rules: labels
@@ -1071,7 +1133,7 @@ function checkUntranslated(entries, sources) {
       return;
     }
     if (kana > 0 && han > 0 && kana >= han) fatal.push({ id: e.id, text: src, trans: tr, reason: "kana" });
-    else if (han < 2 && nonAscii < 2 && looksLikeEnglishText(tr)) fatal.push({ id: e.id, text: src, trans: tr, reason: "english" });
+    else if (han < 2 && nonAscii < 2 && looksLikeEnglishText(tr, src)) fatal.push({ id: e.id, text: src, trans: tr, reason: "english" });
     else if (q.warn.length) suspect.push({ id: e.id, text: src, trans: tr, reason: q.warn.join("|") });
   };
   for (const e of entries) {
@@ -1124,9 +1186,40 @@ function splitLongText(text, max) {
 // Break a list of entries into request-sized groups: at most BATCH lines and
 // BATCH_CHARS characters; single runaway lines get their own request, split at
 // punctuation so the model never sees a 2000-character wall of text.
+//
+// Multi-line entries are split into one sub-entry PER SOURCE LINE first.
+// The wire protocol is "one input line -> one output line", so an entry whose
+// text contains newlines cannot survive it: the model reflows or drops those
+// breaks, the reply then has a different number of lines than the request, and
+// the batch fails — and so does every split level, down to single entries
+// (measured: an entire real run left ~4500 multi-line dialogue lines untranslated
+// for exactly this reason). Sending each line separately and rejoining it with the
+// original breaks removes the failure mode; the break positions come from the
+// source, which is also what the game expects.
+function splitMultilineEntries(list) {
+  const out = [];
+  for (const e of list) {
+    if (typeof e.text !== "string" || !/[\r\n]/.test(e.text)) { out.push(e); continue; }
+    const pieces = e.text.split(/(\r\n|\n|\r)/).filter((p) => p !== "");
+    const lines = [];
+    const breaks = [];
+    for (const p of pieces) {
+      if (p === "\r\n" || p === "\n" || p === "\r") breaks.push(p);
+      else lines.push(p);
+    }
+    if (lines.length < 2) { out.push(e); continue; }
+    // Reconstruct with the same structure: translate each line, reuse the breaks.
+    const parts = { lines, breaks };
+    lines.forEach((ln, i) => {
+      out.push({ id: e.id, text: ln, part: i + 1, parts: lines.length, parent: e, __multi: parts });
+    });
+  }
+  return out;
+}
+
 function packGroups(list) {
   const groups = [];
-  for (const e of list) {
+  for (const e of splitMultilineEntries(list)) {
     if (e.text.length > SINGLE_CHARS) {
       const parts = splitLongText(e.text, SINGLE_CHARS);
       parts.forEach((p, i) => groups.push([{ id: e.id, text: p, part: i + 1, parts: parts.length, parent: e }]));
@@ -1280,6 +1373,19 @@ function stripEchoedInstructions(lines) {
   return lines.slice(start, end);
 }
 
+// Models also echo the glossary back instead of translating with it (measured on
+// both models available here: Hy-MT2-1.8B echoes the whole glossary, and
+// Galtransl-v4-4B adds the glossary lines to its 16 translations and answers with
+// 19). Those lines are prompt boilerplate, not translations, and leaving them in
+// makes the line count disagree with the input — which fails the batch, then
+// every split level, and finally every single line. They are recognisable without
+// knowing the glossary content: they are "A->B" pairs, possibly written the other
+// way round by the model.
+const GLOSSARY_ECHO_RE = /^\s*\S[^\n]{0,60}?\s*(?:->|→|⇒|=>|＝|=)\s*\S[^\n]{0,60}\s*$/;
+function stripGlossaryEcho(lines) {
+  return lines.filter((l) => !GLOSSARY_ECHO_RE.test(l));
+}
+
 function parseResult(text) {
   if (typeof text !== "string") return null;
   let t = text.trim();
@@ -1312,7 +1418,7 @@ function parseResult(text) {
   // the count (normalizeResult), so a single-line answer is valid too — that
   // happens whenever a chunk was split at the character limit.
   const plain = t.split(/\r?\n/).map((x) => x.trim()).filter((x) => x.length > 0);
-  const cleaned = stripEchoedInstructions(plain);
+  const cleaned = stripGlossaryEcho(stripEchoedInstructions(plain));
   if (cleaned.length) return cleaned;
   return null;
 }
@@ -1374,13 +1480,22 @@ if (PROMPT_FILE && fs.existsSync(PROMPT_FILE)) {
 }
 
 function buildPrompt(batch) {
-  const raw = batch.map((e) => e.text).join("\n");
-  const numbered = batch.map((e, j) => j + 1 + ". " + e.text).join("\n");
+  // The protocol is strictly "one prompt line -> one reply line", so a newline
+  // inside an entry must never reach the prompt: it would add an input line the
+  // reply cannot answer, and the line count then fails forever. A line break
+  // inside a line is a display-wrap artifact, so a space is the honest rendering
+  // (the source breaks are restored when the reply is written back).
+  const flat = (s) => String(s).replace(/\r\n|\n|\r/g, " ");
+  const raw = batch.map((e) => flat(e.text)).join("\n");
+  const numbered = batch.map((e, j) => j + 1 + ". " + flat(e.text)).join("\n");
   let p = basePrompt;
   if (p.includes("{numbered}")) p = p.replace(/\{numbered\}/g, numbered);
   if (p.includes("{lines}")) p = p.replace(/\{lines\}/g, raw);
   if (!p.includes(raw)) p = p + "\n\n" + raw;
-  return p + glossaryPromptBlock();
+  // The glossary belongs BEFORE the text it governs (the model then reads the
+  // terminology first, and the last lines of the prompt stay the source lines it
+  // has to answer one-for-one).
+  return glossaryPromptBlock() + p;
 }
 
 // One request -> array of translations for `group`, or null.
@@ -1418,7 +1533,7 @@ async function translateGroup(group) {
     let ok = true;
     for (let j = 0; j < group.length; j++) {
       const c = cleanOutput(lines[j]);
-      if (c === null || looksLikeEnglish(c)) {
+      if (c === null || looksLikeEnglish(c, group[j].text)) {
         ok = false;
         break;
       }
@@ -1486,7 +1601,23 @@ async function translateGroupRecursive(group, cache, fails, stats) {
           }
         }
       } else {
-        cache.set(target.text, res[i]);
+        // A line of a multi-line entry: collect the parts and rejoin them with the
+        // source's own line breaks once every line has been translated.
+        stats.parts[e.id] = stats.parts[e.id] || [];
+        stats.parts[e.id][e.part - 1] = res[i];
+        if (stats.parts[e.id].filter(Boolean).length === e.parts) {
+          const got = stats.parts[e.id];
+          delete stats.parts[e.id];
+          const src = target.text;
+          const breaks = src.match(/\r\n|\n|\r/g) || [];
+          let joined = got[0];
+          for (let k = 1; k < got.length; k++) joined += (breaks[k - 1] || "") + got[k];
+          if (joined.length < target.text.length * 0.25) {
+            fails.push({ hash: textHash(target.text), err: "multiline-too-short", text: target.text.slice(0, 40) });
+          } else {
+            cache.set(target.text, joined);
+          }
+        }
       }
     }
     return;
@@ -1525,11 +1656,16 @@ function pruneFailures(fails, stillMissing) {
 // every time). The entry stays in failures.json and is retried on the next run.
 async function translateOne(text) {
   if (runState.degraded) return null;
-  const prompt = "将下面日文翻译成简体中文（只能输出简体中文，禁止英文）：\n" + text + glossaryPromptBlock();
+  const prompt = "将下面日文翻译成简体中文（只能输出简体中文，禁止英文）：\n" + glossaryPromptBlock() + String(text).replace(/\r\n|\n|\r/g, " ");
   try {
     const resp = await ask(prompt);
-    const c = cleanOutput(resp);
-    if (c && !/^注意：/.test(c) && c.length >= 2 && !looksLikeEnglish(c) && c.length >= text.length * 0.25) {
+    // Parse like the batch path so a numbered-JSON answer is unwrapped instead of
+    // being stored as literal JSON text. Everything else stays as before: this is
+    // the last-chance single request and its result is validated below.
+    const parsed = parseResult(resp);
+    const one = normalizeResult(parsed, 1);
+    const c = cleanOutput(one ? one[0] : resp);
+    if (c && !/^注意：/.test(c) && c.length >= 2 && !looksLikeEnglish(c, text) && c.length >= text.length * 0.25) {
       return applyGlossary(c);
     }
   } catch (err) {}
