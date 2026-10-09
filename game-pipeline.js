@@ -236,7 +236,72 @@ const FAIL = path.join(WORK, name + "-failures.json");
 const UNTRANS = path.join(WORK, name + "-untranslated.json");
 const PATCH_REPORT = path.join(WORK, name + "-patch-report.json");
 
-// ---------------- MV/MZ extraction ----------------
+// Record id -> relative path, for extract diagnostic output.
+function writeIdMap(entries) {
+  try {
+    fs.writeFileSync(
+      path.join(WORK, name + "-ids.json"),
+      JSON.stringify(entries.map((e) => ({ id: e.id, file: e.file, text: e.text.slice(0, 60) }))),
+      "utf8"
+    );
+  } catch (e) {}
+}
+
+// All json/plugin files under a data folder, INCLUDING subdirectories.
+// Many MZ games keep their dialogue in data\resources\<locale>\*.json (loaded by
+// a localization plugin) and some keep plugin params in js\plugins\*.json; a
+// non-recursive scan silently ignores all of that text.
+const IGNORE_JSON_DIRS = new Set(["save", "saves", "backup", "backups", "_backup", "node_modules", ".git"]);
+function listJsonFiles(root) {
+  const out = [];
+  const walk = (dir, rel) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      return;
+    }
+    for (const ent of entries) {
+      const full = path.join(dir, ent.name);
+      const relPath = rel ? rel + "/" + ent.name : ent.name;
+      if (ent.isDirectory()) {
+        if (IGNORE_JSON_DIRS.has(ent.name.toLowerCase())) continue;
+        walk(full, relPath);
+      } else if (/\.(json|js)$/i.test(ent.name)) {
+        out.push({ full, rel: relPath });
+      }
+    }
+  };
+  walk(root, "");
+  out.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  return out;
+}
+
+// Avoid double work: nested files of the same name would collide in the extract.
+function uniqueByBasename(files) {
+  const seen = new Set();
+  const out = [];
+  for (const f of files) {
+    const base = path.basename(f.rel);
+    if (seen.has(base)) continue;
+    seen.add(base);
+    out.push(f);
+  }
+  return out;
+}
+
+// Multi-language games often keep their real dialogue in data/resources/<locale>/
+// *.json, keyed by the plugin's own identifiers (Hiroka_HEV1_000, SYSTEM_TITLE_…)
+// rather than by database field names. Those keys are never in NAME_KEYS, so a
+// whitelist-only walk collects nothing from them. For files under a `resources`
+// folder every string value is a display candidate (the `metadata` block is
+// skipped: it holds the locale/game name and must stay intact).
+const META_KEYS = new Set(["metadata", "meta", "info", "__metadata"]);
+function isLocaleResource(rel) {
+  return /(^|[\\/])resources[\\/]/i.test(rel) && /\.json$/i.test(rel);
+}
+
+// MV/MZ extraction.
 // Two passes: the pristine backup (or the live folder on a first run) is the
 // source of truth for original text; the live folder is then only consulted for
 // text that is NOT already translated. Entries are deduplicated by text.
@@ -267,9 +332,11 @@ function extractMV(pristineDir, liveDir) {
   };
   const walkDir = (dataDir, skipTranslated) => {
     if (!dataDir) return;
-    // `plugins.js` is a JSON array despite the extension, so both are read.
-    for (const f of fs.readdirSync(dataDir).filter((x) => x.endsWith(".json") || x.endsWith(".js"))) {
-      const full = path.join(dataDir, f);
+    // Recursive: data\resources\<locale>\*.json holds the dialogue of localized
+    // MZ games, and js\plugins\*.json can hold plugin parameters.
+    for (const f of listJsonFiles(dataDir)) {
+      const full = f.full;
+      const rel = f.rel;
       let raw;
       try {
         raw = fs.readFileSync(full, "utf8");
@@ -281,37 +348,42 @@ function extractMV(pristineDir, liveDir) {
         data = JSON.parse(raw);
       } catch (e) {
         // A broken json file silently reduced coverage before; at least say so.
-        console.log("EXTRACT_PARSE_ERROR " + f + ": " + e.message);
+        if (/\.json$/i.test(rel)) console.log("EXTRACT_PARSE_ERROR " + rel + ": " + e.message);
         continue;
       }
-      if (f === "System.json" && data.terms) {
+      const base = path.basename(rel);
+      if (base === "System.json" && data.terms) {
         for (const k of Object.keys(data.terms)) {
           const arr = data.terms[k];
           if (!TERMS_KEYS.includes(k)) continue;
-          if (Array.isArray(arr)) arr.forEach((v, i) => add(f, "$terms." + k + "[" + i + "]", v, { skipTranslated }));
+          if (Array.isArray(arr)) arr.forEach((v, i) => add(rel, "$terms." + k + "[" + i + "]", v, { skipTranslated }));
         }
       }
       // Plugin parameter values: every string value is a candidate.
-      if (isPluginDataFile(f, raw)) collectStrings(f, data, "$plugins", skipTranslated);
-      walk(f, data, "$", skipTranslated);
+      if (isPluginDataFile(base, raw)) collectStrings(rel, data, "$plugins", skipTranslated);
+      if (isLocaleResource(rel)) collectStrings(rel, data, "$", skipTranslated, META_KEYS);
+      walk(rel, data, "$", skipTranslated);
     }
   };
   // Every string value inside a plugin-parameter tree is a display candidate. The
-  // object *keys* are identifiers, so they are never touched.
-  const collectStrings = (file, obj, p, skipTranslated) => {
+  // object *keys* are identifiers, so they are never touched. `skipKeys` lets the
+  // caller leave a whole subtree alone (e.g. a locale file's metadata block).
+  const collectStrings = (file, obj, p, skipTranslated, skipKeys) => {
     if (Array.isArray(obj)) {
-      obj.forEach((v, i) => collectStrings(file, v, p + "[" + i + "]", skipTranslated));
+      obj.forEach((v, i) => collectStrings(file, v, p + "[" + i + "]", skipTranslated, skipKeys));
       return;
     }
     if (obj && typeof obj === "object") {
       for (const k of Object.keys(obj)) {
+        if (skipKeys && skipKeys.has(k)) continue;
         const v = obj[k];
         if (typeof v === "string") add(file, p + "." + k, v, { skipTranslated });
-        else collectStrings(file, v, p + "." + k, skipTranslated);
+        else collectStrings(file, v, p + "." + k, skipTranslated, skipKeys);
       }
     }
   };
-  const processEventList = (file, list, p, skipTranslated) => {    if (!Array.isArray(list)) return;
+  const processEventList = (file, list, p, skipTranslated) => {
+    if (!Array.isArray(list)) return;
     list.forEach((cmd, idx) => {
       let code, params;
       if (Array.isArray(cmd) && cmd.length >= 3) {
@@ -524,23 +596,28 @@ function patchMV(dataDir, entries, cache) {
     }
     return obj;
   };
-  // Mirror of collectStrings() in the extractor.
-  const patchStrings = (obj) => {
+  // Mirror of collectStrings() in the extractor; `skipKeys` protects subtrees
+  // such as a locale file's `metadata` block.
+  const patchStrings = (obj, skipKeys) => {
     if (Array.isArray(obj)) {
-      for (let i = 0; i < obj.length; i++) obj[i] = patchStrings(obj[i]);
+      for (let i = 0; i < obj.length; i++) obj[i] = patchStrings(obj[i], skipKeys);
       return obj;
     }
     if (obj && typeof obj === "object") {
       for (const k of Object.keys(obj)) {
+        if (skipKeys && skipKeys.has(k)) continue;
         const v = obj[k];
         if (typeof v === "string") obj[k] = replaceText(v);
-        else obj[k] = patchStrings(v);
+        else obj[k] = patchStrings(v, skipKeys);
       }
       return obj;
     }
     return obj;
   };
-  const files = fs.readdirSync(dataDir).filter((f) => f.endsWith(".json") || f.endsWith(".js"));
+  // Mirror of the extractor: recursive, so the same files that were scanned are
+  // the ones written back (data\resources\<locale>\*.json included).
+  const nested = uniqueByBasename(listJsonFiles(dataDir));
+  const files = nested.map((x) => x.rel);
   for (const f of files) {
     const fp = path.join(dataDir, f);
     let raw;
@@ -551,11 +628,11 @@ function patchMV(dataDir, entries, cache) {
     } catch (e) {
       // A file we cannot parse is a file we cannot translate: report it instead
       // of silently skipping (this used to leave games half-translated).
-      errors.push({ file: f, error: "JSON.parse: " + e.message });
+      if (/\.json$/i.test(f)) errors.push({ file: f, error: "JSON.parse: " + e.message });
       continue;
     }
     const before = replaced;
-    if (f === "System.json" && data.terms) {
+    if (path.basename(f) === "System.json" && data.terms) {
       for (const k of Object.keys(data.terms)) {
         if (!TERMS_KEYS.includes(k)) continue;
         const arr = data.terms[k];
@@ -563,7 +640,8 @@ function patchMV(dataDir, entries, cache) {
       }
     }
     // Mirror of the extractor: plugin parameter values are patched too.
-    if (isPluginDataFile(f, raw)) patchStrings(data);
+    if (isPluginDataFile(path.basename(f), raw)) patchStrings(data);
+    if (isLocaleResource(f)) patchStrings(data, META_KEYS);
     walk(data);
     try {
       fs.writeFileSync(fp, JSON.stringify(data), "utf8");
