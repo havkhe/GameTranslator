@@ -54,6 +54,9 @@ namespace GameTranslator
         [DataMember] public string LlamaFlashAttn = "auto";
         [DataMember] public string LlamaCacheK = "f16";
         [DataMember] public string LlamaCacheV = "f16";
+        // llama.cpp 默认 4 个 slot；本工具是单请求串行，多余 slot 在 6GB 卡上
+        // 互相争抢，实测解码速度差一倍（23 → 37 tok/s）。
+        [DataMember] public int LlamaParallel = 1;
         [DataMember] public string Prompt = DefaultPrompt;
         [DataMember] public string LlamaPreset = "auto";
     }
@@ -347,6 +350,7 @@ namespace GameTranslator
             if (string.IsNullOrEmpty(settings.LlamaFlashAttn)) settings.LlamaFlashAttn = "auto";
             if (string.IsNullOrEmpty(settings.LlamaCacheK)) settings.LlamaCacheK = "f16";
             if (string.IsNullOrEmpty(settings.LlamaCacheV)) settings.LlamaCacheV = "f16";
+            if (settings.LlamaParallel < 1 || settings.LlamaParallel > 8) settings.LlamaParallel = 1;
             if (string.IsNullOrWhiteSpace(settings.Prompt)) settings.Prompt = Settings.DefaultPrompt;
             else if (IsLegacyPrompt(settings.Prompt))
             {
@@ -409,7 +413,7 @@ namespace GameTranslator
             ApplyPreset("rtx");
             settings.LlamaPreset = "rtx";
             SaveSettings();
-            Log("检测到 RTX 显卡，已自动应用 RTX 优化参数（FlashAttention + q8_0 KV + 2048/512 批次），可在 设置 → llama 高级设置 修改");
+            Log("检测到 RTX 显卡，已自动应用 RTX 优化参数（FlashAttention + f16 KV + 单 slot + 2048/512 批次），可在 设置 → llama 高级设置 修改");
         }
 
         private void ApplyPreset(string preset)
@@ -423,8 +427,12 @@ namespace GameTranslator
                 settings.LlamaThreads = 4;
                 settings.LlamaPoll = 0;
                 settings.LlamaFlashAttn = "on";
-                settings.LlamaCacheK = "q8_0";
-                settings.LlamaCacheV = "q8_0";
+                // 实测：量化 KV cache 在 1060 上把解码从 ~37 tok/s 拖到 ~23 tok/s
+                // （每步都要反量化）。4B Q4 模型 + 4K 上下文的 f16 KV 只占约
+                // 0.5GB，6GB 卡放得下，不值得为省显存牺牲一半速度。
+                settings.LlamaCacheK = "f16";
+                settings.LlamaCacheV = "f16";
+                settings.LlamaParallel = 1;
             }
             else if (preset == "vram")
             {
@@ -437,6 +445,7 @@ namespace GameTranslator
                 settings.LlamaFlashAttn = "on";
                 settings.LlamaCacheK = "q8_0";
                 settings.LlamaCacheV = "q8_0";
+                settings.LlamaParallel = 1;
             }
             else
             {
@@ -618,6 +627,11 @@ namespace GameTranslator
             string cv = (settings.LlamaCacheV ?? "f16").ToLowerInvariant();
             if (ValidKvType(ck)) sb.Append(" -ctk ").Append(ck);
             if (ValidKvType(cv)) sb.Append(" -ctv ").Append(cv);
+            // 单 slot：这一条是实测出来的性能开关。llama.cpp 默认 --parallel 4（4 个
+            // slot 平分上下文），在 6GB 卡上多个 slot 互相争抢显存与调度，解码实测
+            // 只有 ~23 tok/s；改成 1 个 slot 后同样条件升到 ~37 tok/s（同一模型、
+            // 同一批文本）。汉化是单请求串行发出的，本来也用不到多 slot。
+            sb.Append(" --parallel ").Append(Math.Max(1, Math.Min(8, settings.LlamaParallel)));
             // 采样参数必须与 game-pipeline.js 请求里发送的一致：模型作者推荐
             // 低温度 + 窄核采样（llama 自身默认 0.8/0.95 对翻译任务偏“发散”）。
             sb.Append(" --temp ").Append(SamplerTemperature.ToString(CultureInfo.InvariantCulture));
@@ -1521,7 +1535,7 @@ namespace GameTranslator
         private static readonly string[] KvTypes = { "f16", "q8_0", "q4_0", "bf16", "f32" };
         private readonly Settings _work;
         private TabControl tabs;
-        private NumericUpDown nudCtx, nudNgl, nudBatch, nudUbatch, nudThreads, nudPoll, nudMem, nudPort;
+        private NumericUpDown nudCtx, nudNgl, nudBatch, nudUbatch, nudThreads, nudPoll, nudMem, nudPort, nudParallel;
         private ComboBox cmbFa, cmbK, cmbV;
         private ComboBox cmbPreset;
         private bool _applyingPreset;
@@ -1569,7 +1583,7 @@ namespace GameTranslator
             cmbPreset.Items.AddRange(new object[] { "RTX 高性能", "通用均衡", "省显存", "自定义" });
             cmbPreset.SelectedIndex = PresetIndex(_work.LlamaPreset);
             cmbPreset.SelectedIndexChanged += (s, e) => ApplyPresetSelection();
-            AddRow(tbl, "性能预设", cmbPreset, "RTX 高性能 = FlashAttention + q8_0 KV + 2048/512 批次");
+            AddRow(tbl, "性能预设", cmbPreset, "RTX 高性能 = FlashAttention + f16 KV + 单 slot + 2048/512 批次");
 
             nudCtx = Num(512, 65536, _work.LlamaContext);
             nudNgl = Num(0, 999, _work.LlamaGpuLayers);
@@ -1577,6 +1591,7 @@ namespace GameTranslator
             nudUbatch = Num(16, 4096, _work.LlamaUbatch);
             nudThreads = Num(0, 256, _work.LlamaThreads);
             nudPoll = Num(0, 100, _work.LlamaPoll);
+            nudParallel = Num(1, 8, _work.LlamaParallel < 1 ? 1 : _work.LlamaParallel);
             nudMem = Num(0, 1048576, _work.MaxMemoryMB);
             nudPort = Num(1024, 65535, _work.Port);
             cmbFa = Combo(new[] { "auto", "on", "off" }, _work.LlamaFlashAttn ?? "auto");
@@ -1584,6 +1599,7 @@ namespace GameTranslator
             cmbV = Combo(KvTypes, _work.LlamaCacheV ?? "f16");
             WireCustom(nudCtx); WireCustom(nudNgl); WireCustom(nudBatch); WireCustom(nudUbatch);
             WireCustom(nudThreads); WireCustom(nudPoll); WireCustom(cmbFa); WireCustom(cmbK); WireCustom(cmbV);
+            WireCustom(nudParallel);
 
             AddRow(tbl, "-c 上下文长度", nudCtx, "建议 4096；越大占显存越多");
             AddRow(tbl, "-ngl GPU 层数", nudNgl, "99 = 全部层进显存；显存不足时降低");
@@ -1592,8 +1608,9 @@ namespace GameTranslator
             AddRow(tbl, "-t CPU 线程数", nudThreads, "0 = 自动（CUDA 模式自动用 4，降低 CPU 占用）");
             AddRow(tbl, "--poll 轮询等级", nudPoll, "0 = 省 CPU（推荐），50 = 默认，100 = 响应最快");
             AddRow(tbl, "-fa FlashAttention", cmbFa, "auto 让 llama 自动决定");
-            AddRow(tbl, "-ctk K 缓存类型", cmbK, "q8_0 可省约一半 KV 显存");
-            AddRow(tbl, "-ctv V 缓存类型", cmbV, "q8_0 可省约一半 KV 显存");
+            AddRow(tbl, "-ctk K 缓存类型", cmbK, "f16 = 最快（推荐）；q8_0 省一半 KV 显存但解码明显变慢");
+            AddRow(tbl, "-ctv V 缓存类型", cmbV, "f16 = 最快（推荐）；q8_0 省一半 KV 显存但解码明显变慢");
+            AddRow(tbl, "--parallel 并发 slot", nudParallel, "1 = 最快（推荐）；本工具是串行请求，多 slot 只会互相争抢显存");
             AddRow(tbl, "服务端口", nudPort, "重启 llama 后生效");
             AddRow(tbl, "llama 内存上限(MB)", nudMem, "0 = 自动（总内存-4GB）");
 
@@ -1753,6 +1770,7 @@ namespace GameTranslator
             _work.LlamaFlashAttn = (string)cmbFa.SelectedItem;
             _work.LlamaCacheK = (string)cmbK.SelectedItem;
             _work.LlamaCacheV = (string)cmbV.SelectedItem;
+            _work.LlamaParallel = (int)nudParallel.Value;
             _work.Port = (int)nudPort.Value;
             _work.MaxMemoryMB = (int)nudMem.Value;
             _work.Prompt = string.IsNullOrWhiteSpace(txtPrompt.Text) ? Settings.DefaultPrompt : txtPrompt.Text;
