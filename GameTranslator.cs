@@ -70,6 +70,12 @@ namespace GameTranslator
     [DataContract]
     public class UntranslatedResult
     {
+        // v2.4: tiered output. `fatal` = must not be kept (control codes lost,
+        // repetition loop, truncation, wrong script); `suspect` = style issues
+        // worth reviewing; `pending` = never translated. `bad` is kept as the
+        // union of fatal+suspect so older builds still read the file.
+        [DataMember] public BadItem[] fatal;
+        [DataMember] public BadItem[] suspect;
         [DataMember] public BadItem[] bad;
         [DataMember] public BadItem[] pending;
     }
@@ -1247,7 +1253,7 @@ namespace GameTranslator
                 catch (Exception ex) { Log("检查失败: " + ex.Message); }
                 var uf = Path.Combine(work, GameWorkName(g.Dir) + "-untranslated.json");
                 if (!File.Exists(uf)) { BeginInvoke(new Action(() => { busy = false; lblStatus.Text = "检查完成（未生成结果）"; })); return; }
-                int badN = 0, pendN = 0;
+                int badN = 0, pendN = 0, fatalN = 0, suspectN = 0;
                 try
                 {
                     var ser = new DataContractJsonSerializer(typeof(UntranslatedResult));
@@ -1258,6 +1264,10 @@ namespace GameTranslator
                         {
                             badN = r.bad != null ? r.bad.Length : 0;
                             pendN = r.pending != null ? r.pending.Length : 0;
+                            fatalN = r.fatal != null ? r.fatal.Length : 0;
+                            suspectN = r.suspect != null ? r.suspect.Length : 0;
+                            // File written by an older build: derive the tiers.
+                            if (fatalN == 0 && suspectN == 0 && badN > 0) fatalN = badN;
                         }
                     }
                 }
@@ -1266,9 +1276,12 @@ namespace GameTranslator
                 {
                     busy = false;
                     lblStatus.Text = "检查完成";
-                    Log("检查翻译完成：" + g.Dir + " —— 翻译不全 " + badN + " 条，未翻译 " + pendN + " 条");
+                    Log("检查翻译完成：" + g.Dir + " —— 必须重翻 " + fatalN + " 条（控制符丢失/复读/截断/乱码），"
+                        + "建议复核 " + suspectN + " 条（残留日文/长度/标点），未翻译 " + pendN + " 条");
                     if (badN + pendN > 0 &&
-                        MessageBox.Show("发现翻译不全 " + badN + " 条、未翻译 " + pendN + " 条。是否立即重新翻译这些内容？", "检查翻译", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                        MessageBox.Show("发现必须重翻 " + fatalN + " 条、建议复核 " + suspectN + " 条、未翻译 " + pendN
+                            + " 条。是否立即重新翻译这些内容？（保留已有译文，只替换结果更好的）", "检查翻译",
+                            MessageBoxButtons.YesNo) == DialogResult.Yes)
                     {
                         StartTranslateGame(g);
                     }

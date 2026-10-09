@@ -39,6 +39,8 @@ const BATCH_CHARS = 900;
 const SINGLE_CHARS = 700;
 // Attempts per request before the group is split (and finally given up on).
 const GROUP_ATTEMPTS = parseInt(process.env.GT_GROUP_ATTEMPTS || "1", 10);
+// Quality gate on translated lines (set GT_NO_QUALITY_GATE=1 to disable).
+const QUALITY_GATE = process.env.GT_NO_QUALITY_GATE !== "1";
 
 fs.mkdirSync(WORK, { recursive: true });
 
@@ -317,12 +319,13 @@ function runRuby(script, args, timeoutMs) {
   return (r.stdout || "").trim();
 }
 
-function unpackVxAce(engine, vxWork) {
+function unpackVxAce(engine, vxWork, sourceArchive) {
   const outDir = path.join(vxWork, "unpacked");
   const manifestPath = path.join(vxWork, "manifest.json");
+  const archive = sourceArchive || engine.archive;
   if (fs.existsSync(path.join(outDir, "Data")) && fs.existsSync(manifestPath)) return { outDir, manifestPath };
-  console.log("UNPACKING " + engine.archive);
-  const buf = fs.readFileSync(engine.archive);
+  console.log("UNPACKING " + archive);
+  const buf = fs.readFileSync(archive);
   const arch = readArchive(buf);
   const manifest = [];
   fs.mkdirSync(outDir, { recursive: true });
@@ -372,6 +375,13 @@ function repackVxAce(engine, vxWork) {
 function extractVxAce(dataDir) {
   runRuby(VX_EXTRACT, [dataDir, EXTRACT]);
   return JSON.parse(fs.readFileSync(EXTRACT, "utf8"));
+}
+
+// Same extraction, but into an explicit output file: used to build the pristine
+// source index without clobbering the working extract.
+function extractVxAceTo(dataDir, outJson) {
+  runRuby(VX_EXTRACT, [dataDir, outJson]);
+  return JSON.parse(fs.readFileSync(outJson, "utf8"));
 }
 
 // Returns the per-file report emitted by vxace_patch.rb (see PATCH_REPORT).
@@ -525,6 +535,184 @@ function looksLikeEnglishText(s) {
   return stripped.length > 8 && letters > 0 && letters >= cjk * 2;
 }
 
+// ---------------- translation quality checks ----------------
+// Ported from the rule sets used by GalTransl / AiNiee / LinguaGacha (thresholds
+// and the reasons behind them are documented in docs/release-note-v2.4.txt).
+// `fatal` problems mean the line must not be written into the game; `warn`
+// problems are reported for review but are written (they are usually style).
+const KANA_ALL = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f]/;
+// ー and ・ are legitimate inside Chinese translations ("・" as a separator,
+// katakana loanwords spelled with a long vowel), so they are not evidence.
+const KANA_EVIDENCE = /[\u3041-\u3096\u30a1-\u30fa\uff66-\uff9d]/;
+const HAN = /[\u3400-\u9fff]/;
+
+// Full-width forms are folded to half-width first: a translation that turns
+// \N[1] into \ｎ[1] (or ：into :) is not losing the control code.
+function foldWidth(ch) {
+  const c = ch.charCodeAt(0);
+  if (c === 0x3000) return " ";
+  if (c >= 0xff01 && c <= 0xff5e) return String.fromCharCode(c - 0xfee0);
+  return ch;
+}
+
+// ASCII runs are what control codes are made of (\N[1], \V[2], \C[14], %1).
+function asciiRuns(s) {
+  const folded = Array.from(String(s)).map(foldWidth).join("");
+  return (folded.match(/[!-/:-@\[-`{-~]+[A-Za-z0-9]*/g) || []).map((x) => x.toLowerCase());
+}
+
+function countMatches(s, re) {
+  return (String(s).match(re) || []).length;
+}
+
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function qualityCheck(src, dst) {
+  const fatal = [];
+  const warn = [];
+  if (typeof dst !== "string" || dst.trim() === "") return { fatal: ["empty"], warn };
+  const s = String(src);
+  const d = dst;
+
+  // 1) control codes / numeric placeholders must survive
+  const srcRuns = asciiRuns(s);
+  if (srcRuns.length) {
+    const dstFolded = Array.from(d).map(foldWidth).join("").toLowerCase();
+    const missing = [];
+    for (const run of srcRuns) if (!dstFolded.includes(run)) missing.push(run);
+    if (missing.length) fatal.push("control:" + missing.slice(0, 3).join(","));
+  }
+
+  // 2) residual kana (ー / ・ excluded, and a line of pure katakana is reported
+  //    only as a warning because it is often an untranslatable resource label)
+  const kana = countMatches(d, KANA_EVIDENCE);
+  const han = countMatches(d, HAN);
+  if (kana > 0) {
+    if (han >= 2 && kana >= han && !labelLike(d)) fatal.push("kana-dominant:" + kana + "/" + han);
+    else if (han === 0 && kana >= 2 && !labelLike(d)) warn.push("katakana-only");
+    else if (kana >= 3 && !labelLike(d)) warn.push("kana:" + kana);
+  }
+
+  // 3) unreadable / wrong-script output: anything that is neither CJK/kana nor a
+  //    known punctuation/symbol (hangul, cyrillic, mojibake). GalTransl does the
+  //    same with a GBK encode round-trip; listing the scripts directly is
+  //    equivalent here and avoids encoding guesswork. Box drawing, bullets and
+  //    Japanese quotes are legitimate in RPG Maker text.
+  const ALLOWED_EXTRA = new Set(
+    Array.from("，。！？、；：（）「」『』【】《》〈〉…—～·♪♥♡“”‘’\"'￥％＃＠＆＊＋－／＝＜＞　※■□▲▼◆◇●○☆★→←↑↓")
+  );
+  const isBoxOrSymbol = (ch) => {
+    const c = ch.codePointAt(0);
+    return (c >= 0x2500 && c <= 0x27bf) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0x3000 && c <= 0x303f);
+  };
+  const stray = [];
+  for (const ch of d) {
+    const c = ch.codePointAt(0);
+    if (c < 0x80) continue; // ASCII / folded control codes
+    if (HAN.test(ch) || KANA_ALL.test(ch) || ALLOWED_EXTRA.has(ch) || isBoxOrSymbol(ch)) continue;
+    stray.push(ch);
+  }
+  if (stray.length) {
+    const visible = stray.filter((c) => c.codePointAt(0) > 0x01ff).length;
+    if (visible >= 3) fatal.push("stray-chars:" + Array.from(new Set(stray)).slice(0, 4).join(""));
+    else if (visible) warn.push("stray:" + Array.from(new Set(stray)).slice(0, 4).join(""));
+  }
+
+  // 4) length anomaly: truncation or runaway expansion (also catches the
+  //    "repetition loop" failure mode)
+  if (s.length >= 8) {
+    if (d.length < s.length * 0.2) fatal.push("too-short:" + d.length + "<" + s.length);
+    else if (d.length > s.length * 3 && d.length - s.length >= 20) warn.push("too-long:" + d.length + ">" + s.length);
+  }
+
+  // 5) runaway repetition (the "啊啊啊啊…" loop): most frequent char dominating
+  const counts = new Map();
+  for (const ch of d) counts.set(ch, (counts.get(ch) || 0) + 1);
+  let topChar = "", topCount = 0;
+  for (const [ch, n] of counts) if (n > topCount) { topCount = n; topChar = ch; }
+  if (topCount > 20 && topChar !== "\n" && !/\s/.test(topChar)) {
+    const srcCount = countMatches(s, new RegExp(escapeRe(topChar), "g"));
+    if (topCount > Math.max(srcCount * 2, 20)) fatal.push("repetition:" + topChar + "×" + topCount);
+  }
+
+  // 6) newline conservation (players see a broken text box otherwise)
+  const srcNl = countMatches(s, /\n/g);
+  const dstNl = countMatches(d, /\n/g);
+  if (srcNl !== dstNl) warn.push("newlines:" + srcNl + "->" + dstNl);
+
+  // 7) untranslated / near-identical. "unchanged" is only meaningful for text
+  //    that actually needed translating: `打击/火焰` or `■ 011 萨拉_普通` are
+  //    labels that legitimately stay as they are (see translatableSource()).
+  const norm = (x) => String(x).replace(/\s+/g, "");
+  // Compare with punctuation folded away: a line whose only "translation" was
+  // switching 「 for a Chinese quote is still an untranslated line.
+  const foldPunct = (x) => String(x).replace(/\s+/g, "")
+    .replace(/[「」『』“”‘’""''［］\[\]（）()｛｝{}＜＞<>]/g, "\u0001")
+    .replace(/[，、]/g, ",").replace(/[。．]/g, ".").replace(/[！]/g, "!").replace(/[？]/g, "?")
+    .replace(/[：]/g, ":").replace(/[；]/g, ";").replace(/[~～〜]/g, "~");
+  const wasCandidate = translatableSource(s);
+  if (wasCandidate && (norm(s) === norm(d) || foldPunct(s) === foldPunct(d))) fatal.push("unchanged");
+  else if (han >= 4 && KANA_EVIDENCE.test(s)) {
+    // Japanese source that came back with the same CJK content is suspicious
+    const setS = new Set(Array.from(norm(s)).filter((c) => HAN.test(c)));
+    const setD = new Set(Array.from(norm(d)).filter((c) => HAN.test(c)));
+    if (setS.size >= 4) {
+      let same = 0;
+      for (const c of setS) if (setD.has(c)) same++;
+      const jaccard = same / (setS.size + setD.size - same);
+      if (jaccard > 0.8) warn.push("similar:" + jaccard.toFixed(2));
+    }
+  }
+
+  // 8) punctuation pairing — only a *new* imbalance counts. RPG Maker dialogue is
+  //    often split across lines, so the source itself is frequently unbalanced
+  //    (one line opens 「, the next closes it); flagging those would be noise.
+  for (const [open, close] of [["（", "）"], ["「", "」"], ["『", "』"], ["(", ")"]]) {
+    const o = countMatches(d, new RegExp(escapeRe(open), "g"));
+    const c = countMatches(d, new RegExp(escapeRe(close), "g"));
+    const so = countMatches(s, new RegExp(escapeRe(open), "g"));
+    const sc = countMatches(s, new RegExp(escapeRe(close), "g"));
+    if (o !== c && so === sc) {
+      warn.push("punct:" + open + close);
+      break;
+    }
+  }
+
+  return { fatal, warn };
+}
+
+// Text that genuinely needs translating. Mirrors the layer-0 skip rules: labels
+// made of a name plus symbols (`■ 023 アメリア_惊讶`), kanji-only labels
+// (`打击/火焰`), bare resource references, pure ASCII and pure symbols do not need
+// a translation, so "the output equals the input" is not a defect for them.
+// Used to keep the unchanged/similar checks honest.
+const LABEL_STRIP = /[\s■□▲▼◆◇●○☆★※・\-_/\\|+.,:;()（）[\]{}<>〈〉《》「」『』【】〜~!?！？。、，0-9A-Za-z]/g;
+const LABEL_EXTRA = /[\u2500-\u257f\u25a0-\u25ff\u2600-\u26ff\u2700-\u27bf]/; // box drawing & symbols
+function labelLike(s) {
+  const t = String(s).trim();
+  if (!t) return true;
+  const body = t.replace(LABEL_STRIP, "").replace(new RegExp(LABEL_EXTRA.source, "g"), "");
+  if (body.length > 6) return false;
+  if (body.length === 0) return true;
+  return KANA_EVIDENCE.test(body) || HAN.test(body);
+}
+
+function translatableSource(s) {
+  const t = String(s).trim();
+  if (!t) return false;
+  if (/\.(png|jpg|jpeg|gif|bmp|webp|rpgmvp|ogg|m4a|rpgmvo|mp3|rvdata2)$/i.test(t)) return false;
+  if (/^[A-Za-z0-9_\-./\\%]+$/.test(t)) return false;          // filenames, ids, numbers
+  if (!KANA_EVIDENCE.test(t)) return false;                     // no kana -> not Japanese prose
+  if (labelLike(t)) return false;                               // resource/artwork label
+  return true;
+}
+
+// Backwards-compatible boolean used by the patch-time guard.
+function looksBroken(src, dst) {
+  const q = qualityCheck(src, dst);
+  return q.fatal.length > 0;
+}
+
 // ---------------- translation cache (keyed by source text) ----------------
 // The cache is the only thing that makes "resume" and "check" meaningful, so it
 // is keyed by text: extraction ids shift whenever the extractor changes, which
@@ -584,31 +772,46 @@ function makeCache(entries, flagged) {
   };
 }
 
-function checkUntranslated(entries) {
+function checkUntranslated(entries, sources) {
   const cache = makeCache(entries);
-  const bad = [];
+  // The *source* text is what the quality rules must be evaluated against. When a
+  // game has already been translated, the live files hold Chinese, so checking
+  // "translation vs live file" compares Chinese with Chinese and produces
+  // nonsense; the caller passes the pristine extraction when it has one.
+  const sourceByText = sources || new Map();
+  const fatal = [];
+  const suspect = [];
   const pending = [];
+  let compared = 0;
+  const judge = (e, tr) => {
+    const src = sourceByText.get(normText(e.text)) || e.text;
+    if (sourceByText.size) compared++;
+    const han = countMatches(tr, HAN);
+    const kana = countMatches(tr, KANA_EVIDENCE);
+    const nonAscii = countMatches(tr, /[^\x00-\x7f]/g);
+    const q = qualityCheck(src, tr);
+    if (q.fatal.length) {
+      fatal.push({ id: e.id, text: src, trans: tr, reason: q.fatal.join("|") });
+      return;
+    }
+    if (kana > 0 && han > 0 && kana >= han) fatal.push({ id: e.id, text: src, trans: tr, reason: "kana" });
+    else if (han < 2 && nonAscii < 2 && looksLikeEnglishText(tr)) fatal.push({ id: e.id, text: src, trans: tr, reason: "english" });
+    else if (q.warn.length) suspect.push({ id: e.id, text: src, trans: tr, reason: q.warn.join("|") });
+  };
   for (const e of entries) {
     const tr = cache.lookup(e.text);
     if (tr === undefined) {
       pending.push({ id: e.id, text: e.text, reason: "pending" });
       continue;
     }
-    // Artwork/resource labels legitimately keep kana (`■ 023 アメリア_惊讶`), so
-    // kana alone is not proof of a missing translation; require real Chinese
-    // body text alongside it.
-    const han = (tr.match(/[\u3400-\u9fff]/g) || []).length;
-    const kana = (tr.match(/[\u3040-\u30ff]/g) || []).length;
-    const nonAscii = (tr.match(/[^\x00-\x7f]/g) || []).length;
-    if (kana > 0 && han > 0 && kana >= han) bad.push({ id: e.id, text: e.text, trans: tr, reason: "kana" });
-    // Latin-heavy output only counts as a failure when the answer carries no
-    // CJK body at all: "HP回复" and "打倒敌人后，HP会回复。" are fine.
-    else if (han < 2 && nonAscii < 2 && looksLikeEnglishText(tr)) bad.push({ id: e.id, text: e.text, trans: tr, reason: "english" });
-    else if (tr === e.text) bad.push({ id: e.id, text: e.text, trans: tr, reason: "unchanged" });
+    judge(e, tr);
   }
-  fs.writeFileSync(UNTRANS, JSON.stringify({ bad, pending }), "utf8");
-  console.log("UNTRANSLATED bad=" + bad.length + " pending=" + pending.length);
-  return { bad, pending };
+  // `bad` stays as the union so older GUI builds keep working.
+  const bad = fatal.concat(suspect);
+  fs.writeFileSync(UNTRANS, JSON.stringify({ fatal, suspect, bad, pending, sourceCompared: compared }), "utf8");
+  console.log("UNTRANSLATED fatal=" + fatal.length + " suspect=" + suspect.length + " pending=" + pending.length
+    + (sourceByText.size ? " (与原始日文对照 " + compared + " 条)" : ""));
+  return { fatal, suspect, bad, pending };
 }
 
 // ---------------- prompt sizing ----------------
@@ -967,6 +1170,19 @@ async function translateGroupRecursive(group, cache, fails, stats) {
         skip.add(i);
         fails.push({ hash: textHash(target.text), err: "too-short", text: target.text.slice(0, 40) });
         console.log("SUSPECT_SHORT", JSON.stringify(target.text.slice(0, 40)));
+        continue;
+      }
+      // Full quality gate: a line that loses a control code or degenerates into
+      // a repetition loop must not reach the game.
+      if (QUALITY_GATE) {
+        const q = qualityCheck(group[i].text, res[i]);
+        if (q.fatal.length) {
+          skip.add(i);
+          fails.push({ hash: textHash(target.text), err: "quality:" + q.fatal.join("|"), text: target.text.slice(0, 40) });
+          console.log("QUALITY_REJECT", JSON.stringify(target.text.slice(0, 30)), q.fatal.join("|"));
+          continue;
+        }
+        if (q.warn.length) stats.warned = (stats.warned || 0) + 1;
       }
     }
     for (let i = 0; i < group.length; i++) {
@@ -1127,6 +1343,7 @@ async function translate(entries) {
         pendingAtStart: pending.length,
         requests: groups.length,
         splitRetries: stats.splits,
+        qualityWarnings: stats.warned || 0,
         failures: pruned.length,
       },
       null,
@@ -1152,14 +1369,16 @@ async function translate(entries) {
 
   // Where do we read the *source* text from? Once a game has been translated,
   // its live data files hold Chinese, so re-extracting from them would (a) miss
-  // the cache completely and (b) translate Chinese into Chinese. The pristine
-  // copy under data_原版备份 is the correct source; the live folder is still
-  // scanned so content added by a game update is not lost.
+  // the cache completely and (b) translate Chinese into Chinese, and for "check"
+  // it would judge Chinese against Chinese. The pristine copy under
+  // data_原版备份 is the correct source; the live folder is still scanned so
+  // content added by a game update is not lost.
   const backupJson = findDataDir(BAK_DIR);
   const liveJson = engine.kind === "MV" ? engine.dataDir : null;
   if (backupJson) console.log("SOURCE_FROM_BACKUP", backupJson);
 
-  let entries;
+  let entries;      // what we operate on (live data for VX Ace, pristine-first for MV)
+  let sources = null; // pristine source texts, when a backup exists
   let dataDir = engine.dataDir;
   let vxWork = null;
   if (engine.kind === "MV") {
@@ -1172,11 +1391,33 @@ async function translate(entries) {
       dataDir = path.join(r.outDir, "Data");
     }
     entries = extractVxAce(dataDir);
+
+    // Pristine VX Ace source for the quality pass: the backed-up archive, or a
+    // second extraction from the backed-up Data folder.
+    const bakArchive = path.join(BAK_DIR, "Game.rgss3a");
+    const bakData = path.join(BAK_DIR, "Data");
+    try {
+      if (fs.existsSync(bakArchive)) {
+        const exWork = path.join(WORK, name + "-vx-orig");
+        fs.mkdirSync(exWork, { recursive: true });
+        const r2 = unpackVxAce({ archive: bakArchive }, exWork, bakArchive);
+        sources = new Map(extractVxAceTo(path.join(r2.outDir, "Data"), EXTRACT.replace(/-extract\.json$/, "-extract-orig.json"))
+          .map((e) => [normText(e.text), e.text]));
+        console.log("SOURCE_FROM_BACKUP", bakArchive);
+      } else if (fs.existsSync(bakData)) {
+        sources = new Map(extractVxAceTo(bakData, EXTRACT.replace(/-extract\.json$/, "-extract-orig.json"))
+          .map((e) => [normText(e.text), e.text]));
+        console.log("SOURCE_FROM_BACKUP", bakData);
+      }
+    } catch (e) {
+      console.log("SOURCE_BACKUP_UNREADABLE", e.message);
+      sources = null;
+    }
   }
   console.log("EXTRACTED", entries.length);
 
   if (MODE === "check") {
-    checkUntranslated(entries);
+    checkUntranslated(entries, sources);
     console.log("CHECK_DONE");
     process.exit(0);
   }
