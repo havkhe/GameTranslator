@@ -251,7 +251,18 @@ function writeIdMap(entries) {
 // Many MZ games keep their dialogue in data\resources\<locale>\*.json (loaded by
 // a localization plugin) and some keep plugin params in js\plugins\*.json; a
 // non-recursive scan silently ignores all of that text.
-const IGNORE_JSON_DIRS = new Set(["save", "saves", "backup", "backups", "_backup", "node_modules", ".git"]);
+// Directories that never hold text worth translating (backups, caches, saves).
+// Game folders are often localised, so match localized names generically rather
+// than by list: `バックアップ` appeared in the wild and was translated twice.
+const IGNORE_JSON_DIRS = new Set([
+  "save", "saves", "backup", "backups", "_backup", "backup_old", "old", "old_version",
+  "node_modules", ".git", "__macosx", "bak",
+]);
+const IGNORE_JSON_DIR_RE = /(バックアップ|バツクアツプ|予備|退避|备份|備份|存档|存檔|_bak$|^bak_)/i;
+function isIgnoredJsonDir(name) {
+  const n = String(name);
+  return IGNORE_JSON_DIRS.has(n.toLowerCase()) || IGNORE_JSON_DIR_RE.test(n);
+}
 function listJsonFiles(root) {
   const out = [];
   const walk = (dir, rel) => {
@@ -265,7 +276,7 @@ function listJsonFiles(root) {
       const full = path.join(dir, ent.name);
       const relPath = rel ? rel + "/" + ent.name : ent.name;
       if (ent.isDirectory()) {
-        if (IGNORE_JSON_DIRS.has(ent.name.toLowerCase())) continue;
+        if (isIgnoredJsonDir(ent.name)) continue;
         walk(full, relPath);
       } else if (/\.(json|js)$/i.test(ent.name)) {
         out.push({ full, rel: relPath });
