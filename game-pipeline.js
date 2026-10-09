@@ -655,41 +655,121 @@ function packGroups(list) {
   return groups;
 }
 
-function askLocal(content) {
+// ---------------- llama-server request layer ----------------
+// A degenerate generation (the model looping on "啊啊啊啊…") used to occupy a
+// server slot for many minutes: the client timeout only closed our socket while
+// the server kept decoding, and the retries queued up behind it — the whole tool
+// looked frozen. We now (a) cap max_tokens, (b) treat "no data for N seconds"
+// as a stall, and (c) actively erase the slot so the next request can run.
+const STALL_MS = parseInt(process.env.GT_STALL_MS || "45000", 10);
+const MAX_OUTPUT_TOKENS = parseInt(process.env.GT_MAX_OUTPUT_TOKENS || "1024", 10);
+const SLOT_ERASE = process.env.GT_NO_SLOT_ERASE !== "1";
+// After this many stalled requests the model is considered stuck (degenerate
+// generation, VRAM thrashing, driver reset). Continuing would spend hours
+// retrying, so the run stops early and leaves every pending entry in
+// failures.json for the next attempt.
+const MAX_STALLS = parseInt(process.env.GT_MAX_STALLS || "3", 10);
+
+// Set by the request layer, read by the translate loop.
+const runState = { stalls: 0, degraded: false };
+
+function reportServer(tag, detail) {
+  if (detail && detail.predicted_per_second)
+    console.log(tag, "tok/s=" + Number(detail.predicted_per_second).toFixed(1), "tokens=" + detail.predicted_n);
+  else console.log(tag);
+}
+
+// Ask llama-server to release the slot(s) we just abandoned. Best effort: older
+// builds may not expose the endpoint, and a failure here must never break a run.
+// `slotId` is optional — llama.cpp only reports the slot id in some builds, so we
+// fall back to clearing whatever was left busy.
+function eraseSlot(slotId) {
+  if (!SLOT_ERASE) return;
+  const path = slotId === undefined || slotId === null || slotId < 0
+    ? "/slots/0?action=erase"
+    : "/slots/" + slotId + "?action=erase";
+  try {
+    const req = http.request({ host: "127.0.0.1", port: PORT, path, method: "POST", headers: { "Content-Length": 0 } }, (res) => {
+      res.resume();
+    });
+    req.on("error", () => {});
+    req.setTimeout(4000, () => req.destroy(new Error("slot erase timeout")));
+    req.end();
+  } catch (e) {}
+}
+
+function askLocal(content, opts) {
+  const options = opts || {};
+  const maxTokens = options.maxTokens || MAX_OUTPUT_TOKENS;
   return new Promise((resolve, reject) => {
+    const messages = [];
+    if (SYSTEM_PROMPT) messages.push({ role: "system", content: SYSTEM_PROMPT });
+    messages.push({ role: "user", content });
     const body = JSON.stringify({
       model: "local",
-      messages: [{ role: "user", content }],
-      temperature: 0.3,
-      max_tokens: 2048,
+      messages,
+      temperature: TEMPERATURE,
+      top_p: TOP_P,
+      frequency_penalty: FREQ_PENALTY,
+      max_tokens: maxTokens,
       stream: false,
     });
+    let settled = false;
+    let stallTimer = null;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (stallTimer) clearTimeout(stallTimer);
+      fn(arg);
+    };
     const req = http.request(
       { host: "127.0.0.1", port: PORT, path: "/v1/chat/completions", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } },
       (res) => {
         let d = "";
-        res.on("data", (c) => (d += c));
+        const armStallTimer = () => {
+          if (stallTimer) clearTimeout(stallTimer);
+          stallTimer = setTimeout(() => {
+            runState.stalls++;
+            console.log("STALL_ABORT after " + Math.round(STALL_MS / 1000) + "s without output (stall #" + runState.stalls + ")");
+            if (runState.stalls >= MAX_STALLS) {
+              runState.degraded = true;
+              console.log("MODEL_DEGRADED 连续 " + runState.stalls + " 次请求无输出，判定模型卡死，停止本次运行（进度已保留，可稍后重试）");
+            }
+            req.destroy(new Error("stalled"));
+            eraseSlot(res.headers && res.headers["x-llama-slot-id"]);
+          }, STALL_MS);
+        };
+        armStallTimer();
+        res.on("data", (c) => {
+          d += c;
+          armStallTimer();
+        });
         res.on("end", () => {
+          if (stallTimer) clearTimeout(stallTimer);
           try {
             const j = JSON.parse(d);
-            if (j.error) return reject(new Error(typeof j.error === "string" ? j.error : JSON.stringify(j.error)));
+            if (j.error) return finish(reject, new Error(typeof j.error === "string" ? j.error : JSON.stringify(j.error)));
             const text = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-            if (!text) return reject(new Error("llama 无返回内容"));
-            resolve(text);
+            if (!text) return finish(reject, new Error("llama 无返回内容"));
+            if (j.timings) reportServer("LLAMA_TIMINGS", j.timings);
+            finish(resolve, text);
           } catch (e) {
-            reject(e);
+            finish(reject, e);
           }
         });
       }
     );
-    req.on("error", reject);
-    req.setTimeout(240000, () => req.destroy(new Error("timeout")));
+    req.on("error", (e) => {
+      // Whatever went wrong, do not leave the slot busy for the next attempt.
+      eraseSlot(options.slotId);
+      finish(reject, e);
+    });
     req.write(body);
     req.end();
   });
 }
 
-async function ask(content) { return askLocal(content); }
+async function ask(content, opts) { return askLocal(content, opts); }
 
 // Pause: wait while pause.flag exists. Stop: exit gracefully at batch boundary.
 function checkFlags() {
@@ -730,10 +810,11 @@ function parseResult(text) {
     }
   }
   if (numbered) return obj;
-  // Last resort: one translation per line, no numbering. Only usable when the
-  // caller knows how many lines it asked for (handled in translateBatch).
+  // Last resort: one translation per line, no numbering. The caller verifies
+  // the count (normalizeResult), so a single-line answer is valid too — that
+  // happens whenever a chunk was split at the character limit.
   const plain = t.split(/\r?\n/).map((x) => x.trim()).filter((x) => x.length > 0);
-  if (plain.length > 1) return plain;
+  if (plain.length) return plain;
   return null;
 }
 
@@ -749,23 +830,58 @@ function normalizeResult(raw, count) {
   return out;
 }
 
-// The default prompt asks for line-by-line simplified-Chinese output as a JSON
-// object. Users may override it via a prompt file (argv[7]); "{lines}" is
-// replaced with the numbered source lines, otherwise they are appended.
+// Prompt protocol.
+//   {lines}    -> raw source lines (what the Sakura/GalTransl fine-tunes were
+//                 trained on: one line in, one line out, no numbering)
+//   {numbered} -> "1. text" lines (the older JSON/legacy protocol)
+// The default follows the model author's documented shape (SakuraLLM), because
+// prompting a fine-tune with an unfamiliar format measurably wastes tokens
+// (measured: 218 -> 174 output tokens per 16-line batch).
 const DEFAULT_PROMPT =
-  "将下列每行日文翻译成简体中文（禁止翻译成英文，只能输出简体中文）。必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码与角色名标记，不得增删行数。\n" +
-  '只输出一个JSON对象，键为行号，值为简体中文译文，例如{"1":"译文一","2":"译文二"}，不要输出其他内容。\n' +
+  "将下列每行日文翻译成简体中文。禁止翻译成英文，只输出简体中文。\n" +
+  "必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码；行数必须与输入完全相同。\n" +
+  "每行输出一条译文，不要编号、不要JSON、不要解释。\n" +
   "{lines}";
+
+// Sent as a separate system message when the caller supplies it. Kept verbatim
+// from the model documentation so the fine-tune sees its trained prefix.
+const DEFAULT_SYSTEM_PROMPT =
+  "你是一个轻小说翻译模型，可以流畅通顺地以日本轻小说的风格将日文翻译成简体中文，并联系上下文正确使用人称代词，不擅自添加原文中没有的代词。";
+const SYSTEM_PROMPT = process.env.GT_SYSTEM_PROMPT !== undefined
+  ? process.env.GT_SYSTEM_PROMPT
+  : DEFAULT_SYSTEM_PROMPT;
+
+// Sampling: the model's own README recommends low temperature and a narrow
+// nucleus (0.1/0.3 for the 13B generation, 0.3/0.8 for the v3 generation) plus a
+// small frequency penalty to break repetition loops. llama-server would
+// otherwise use the model defaults (temperature 0.8 / top_p 0.95).
+const TEMPERATURE = parseFloat(process.env.GT_TEMPERATURE || "0.3");
+const TOP_P = parseFloat(process.env.GT_TOP_P || "0.8");
+const FREQ_PENALTY = parseFloat(process.env.GT_FREQ_PENALTY || "0.1");
+
 let basePrompt = DEFAULT_PROMPT;
 if (PROMPT_FILE && fs.existsSync(PROMPT_FILE)) {
   const custom = fs.readFileSync(PROMPT_FILE, "utf8").trim();
-  if (custom) basePrompt = custom;
+  // v2.3.x shipped a prompt that asked for a JSON object. Those models are
+  // fine-tuned for "one line in, one line out", so a *stock* legacy prompt is
+  // transparently upgraded here (a hand-written prompt is left untouched). This
+  // lives in the pipeline on purpose: it then works no matter which GUI build
+  // wrote prompt.txt, and users who never touch the settings still get it.
+  if (custom && custom.includes("只输出一个JSON对象") && custom.includes("{lines}")) {
+    console.log("PROMPT_UPGRADED 检测到 v2.3 的 JSON 提示词，已改用 v2.4 默认逐行格式");
+  } else if (custom) {
+    basePrompt = custom;
+  }
 }
 
 function buildPrompt(batch) {
-  const lines = batch.map((e, j) => j + 1 + ". " + e.text).join("\n");
-  if (basePrompt.includes("{lines}")) return basePrompt.replace(/\{lines\}/g, lines);
-  return basePrompt + "\n\n" + lines;
+  const raw = batch.map((e) => e.text).join("\n");
+  const numbered = batch.map((e, j) => j + 1 + ". " + e.text).join("\n");
+  let p = basePrompt;
+  if (p.includes("{numbered}")) p = p.replace(/\{numbered\}/g, numbered);
+  if (p.includes("{lines}")) p = p.replace(/\{lines\}/g, raw);
+  if (!p.includes(raw)) p = p + "\n\n" + raw;
+  return p;
 }
 
 // One request -> array of translations for `group`, or null.
@@ -773,12 +889,27 @@ function buildPrompt(batch) {
 // a fraction of re-sending the same batch verbatim three times (a model that
 // answers "sorry, I can't translate" does so deterministically).
 async function translateGroup(group) {
+  if (runState.degraded) return null;
   const prompt = buildPrompt(group);
+  // Cap generation at roughly twice the source size (GalTransl's rule). This is
+  // the cheapest guard against a repetition loop: the model physically cannot
+  // generate 2000 tokens for a 20-character line.
+  const srcChars = group.reduce((a, e) => a + e.text.length, 0);
+  const maxTokens = Math.max(
+    64,
+    Math.min(MAX_OUTPUT_TOKENS, Math.ceil(srcChars * 2) + 32 * group.length)
+  );
   for (let attempt = 0; attempt < GROUP_ATTEMPTS; attempt++) {
     let resp;
     try {
-      resp = await ask(prompt);
+      resp = await ask(prompt, { maxTokens, groupSize: group.length });
     } catch (e) {
+      // Never swallow this silently: a dead server or a rejected request is the
+      // difference between "translating" and "doing nothing for an hour".
+      if (process.env.GT_DEBUG_REQUEST || !globalThis.__gtAskErrLogged) {
+        globalThis.__gtAskErrLogged = true;
+        console.log("REQUEST_FAILED", JSON.stringify(String(e && e.message ? e.message : e)));
+      }
       continue;
     }
     const parsed = parseResult(resp);
@@ -875,6 +1006,7 @@ function pruneFailures(fails, stillMissing) {
 // just burns GPU time (a model that answers "sorry, I can't translate" does so
 // every time). The entry stays in failures.json and is retried on the next run.
 async function translateOne(text) {
+  if (runState.degraded) return null;
   const prompt = "将下面日文翻译成简体中文（只能输出简体中文，禁止英文）：\n" + text;
   try {
     const resp = await ask(prompt);
@@ -922,6 +1054,7 @@ async function translate(entries) {
 
   for (let i = 0; i < groups.length; i++) {
     checkFlags();
+    if (runState.degraded) break;
     await translateGroupRecursive(groups[i], cache, fails, stats);
     done++;
     cache.save();
@@ -930,7 +1063,7 @@ async function translate(entries) {
   }
 
   const missing = entries.filter((e) => !cache.has(e.text));
-  if (missing.length) {
+  if (missing.length && !runState.degraded) {
     console.log("RETRY_SINGLE", missing.length);
     for (const e of missing) {
       checkFlags();
@@ -939,6 +1072,9 @@ async function translate(entries) {
       else fails.push({ hash: textHash(e.text), err: "single-fail", text: e.text.slice(0, 40) });
       cache.save();
     }
+  } else if (missing.length) {
+    console.log("SKIP_RETRY_MODEL_DEGRADED", missing.length);
+    for (const e of missing) fails.push({ hash: textHash(e.text), err: "model-degraded", text: e.text.slice(0, 40) });
   }
 
   cache.save();

@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -33,8 +34,9 @@ namespace GameTranslator
     public class Settings
     {
         public const string DefaultPrompt =
-            "将下列每行日文翻译成简体中文（禁止翻译成英文，只能输出简体中文）。必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码与角色名标记，不得增删行数。\r\n" +
-            "只输出一个JSON对象，键为行号，值为简体中文译文，例如{\"1\":\"译文一\",\"2\":\"译文二\"}，不要输出其他内容。\r\n" +
+            "将下列每行日文翻译成简体中文。禁止翻译成英文，只输出简体中文。\r\n" +
+            "必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码；行数必须与输入完全相同。\r\n" +
+            "每行输出一条译文，不要编号、不要JSON、不要解释。\r\n" +
             "{lines}";
 
         [DataMember] public string ModelDir = "D:\\galtrans";
@@ -339,7 +341,28 @@ namespace GameTranslator
             if (string.IsNullOrEmpty(settings.LlamaCacheK)) settings.LlamaCacheK = "f16";
             if (string.IsNullOrEmpty(settings.LlamaCacheV)) settings.LlamaCacheV = "f16";
             if (string.IsNullOrWhiteSpace(settings.Prompt)) settings.Prompt = Settings.DefaultPrompt;
+            else if (IsLegacyPrompt(settings.Prompt))
+            {
+                // v2.3.x shipped a prompt that asked for a JSON object; the models
+                // are fine-tuned for one line in / one line out, so upgrade a
+                // saved *stock* prompt (a hand-edited one is left alone).
+                Log("翻译提示词已升级为 v2.4 默认逐行格式（原为 v2.3 的 JSON 格式；可在“翻译提示词设置”中改回或自定义）");
+                settings.Prompt = Settings.DefaultPrompt;
+                promptMigrated = true;
+            }
             if (string.IsNullOrEmpty(settings.LlamaPreset)) settings.LlamaPreset = "auto";
+            if (promptMigrated) SaveSettings();
+        }
+
+        private bool promptMigrated;
+
+        // True when the saved prompt is the stock v2.3 JSON prompt (including the
+        // CRLF variant DataContract may have produced).
+        private static bool IsLegacyPrompt(string p)
+        {
+            if (string.IsNullOrEmpty(p)) return false;
+            return p.IndexOf("只输出一个JSON对象", StringComparison.Ordinal) >= 0
+                && p.IndexOf("{lines}", StringComparison.Ordinal) >= 0;
         }
 
         private void SaveSettings()
@@ -588,9 +611,19 @@ namespace GameTranslator
             string cv = (settings.LlamaCacheV ?? "f16").ToLowerInvariant();
             if (ValidKvType(ck)) sb.Append(" -ctk ").Append(ck);
             if (ValidKvType(cv)) sb.Append(" -ctv ").Append(cv);
+            // 采样参数必须与 game-pipeline.js 请求里发送的一致：模型作者推荐
+            // 低温度 + 窄核采样（llama 自身默认 0.8/0.95 对翻译任务偏“发散”）。
+            sb.Append(" --temp ").Append(SamplerTemperature.ToString(CultureInfo.InvariantCulture));
+            sb.Append(" --top-p ").Append(SamplerTopP.ToString(CultureInfo.InvariantCulture));
+            // 退化复读时可通过 /metrics 判断；也可以据此诊断“卡住”。
+            sb.Append(" --metrics");
             sb.Append(" --no-webui");
             return sb.ToString();
         }
+
+        // 与 game-pipeline.js 的默认采样参数保持一致（可用环境变量覆盖）。
+        public const double SamplerTemperature = 0.3;
+        public const double SamplerTopP = 0.8;
 
         private static bool ValidKvType(string t)
         {
@@ -681,6 +714,7 @@ namespace GameTranslator
 
         private void Log(string s)
         {
+            if (log == null) return; // NormalizeSettings() runs before BuildUi()
             if (log.InvokeRequired) log.BeginInvoke(new Action(() => Log(s)));
             else { log.AppendText(DateTime.Now.ToString("HH:mm:ss ") + s + "\r\n"); log.ScrollToCaret(); }
         }
