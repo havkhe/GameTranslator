@@ -726,7 +726,13 @@ function cleanOutput(s) {
   t = t.replace(/<assim End>/gi, "");
   t = t.replace(/<\/?(imstart|im end|assistant|user|system)>/gi, "");
   if (/^注意：必须原样保留/.test(t)) return null;
-  if (t.length > 0 && t.length < 2) return null;
+  // A single character is a perfectly valid answer: 「さくら」->「樱」, 「雫」->「雫」,
+  // and single-kanji item names are common in RPG Maker databases. Rejecting them
+  // here was fatal because validation is all-or-nothing per request — one such
+  // line sank the whole batch, every split level failed with it, and a real run
+  // finished with 0 entries cached out of 12,123 (the entry never reached
+  // failures.json either). Only an empty answer is invalid.
+  if (t.length === 0) return null;
   return t;
 }
 
@@ -1219,24 +1225,50 @@ function splitMultilineEntries(list) {
 
 function packGroups(list) {
   const groups = [];
-  // A group may add more lines while it holds only *parts* (no complete entry):
-  // the parts of one entry must travel in the same request, and short parts may
-  // share that request with other entries. Once a whole entry is in the group,
-  // close it — appending a lone part after a complete entry would strand that
-  // part's siblings.
-  const canAdd = (g) => g.every((x) => x.part);
-  for (const e of splitMultilineEntries(list)) {
+  // Phase 1: pack whole ENTRIES into a request. The limits are the request size
+  // (at most BATCH lines and BATCH_CHARS characters); a runaway single line gets
+  // its own request, split at punctuation so the model never sees a wall of text.
+  for (const e of list) {
     if (e.text.length > SINGLE_CHARS) {
       const parts = splitLongText(e.text, SINGLE_CHARS);
       parts.forEach((p, i) => groups.push([{ id: e.id, text: p, part: i + 1, parts: parts.length, parent: e }]));
       continue;
     }
     const last = groups[groups.length - 1];
+    const isPartGroup = last && last[0] && last[0].part;
     const lastChars = last ? last.reduce((a, x) => a + x.text.length, 0) : Infinity;
-    if (last && last.length < BATCH && lastChars + e.text.length <= BATCH_CHARS && canAdd(last)) last.push(e);
+    if (last && !isPartGroup && last.length < BATCH && lastChars + e.text.length <= BATCH_CHARS) last.push(e);
     else groups.push([e]);
   }
-  return groups;
+  // Phase 2: expand multi-line ENTRIES into one item per source line, now that
+  // the entries are already grouped. The wire protocol is one line in / one line
+  // out, so an entry containing newlines cannot survive it; sending each line
+  // separately and rejoining with the source's own breaks fixes that (measured:
+  // an entire real run left ~4500 multi-line dialogue lines untranslated). Doing
+  // it here instead of before packing keeps entries batched together — doing it
+  // first made the packer treat every line as its own entry in its own request.
+  const out = [];
+  for (const g of groups) {
+    if (g.length === 1 && g[0].part) { out.push(g); continue; }
+    const expanded = [];
+    for (const e of g) {
+      if (typeof e.text !== "string" || !/[\r\n]/.test(e.text)) { expanded.push(e); continue; }
+      const pieces = e.text.split(/(\r\n|\n|\r)/).filter((p) => p !== "");
+      const lines = [];
+      const breaks = [];
+      for (const p of pieces) {
+        if (p === "\r\n" || p === "\n" || p === "\r") breaks.push(p);
+        else lines.push(p);
+      }
+      if (lines.length < 2) { expanded.push(e); continue; }
+      const multi = { lines, breaks };
+      lines.forEach((ln, i) => {
+        expanded.push({ id: e.id, text: ln, part: i + 1, parts: lines.length, parent: e, __multi: multi });
+      });
+    }
+    out.push(expanded);
+  }
+  return out;
 }
 
 // ---------------- llama-server request layer ----------------
@@ -1550,6 +1582,10 @@ async function translateGroup(group) {
   return null;
 }
 
+// Translation results for the individual lines of one multi-line (or long) entry,
+// keyed by the part object itself. A WeakMap keeps this from outliving the run.
+const partState = new WeakMap();
+
 // Translate a request-sized group; on failure split it in half and retry the
 // halves (GalTransl does the same with the first third). Splitting beats
 // retrying the same batch: a single bad line can no longer sink 15 good ones.
@@ -1567,9 +1603,11 @@ async function translateGroupRecursive(group, cache, fails, stats) {
       }
       res[i] = applyGlossary(res[i]);
       // A translation far shorter than its source means the model truncated or
-      // gave up. Writing that into the game silently loses dialogue, so treat it
-      // as a failure and let the entry be retried instead.
-      if (group[i].text.length > 12 && res[i].length < group[i].text.length * 0.25) {
+      // gave up. The comparison must use the ORIGINAL entry, not the chunk this
+      // request happened to carry: judging a chunk against its own length rejected
+      // good translations of long lines, and one rejected part meant the whole
+      // entry could never be assembled — it stayed pending on every single run.
+      if (target.text.length > 12 && res[i].length < target.text.length * 0.25) {
         skip.add(i);
         fails.push({ hash: textHash(target.text), err: "too-short", text: target.text.slice(0, 40) });
         console.log("SUSPECT_SHORT", JSON.stringify(target.text.slice(0, 40)));
@@ -1578,7 +1616,7 @@ async function translateGroupRecursive(group, cache, fails, stats) {
       // Full quality gate: a line that loses a control code or degenerates into
       // a repetition loop must not reach the game.
       if (QUALITY_GATE) {
-        const q = qualityCheck(group[i].text, res[i]);
+        const q = qualityCheck(target.text, res[i]);
         if (q.fatal.length) {
           skip.add(i);
           fails.push({ hash: textHash(target.text), err: "quality:" + q.fatal.join("|"), text: target.text.slice(0, 40) });
@@ -1592,14 +1630,18 @@ async function translateGroupRecursive(group, cache, fails, stats) {
       if (skip.has(i)) continue;
       const e = group[i];
       const target = e.parent || e;
+      // Join state is keyed by the part OBJECT rather than by the entry id: one
+      // request can now carry several multi-line entries, and an id-keyed map let
+      // their lines overwrite each other.
+      const st = partState.get(e) || { got: [] };
+      partState.set(e, st);
       if (e.parent) {
         // A split long line: collect parts, verify the joined result, then store
         // it under the *original* text so patch time can find it again.
-        stats.parts[e.id] = stats.parts[e.id] || [];
-        stats.parts[e.id][e.part - 1] = res[i];
-        if (stats.parts[e.id].filter(Boolean).length === e.parts) {
-          const joined = stats.parts[e.id].join("");
-          delete stats.parts[e.id];
+        st.got[e.part - 1] = res[i];
+        if (st.got.filter(Boolean).length === e.parts) {
+          partState.delete(e);
+          const joined = st.got.join("");
           if (joined.length < target.text.length * 0.25) {
             fails.push({ hash: textHash(target.text), err: "parts-too-short", text: target.text.slice(0, 40) });
           } else {
@@ -1607,13 +1649,12 @@ async function translateGroupRecursive(group, cache, fails, stats) {
           }
         }
       } else {
-        // A line of a multi-line entry: collect the parts and rejoin them with the
+        // A line of a multi-line entry: collect the lines and rejoin them with the
         // source's own line breaks once every line has been translated.
-        stats.parts[e.id] = stats.parts[e.id] || [];
-        stats.parts[e.id][e.part - 1] = res[i];
-        if (stats.parts[e.id].filter(Boolean).length === e.parts) {
-          const got = stats.parts[e.id];
-          delete stats.parts[e.id];
+        st.got[e.part - 1] = res[i];
+        if (st.got.filter(Boolean).length === e.parts) {
+          partState.delete(e);
+          const got = st.got;
           const src = target.text;
           const breaks = src.match(/\r\n|\n|\r/g) || [];
           let joined = got[0];
@@ -1625,6 +1666,12 @@ async function translateGroupRecursive(group, cache, fails, stats) {
           }
         }
       }
+      // NOTE: an ordinary one-line entry used to fall through here without ever
+      // reaching cache.set() — the translation was computed, validated and then
+      // dropped, so PROGRESS never moved and the next run retranslated everything
+      // (measured: 0 of 12,123 entries cached after a full pass). Every accepted
+      // line is cached, whether or not it needed joining with siblings.
+      if (!e.parent) cache.set(target.text, res[i]);
     }
     return;
   }
