@@ -4,8 +4,12 @@
 require "json"
 require_relative "vxace_stubs"
 
+# Fields that hold player-visible text. Must stay identical to the list in
+# vxace_patch.rb: a field collected here but not patched there (or vice versa)
+# produces "translated but not written back" or "written back but never shown".
 TEXT_IVARS = %w[@name @nickname @description @profile
-                @message1 @message2 @message3 @message4 @message5]
+                @message1 @message2 @message3 @message4 @message5
+                @display_name @note]
 
 # RPG::AudioFile / BGM / BGS / ME / SE: their @name is a file reference and
 # must never be translated (the on-disk file keeps the original name).

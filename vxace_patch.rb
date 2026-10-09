@@ -5,8 +5,10 @@
 require "json"
 require_relative "vxace_stubs"
 
+# Must match vxace_extract.rb exactly (see the comment there).
 TEXT_IVARS = %w[@name @nickname @description @profile
-                @message1 @message2 @message3 @message4 @message5]
+                @message1 @message2 @message3 @message4 @message5
+                @display_name @note]
 
 def audio_object?(node)
   [RPG::AudioFile, RPG::BGM, RPG::BGS, RPG::ME, RPG::SE].any? { |k| node.is_a?(k) }

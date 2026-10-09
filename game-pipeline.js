@@ -102,7 +102,41 @@ function loadKnownText() {
 
 // Speaker display names (MV `101`, MZ `101`) and the database name fields
 // belong to the same "translatable string" family as dialogue.
-const NAME_KEYS = ["name", "nickname", "description", "message1", "message2", "profile"];
+//
+// One shared list drives BOTH extraction and patching: the two sides used to have
+// their own idea of what is translatable, and any field added to one of them but
+// not the other silently produced "translated but not written back".
+const TEXT_FIELDS = [
+  "name", "nickname", "description", "profile",
+  "message1", "message2", "message3", "message4",
+  "displayName", "currencyUnit", "title", "hint",
+];
+const TEXT_FIELDS_SET = new Set(TEXT_FIELDS);
+// `note` is deliberately NOT in the list: RPG Maker plugins parse those as
+// metadata (`<CustomIcon: 5>`), so translating them breaks plugin behaviour.
+const NAME_KEYS = TEXT_FIELDS; // kept for readability at the call sites
+const TERMS_KEYS = ["basic", "commands", "params", "messages", "hint"];
+
+// Plugin parameter files (`js/plugins.js`, and `js/plugins/*.json` in some MZ
+// builds) hold the JSON-parameter objects of RPG Maker plugins: MV wraps them in
+// a `parameters` array whose entries carry `"params"`, MZ uses a `parameters`
+// object with named keys. We only touch the string *values*: keys such as
+// `name`/`params` are identifiers the engine looks up, and a translated value
+// only ever affects what the plugin displays. Values with no Japanese pass
+// looksTranslatable() untouched, so tags like "<CustomIcon: 5>" survive as long
+// as the token inside them is ASCII.
+function isPluginDataFile(fileName, text) {
+  if (fileName.toLowerCase() !== "plugins.js" && !/^plugins(\/[^/]+)?\.json$/i.test(fileName)) return false;
+  // A DB file has *one* `parameters` key per record but nowhere near this many,
+  // and no `"parameters"` key at all for most of them; plugin files have one per
+  // plugin. (MZ plugin entries have no `id`, so requiring one was wrong.)
+  const paramKeys = (text.match(/"(?:params|parameters)"\s*:/g) || []).length;
+  return paramKeys > 5;
+}
+
+// `displayName` etc. also appear on resources such as animation frames or audio
+// objects; those are skipped by isAudioObject(), and translating a display name
+// inside a resource object is harmless (it is what the engine shows).
 
 // ---------------- engine detection ----------------
 // MV ships as <game>/www/data, but NW.js-packaged MZ builds put data/ and js/
@@ -233,10 +267,18 @@ function extractMV(pristineDir, liveDir) {
   };
   const walkDir = (dataDir, skipTranslated) => {
     if (!dataDir) return;
-    for (const f of fs.readdirSync(dataDir).filter((x) => x.endsWith(".json"))) {
+    // `plugins.js` is a JSON array despite the extension, so both are read.
+    for (const f of fs.readdirSync(dataDir).filter((x) => x.endsWith(".json") || x.endsWith(".js"))) {
+      const full = path.join(dataDir, f);
+      let raw;
+      try {
+        raw = fs.readFileSync(full, "utf8");
+      } catch (e) {
+        continue;
+      }
       let data;
       try {
-        data = JSON.parse(fs.readFileSync(path.join(dataDir, f), "utf8"));
+        data = JSON.parse(raw);
       } catch (e) {
         // A broken json file silently reduced coverage before; at least say so.
         console.log("EXTRACT_PARSE_ERROR " + f + ": " + e.message);
@@ -245,14 +287,31 @@ function extractMV(pristineDir, liveDir) {
       if (f === "System.json" && data.terms) {
         for (const k of Object.keys(data.terms)) {
           const arr = data.terms[k];
+          if (!TERMS_KEYS.includes(k)) continue;
           if (Array.isArray(arr)) arr.forEach((v, i) => add(f, "$terms." + k + "[" + i + "]", v, { skipTranslated }));
         }
       }
+      // Plugin parameter values: every string value is a candidate.
+      if (isPluginDataFile(f, raw)) collectStrings(f, data, "$plugins", skipTranslated);
       walk(f, data, "$", skipTranslated);
     }
   };
-  const processEventList = (file, list, p, skipTranslated) => {
-    if (!Array.isArray(list)) return;
+  // Every string value inside a plugin-parameter tree is a display candidate. The
+  // object *keys* are identifiers, so they are never touched.
+  const collectStrings = (file, obj, p, skipTranslated) => {
+    if (Array.isArray(obj)) {
+      obj.forEach((v, i) => collectStrings(file, v, p + "[" + i + "]", skipTranslated));
+      return;
+    }
+    if (obj && typeof obj === "object") {
+      for (const k of Object.keys(obj)) {
+        const v = obj[k];
+        if (typeof v === "string") add(file, p + "." + k, v, { skipTranslated });
+        else collectStrings(file, v, p + "." + k, skipTranslated);
+      }
+    }
+  };
+  const processEventList = (file, list, p, skipTranslated) => {    if (!Array.isArray(list)) return;
     list.forEach((cmd, idx) => {
       let code, params;
       if (Array.isArray(cmd) && cmd.length >= 3) {
@@ -268,6 +327,11 @@ function extractMV(pristineDir, liveDir) {
       else if (code === 102 && Array.isArray(params[0])) params[0].forEach((c) => add(file, pp, c, { skipTranslated }));
       else if (code === 402) add(file, pp, params[1], { skipTranslated });
       else if (code === 111 && typeof params[2] === "string") add(file, pp, params[2], { skipTranslated });
+      // 324/325 rename the party nickname / class at runtime; 320 renames an actor
+      else if (code === 320 && typeof params[1] === "string") add(file, pp, params[1], { skipTranslated });
+      else if (code === 324 && typeof params[1] === "string") add(file, pp, params[1], { skipTranslated });
+      else if (code === 325 && typeof params[1] === "string") add(file, pp, params[1], { skipTranslated });
+      // 357 shows a picture; the name is a resource and must not be touched.
     });
   };
   const walk = (file, obj, p, skipTranslated) => {
@@ -426,6 +490,9 @@ function patchMV(dataDir, entries, cache) {
       else if (code === 102 && Array.isArray(params[0])) params[0] = params[0].map((c) => replaceText(c));
       else if (code === 402) params[1] = replaceText(params[1]);
       else if (code === 111 && typeof params[2] === "string") params[2] = replaceText(params[2]);
+      else if (code === 320 && typeof params[1] === "string") params[1] = replaceText(params[1]);
+      else if (code === 324 && typeof params[1] === "string") params[1] = replaceText(params[1]);
+      else if (code === 325 && typeof params[1] === "string") params[1] = replaceText(params[1]);
     }
   };
   const walk = (obj) => {
@@ -436,27 +503,51 @@ function patchMV(dataDir, entries, cache) {
           (obj[0] && typeof obj[0] === "object" && typeof obj[0].code === "number" && Array.isArray(obj[0].parameters)));
       if (isEventList) {
         patchEventList(obj);
-        return;
+        // MUST return the array: the parent assigns the result back
+        // (`obj[k] = walk(v)`), and returning undefined would delete the key —
+        // that silently dropped every event page from the map files.
+        return obj;
       }
-      for (const v of obj) walk(v);
-      return;
+      const n = obj.length;
+      for (let i = 0; i < n; i++) obj[i] = walk(obj[i]);
+      return obj;
     }
     if (obj && typeof obj === "object") {
-      if (isAudioObject(obj)) return; // never patch audio resource names
+      if (isAudioObject(obj)) return obj; // never patch audio resource names
       for (const k of Object.keys(obj)) {
         const v = obj[k];
         if (typeof v === "string") {
-          if (NAME_KEYS.includes(k)) obj[k] = replaceText(v);
-        } else walk(v);
+          if (TEXT_FIELDS_SET.has(k)) obj[k] = replaceText(v);
+        } else obj[k] = walk(v);
       }
+      return obj;
     }
+    return obj;
   };
-  const files = fs.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
+  // Mirror of collectStrings() in the extractor.
+  const patchStrings = (obj) => {
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) obj[i] = patchStrings(obj[i]);
+      return obj;
+    }
+    if (obj && typeof obj === "object") {
+      for (const k of Object.keys(obj)) {
+        const v = obj[k];
+        if (typeof v === "string") obj[k] = replaceText(v);
+        else obj[k] = patchStrings(v);
+      }
+      return obj;
+    }
+    return obj;
+  };
+  const files = fs.readdirSync(dataDir).filter((f) => f.endsWith(".json") || f.endsWith(".js"));
   for (const f of files) {
     const fp = path.join(dataDir, f);
+    let raw;
     let data;
     try {
-      data = JSON.parse(fs.readFileSync(fp, "utf8"));
+      raw = fs.readFileSync(fp, "utf8");
+      data = JSON.parse(raw);
     } catch (e) {
       // A file we cannot parse is a file we cannot translate: report it instead
       // of silently skipping (this used to leave games half-translated).
@@ -466,10 +557,13 @@ function patchMV(dataDir, entries, cache) {
     const before = replaced;
     if (f === "System.json" && data.terms) {
       for (const k of Object.keys(data.terms)) {
+        if (!TERMS_KEYS.includes(k)) continue;
         const arr = data.terms[k];
         if (Array.isArray(arr)) arr.forEach((v, i) => (arr[i] = replaceText(v)));
       }
     }
+    // Mirror of the extractor: plugin parameter values are patched too.
+    if (isPluginDataFile(f, raw)) patchStrings(data);
     walk(data);
     try {
       fs.writeFileSync(fp, JSON.stringify(data), "utf8");
@@ -574,8 +668,11 @@ function qualityCheck(src, dst) {
   const s = String(src);
   const d = dst;
 
-  // 1) control codes / numeric placeholders must survive
-  const srcRuns = asciiRuns(s);
+  // 1) control codes / numeric placeholders must survive. Only backslash commands
+  //    (\N[1], \C[14], \V[2]) and %N placeholders are checked: plain punctuation
+  //    inside an ASCII run ("ミア！" -> "米娅。") is a normal translation choice and
+  //    must not be reported as a lost control code.
+  const srcRuns = asciiRuns(s).filter((r) => /^\\/.test(r) || /%/.test(r));
   if (srcRuns.length) {
     const dstFolded = Array.from(d).map(foldWidth).join("").toLowerCase();
     const missing = [];
@@ -711,6 +808,57 @@ function translatableSource(s) {
 function looksBroken(src, dst) {
   const q = qualityCheck(src, dst);
   return q.fatal.length > 0;
+}
+
+// ---------------- glossary (术语表) ----------------
+// Optional file, looked up next to the game first and then in the work dir:
+//     <gameDir>\glossary.txt   or   <workDir>\glossary.txt
+// One term per line, `src->dst`, `#` starts a comment:
+//     ミア->米娅
+//     あやめ->菖蒲   # 主角
+// Two effects: the pairs are appended to the prompt (so the model uses them), and
+// an exact `src` found in a translation is replaced by `dst` afterwards, which is
+// what actually guarantees a consistent name across a whole game.
+const GLOSSARY_LIMIT = parseInt(process.env.GT_GLOSSARY_LIMIT || "120", 10);
+let glossary = [];
+function loadGlossary() {
+  const candidates = [path.join(GAME_DIR, "glossary.txt"), path.join(WORK, "glossary.txt")];
+  for (const p of candidates) {
+    if (!fs.existsSync(p)) continue;
+    const pairs = [];
+    for (const rawLine of fs.readFileSync(p, "utf8").split(/\r?\n/)) {
+      const line = rawLine.replace(/#.*$/, "").trim();
+      if (!line) continue;
+      const m = line.split(/->|=>|＝>|→/);
+      if (m.length < 2) continue;
+      const src = m[0].trim();
+      const dst = m.slice(1).join("->").trim();
+      if (src && dst && src !== dst && !pairs.some((x) => x.src === src)) pairs.push({ src, dst });
+    }
+    if (pairs.length) {
+      // Longest source first: applying `ミア->米娅` before
+      // `おはよう、ミアです。->…` would destroy the longer rule's match.
+      pairs.sort((a, b) => b.src.length - a.src.length);
+      glossary = pairs.slice(0, GLOSSARY_LIMIT);
+      console.log("GLOSSARY_LOADED", glossary.length, "from", p);
+      return;
+    }
+  }
+}
+
+function glossaryPromptBlock() {
+  if (!glossary.length) return "";
+  const lines = glossary.map((g) => g.src + "->" + g.dst).join("\n");
+  return "\n参考术语表（格式 src->dst，必须按此翻译并保持全文一致）：\n" + lines + "\n";
+}
+
+function applyGlossary(text) {
+  if (!glossary.length || typeof text !== "string") return text;
+  let out = text;
+  for (const g of glossary) {
+    if (out.includes(g.src)) out = out.split(g.src).join(g.dst);
+  }
+  return out;
 }
 
 // ---------------- translation cache (keyed by source text) ----------------
@@ -1104,7 +1252,7 @@ function buildPrompt(batch) {
   if (p.includes("{numbered}")) p = p.replace(/\{numbered\}/g, numbered);
   if (p.includes("{lines}")) p = p.replace(/\{lines\}/g, raw);
   if (!p.includes(raw)) p = p + "\n\n" + raw;
-  return p;
+  return p + glossaryPromptBlock();
 }
 
 // One request -> array of translations for `group`, or null.
@@ -1163,6 +1311,12 @@ async function translateGroupRecursive(group, cache, fails, stats) {
     const skip = new Set();
     for (let i = 0; i < group.length; i++) {
       const target = group[i].parent || group[i];
+      // The glossary is a hard requirement, so it is applied BEFORE validation:
+      // the quality rules then judge exactly what would be written to the game.
+      if (process.env.GT_DEBUG_GLOSSARY) {
+        console.log("GLOSSARY_APPLY", JSON.stringify(String(res[i]).slice(0, 20)), "->", JSON.stringify(String(applyGlossary(res[i])).slice(0, 20)), "size=" + glossary.length);
+      }
+      res[i] = applyGlossary(res[i]);
       // A translation far shorter than its source means the model truncated or
       // gave up. Writing that into the game silently loses dialogue, so treat it
       // as a failure and let the entry be retried instead.
@@ -1243,11 +1397,13 @@ function pruneFailures(fails, stillMissing) {
 // every time). The entry stays in failures.json and is retried on the next run.
 async function translateOne(text) {
   if (runState.degraded) return null;
-  const prompt = "将下面日文翻译成简体中文（只能输出简体中文，禁止英文）：\n" + text;
+  const prompt = "将下面日文翻译成简体中文（只能输出简体中文，禁止英文）：\n" + text + glossaryPromptBlock();
   try {
     const resp = await ask(prompt);
     const c = cleanOutput(resp);
-    if (c && !/^注意：/.test(c) && c.length >= 2 && !looksLikeEnglish(c) && c.length >= text.length * 0.25) return c;
+    if (c && !/^注意：/.test(c) && c.length >= 2 && !looksLikeEnglish(c) && c.length >= text.length * 0.25) {
+      return applyGlossary(c);
+    }
   } catch (err) {}
   return null;
 }
@@ -1352,6 +1508,10 @@ async function translate(entries) {
     "utf8"
   );
   console.log("TRANSLATED", entries.filter((e) => cache.has(e.text)).length, "FAILURES", pruned.length);
+  if (process.env.GT_DEBUG_GLOSSARY || glossary.length) {
+    const sample = entries.find((e) => glossary.some((g) => g.src === e.text)) || entries[0];
+    if (sample) console.log("GLOSSARY_RESULT", JSON.stringify(sample.text.slice(0, 20)), "=>", JSON.stringify(String(cache.lookup(sample.text)).slice(0, 24)), "size=" + glossary.length);
+  }
   if (retranslate.size) console.log("RETRANSLATE_UNRESOLVED", retranslate.size, "（这些条目重翻未取得更好的结果，已保留原有译文）");
   return cache;
 }
@@ -1415,6 +1575,8 @@ async function translate(entries) {
     }
   }
   console.log("EXTRACTED", entries.length);
+  loadGlossary();
+  if (glossary.length) console.log("GLOSSARY_ACTIVE", glossary.length);
 
   if (MODE === "check") {
     checkUntranslated(entries, sources);
