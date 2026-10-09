@@ -531,7 +531,7 @@ function looksLikeEnglishText(s) {
 // used to invalidate the whole run and re-translate thousands of finished lines.
 // (normText / loadKnownKeys live near the extractor, which needs them too.)
 
-function makeCache(entries) {
+function makeCache(entries, flagged) {
   const byText = Object.create(null);
   if (fs.existsSync(TRANS)) {
     let raw = null;
@@ -568,6 +568,9 @@ function makeCache(entries) {
     },
     set(text, value) {
       byText[normText(text)] = value;
+      // A successful (re)translation clears the "flagged by 检查翻译" state, so
+      // the patch step happily writes the fresh text.
+      if (flagged) for (const s of flagged) s.delete(normText(text));
     },
     remove(text) {
       delete byText[normText(text)];
@@ -591,13 +594,16 @@ function checkUntranslated(entries) {
       pending.push({ id: e.id, text: e.text, reason: "pending" });
       continue;
     }
-    // Resource label / artwork-reference lines legitimately keep kana
-    // (`■ 023 アメリア_惊讶`), so kana alone is not proof of a missing
-    // translation; require real Chinese body text alongside it.
+    // Artwork/resource labels legitimately keep kana (`■ 023 アメリア_惊讶`), so
+    // kana alone is not proof of a missing translation; require real Chinese
+    // body text alongside it.
     const han = (tr.match(/[\u3400-\u9fff]/g) || []).length;
     const kana = (tr.match(/[\u3040-\u30ff]/g) || []).length;
+    const nonAscii = (tr.match(/[^\x00-\x7f]/g) || []).length;
     if (kana > 0 && han > 0 && kana >= han) bad.push({ id: e.id, text: e.text, trans: tr, reason: "kana" });
-    else if (looksLikeEnglishText(tr)) bad.push({ id: e.id, text: e.text, trans: tr, reason: "english" });
+    // Latin-heavy output only counts as a failure when the answer carries no
+    // CJK body at all: "HP回复" and "打倒敌人后，HP会回复。" are fine.
+    else if (han < 2 && nonAscii < 2 && looksLikeEnglishText(tr)) bad.push({ id: e.id, text: e.text, trans: tr, reason: "english" });
     else if (tr === e.text) bad.push({ id: e.id, text: e.text, trans: tr, reason: "unchanged" });
   }
   fs.writeFileSync(UNTRANS, JSON.stringify({ bad, pending }), "utf8");
@@ -782,6 +788,19 @@ function checkFlags() {
   }
 }
 
+// Small/fast models sometimes echo the instruction lines at the start of their
+// answer, which used to make the line count mismatch and sink the whole batch
+// (observed with Hy-MT2-1.8B: 18 lines for 16 sources). Instructions are prompt
+// boilerplate, so they can be recognised and dropped.
+const INSTRUCTION_RE = /(必须原样保留|不要编号|不要JSON|不要json|行数必须|只输出|禁止翻译成英文|只输出简体中文|翻译成简体中文|逐行)/;
+function stripEchoedInstructions(lines) {
+  let start = 0;
+  while (start < lines.length - 1 && INSTRUCTION_RE.test(lines[start])) start++;
+  let end = lines.length;
+  while (end - 1 > start && INSTRUCTION_RE.test(lines[end - 1])) end--;
+  return lines.slice(start, end);
+}
+
 function parseResult(text) {
   if (typeof text !== "string") return null;
   let t = text.trim();
@@ -814,7 +833,8 @@ function parseResult(text) {
   // the count (normalizeResult), so a single-line answer is valid too — that
   // happens whenever a chunk was split at the character limit.
   const plain = t.split(/\r?\n/).map((x) => x.trim()).filter((x) => x.length > 0);
-  if (plain.length) return plain;
+  const cleaned = stripEchoedInstructions(plain);
+  if (cleaned.length) return cleaned;
   return null;
 }
 
@@ -1021,32 +1041,49 @@ async function translate(entries) {
   if (fs.existsSync(STOP_FLAG)) fs.rmSync(STOP_FLAG);
   const cache = makeCache(entries);
   if (cache.size) console.log("CACHE_LOADED", cache.size);
+  if (process.env.GT_DEBUG_CACHE) {
+    const keys = Object.keys(cache.byText);
+    console.log("CACHE_DEBUG", JSON.stringify({ file: TRANS, keys: keys.length, entries: entries.length, firstEntry: entries[0] && entries[0].text, hit: entries[0] ? cache.has(entries[0].text) : null }));
+  }
 
-  // Re-translate entries flagged as incomplete by a previous "check" run.
+  // Entries flagged as incomplete by a previous "check" run. The previous
+  // implementation *deleted* them from the cache up front "so they would be
+  // retranslated" — but the cache is also what feeds the patch step, so if the
+  // model was unavailable or answered badly the run ended with those lines
+  // reverted to Japanese and the good translation destroyed. Now the old
+  // translation is kept and only overwritten when a *valid* new one arrives.
+  //
+  // Staleness is decided by *content*, not timestamps: a flagged text is only
+  // honoured when it is still part of the current extraction. A re-extracted
+  // game therefore cannot schedule thousands of already-good lines again, while
+  // a check result produced moments ago for the same extract still applies.
+  const retranslate = new Set();
   if (fs.existsSync(UNTRANS)) {
+    const current = new Set(entries.map((e) => normText(e.text)));
+    let stale = 0;
     try {
       const u = JSON.parse(fs.readFileSync(UNTRANS, "utf8"));
       if (u && Array.isArray(u.bad)) {
-        let removed = 0;
         for (const b of u.bad) {
           if (!b || typeof b.text !== "string") continue;
-          if (cache.has(b.text)) {
-            delete cache.byText[normText(b.text)];
-            removed++;
-          }
-        }
-        if (removed > 0) {
-          console.log("CHECK_FIX_REMOVE", removed);
-          cache.save();
+          const key = normText(b.text);
+          if (!current.has(key)) { stale++; continue; }
+          if (cache.has(b.text)) retranslate.add(key);
         }
       }
     } catch (e) {}
+    if (retranslate.size) console.log("RETRANSLATE_FLAGGED", retranslate.size);
+    if (stale) console.log("CHECK_RESULT_STALE", stale, "条检查结果与当前抽取不符，已忽略");
     fs.rmSync(UNTRANS);
   }
 
-  const pending = entries.filter((e) => !cache.has(e.text));
+  const pending = entries.filter((e) => !cache.has(e.text) || retranslate.has(normText(e.text)));
   const groups = packGroups(pending);
-  const alreadyDone = entries.reduce((n, e) => n + (cache.has(e.text) ? 1 : 0), 0);
+  const alreadyDone = entries.length - pending.length;
+  if (process.env.GT_DEBUG_CACHE && pending.length) {
+    const p = pending[0];
+    console.log("PENDING_DEBUG", JSON.stringify({ text: p.text, file: p.file, path: p.path, cacheKeys: Object.keys(cache.byText).length }));
+  }
   console.log("TOTAL", entries.length, "DONE", alreadyDone, "PENDING", pending.length, "REQUESTS", groups.length);
   const fails = [];
   const stats = { splits: 0, parts: {} };
@@ -1098,6 +1135,7 @@ async function translate(entries) {
     "utf8"
   );
   console.log("TRANSLATED", entries.filter((e) => cache.has(e.text)).length, "FAILURES", pruned.length);
+  if (retranslate.size) console.log("RETRANSLATE_UNRESOLVED", retranslate.size, "（这些条目重翻未取得更好的结果，已保留原有译文）");
   return cache;
 }
 
