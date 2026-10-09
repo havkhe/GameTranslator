@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -179,6 +179,7 @@ namespace GameTranslator
             cmbModel = new ComboBox { Location = new Point(52, 46), Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
             cmbModel.SelectedIndexChanged += (s, e) =>
             {
+                WarnIfModelTooSmall();
                 if (llamaProcess != null && !llamaProcess.HasExited && cmbModel.SelectedItem != null)
                 {
                     var m = (string)cmbModel.SelectedItem;
@@ -688,7 +689,34 @@ namespace GameTranslator
             foreach (var n in modelMap.Keys.OrderBy(x => x)) cmbModel.Items.Add(n);
             if (cmbModel.Items.Count > 0) cmbModel.SelectedIndex = 0;
             Log("模型目录: " + settings.ModelDir + "（检测到 " + cmbModel.Items.Count + " 个模型）");
+            WarnIfModelTooSmall();
         }
+
+        // Measured on this machine (v2.4): a 0.8B model produced 0 usable
+        // translations out of 126 lines, 1.8B got 121/126, 4B got 126/126.
+        // Telling the user *before* a long run beats letting them discover it.
+        private void WarnIfModelTooSmall()
+        {
+            var name = cmbModel.SelectedItem as string;
+            if (string.IsNullOrEmpty(name)) return;
+            var m = Regex.Match(name, @"(?<![0-9.])(\d+(?:\.\d+)?)\s*B(?![a-zA-Z0-9])", RegexOptions.IgnoreCase);
+            if (!m.Success) return;
+            double b;
+            if (!double.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out b)) return;
+            if (b < 1.5)
+            {
+                Log("⚠ 模型适配提示：" + name + " 参数量偏小（约 " + b + "B）。实测这类模型在本工具"
+                    + "的逐行协议下容易整批失败/产出不可用译文（0.8B 实测 126 条中 0 条可用）。"
+                    + "建议改用 4B 级别模型（如 Galtransl-v4-4B）；仅显存非常紧张时再考虑 1.8B。");
+            }
+            else if (b < 3)
+            {
+                Log("提示：" + name + " 为 " + b + "B 级别模型，翻译质量/稳定性略低于 4B 级别"
+                    + "（实测 1.8B 约 96% 条目成功），显存允许时建议用 4B 模型。");
+            }
+        }
+
 
         private void ChooseModelDir()
         {

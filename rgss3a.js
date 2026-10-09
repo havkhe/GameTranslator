@@ -49,13 +49,90 @@ function readArchive(buf) {
   return { version, magic, key, entries, buf };
 }
 
-function decryptBlock(data, fileKey) {
-  const out = Buffer.alloc(data.length);
-  let key = fileKey >>> 0;
-  for (let i = 0; i < data.length; i++) {
-    if (i > 0 && i % 4 === 0) key = (Math.imul(key, 7) + 3) >>> 0;
-    out[i] = data[i] ^ ((key >>> ((i % 4) * 8)) & 0xff);
+// ---------------- directory field crypto ----------------
+// Directory fields (offset/size/fileKey/nameLength and the name bytes) are XORed
+// with a FIXED 4-byte pattern derived from the directory key — the key does NOT
+// advance inside a field. Only the file *data* block advances its key every 4
+// bytes (see the data codec below). Getting this backwards silently corrupts
+// every name in the archive, which is why both writers below use this helper.
+function xorFixed(buf, key) {
+  const out = Buffer.from(buf);
+  const k = key >>> 0;
+  for (let i = 0; i < out.length; i++) out[i] ^= (k >>> ((i % 4) * 8)) & 0xff;
+  return out;
+}
+
+// ---------------- file data codec ----------------
+// The data keystream advances its 32-bit key once per 4 BYTES of that entry:
+//   key(i) = key(i-1)*7 + 3 (mod 2^32), and byte j of the word is taken from
+//   bits (j%4)*8..+8 of the key.
+// The key sequence is period-2^30 at best and NOT periodic at any small size, so
+// a small table indexed by `word % N` is wrong beyond N words (an earlier version
+// of this file did exactly that and silently corrupted files >16 KB). Instead the
+// key bytes are expanded into a byte table of a few MB, re-derived rarely.
+const KEY_BYTES_TARGET = 64 * 1024 * 1024; // 64 MB of keystream = 16M words
+const STREAMS = new Map();
+function keyBytesTable(seedKey) {
+  const k = seedKey >>> 0;
+  let t = STREAMS.get(k);
+  if (t) return t;
+  const bytes = Buffer.alloc(KEY_BYTES_TARGET);
+  let key = k;
+  let o = 0;
+  const words = KEY_BYTES_TARGET >>> 2;
+  for (let w = 0; w < words; w++) {
+    bytes[o] = key & 0xff;
+    bytes[o + 1] = (key >>> 8) & 0xff;
+    bytes[o + 2] = (key >>> 16) & 0xff;
+    bytes[o + 3] = (key >>> 24) & 0xff;
+    key = (Math.imul(key, 7) + 3) >>> 0;
+    o += 4;
   }
+  t = { bytes, lastKey: key };
+  STREAMS.set(k, t);
+  return t;
+}
+
+// Byte at keystream position `pos`, extending the table when needed.
+function ensureKeyBytes(seedKey, pos) {
+  const t = keyBytesTable(seedKey);
+  if (pos + 8 < t.bytes.length) return t.bytes;
+  // Grow on demand (rare: only files larger than 256 MB, split per entry anyway).
+  const need = Math.min(Math.max(t.bytes.length * 2, pos + 1024), 2048 * 1024 * 1024);
+  const bigger = Buffer.alloc(need);
+  t.bytes.copy(bigger);
+  let key = t.lastKey >>> 0;
+  for (let o = t.bytes.length; o < need; o += 4) {
+    bigger[o] = key & 0xff;
+    bigger[o + 1] = (key >>> 8) & 0xff;
+    bigger[o + 2] = (key >>> 16) & 0xff;
+    bigger[o + 3] = (key >>> 24) & 0xff;
+    key = (Math.imul(key, 7) + 3) >>> 0;
+  }
+  t.bytes = bigger;
+  t.lastKey = key;
+  return t.bytes;
+}
+
+// Transform `data` in place; `byteOffset` is the keystream position of data[0].
+// Returns the number of bytes transformed.
+function xorTransformAt(data, seedKey, byteOffset) {
+  const pos = byteOffset || 0;
+  const bytes = ensureKeyBytes(seedKey, pos + data.length);
+  const n = data.length;
+  for (let i = 0; i < n; i++) data[i] ^= bytes[pos + i];
+  return n;
+}
+
+// Whole-buffer convenience wrapper.
+function xorTransform(data, seedKey, byteOffset) {
+  xorTransformAt(data, seedKey, byteOffset || 0);
+  return data.length;
+}
+
+function decryptBlock(data, fileKey) {
+  const out = Buffer.from(data);
+  xorTransform(out, fileKey >>> 0, 0);
   return out;
 }
 
@@ -85,11 +162,7 @@ function writeArchive(entries) {
   dataStart += 4; // terminator
 
   function encDir(buf) {
-    const out = Buffer.alloc(buf.length);
-    for (let i = 0; i < buf.length; i++) {
-      out[i] = buf[i] ^ ((key >>> ((i % 4) * 8)) & 0xff);
-    }
-    return out;
+    return xorFixed(buf, key);
   }
   function u32Buf(v) {
     const b = Buffer.alloc(4);
@@ -134,9 +207,7 @@ function writeArchiveTo(entries, outPath) {
     dataStart += 4;
 
     function encDir(buf) {
-      const out = Buffer.alloc(buf.length);
-      for (let i = 0; i < buf.length; i++) out[i] = buf[i] ^ ((key >>> ((i % 4) * 8)) & 0xff);
-      return out;
+      return xorFixed(buf, key);
     }
     function u32Buf(v) {
       const b = Buffer.alloc(4);
@@ -156,21 +227,32 @@ function writeArchiveTo(entries, outPath) {
     }
     fs.writeSync(fd, encDir(u32Buf(0)));
 
+    // Chunks are transformed as one continuous keystream per entry, so any chunk
+    // size produces exactly the bytes the whole-buffer transform would. Because
+    // CHUNK is a multiple of 4 the carry is empty on every chunk except the last,
+    // so the common path does no copying at all.
     const CHUNK = 8 * 1024 * 1024;
     for (const e of entries) {
-      let key = 0xdeadcafe;
-      const writeBlock = (chunk) => {
-        const out = Buffer.alloc(chunk.length);
-        for (let i = 0; i < chunk.length; i++) {
-          if (i > 0 && i % 4 === 0) key = (Math.imul(key, 7) + 3) >>> 0;
-          out[i] = chunk[i] ^ ((key >>> ((i % 4) * 8)) & 0xff);
-        }
-        fs.writeSync(fd, out);
+      let state = 0; // keystream bytes already produced for this entry
+      let carry = null;
+      const handle = (view) => {
+        // Transform a COPY: the caller's buffers (typically file contents read
+        // into memory) must not be modified, otherwise a second repack of the
+        // same list would encrypt already-encrypted data.
+        const out = Buffer.from(view);
+        const done = xorTransformAt(out, 0xdeadcafe, state);
+        fs.writeSync(fd, out.subarray(0, done));
+        state += done;
+        carry = done < out.length ? Buffer.from(out.subarray(done)) : null;
+      };
+      const feed = (chunk) => {
+        if (!carry) { handle(chunk); return; }
+        const merged = Buffer.concat([carry, chunk]);
+        carry = null;
+        handle(merged);
       };
       if (e.buf) {
-        for (let pos = 0; pos < e.buf.length; pos += CHUNK) {
-          writeBlock(e.buf.subarray(pos, Math.min(pos + CHUNK, e.buf.length)));
-        }
+        for (let pos = 0; pos < e.buf.length; pos += CHUNK) feed(e.buf.subarray(pos, Math.min(pos + CHUNK, e.buf.length)));
       } else {
         const fdr = fs.openSync(e.file, "r");
         try {
@@ -179,12 +261,19 @@ function writeArchiveTo(entries, outPath) {
           while (remaining > 0) {
             const n = fs.readSync(fdr, chunk, 0, Math.min(CHUNK, remaining), null);
             if (n <= 0) throw new Error("short read for " + e.name);
-            writeBlock(chunk.subarray(0, n));
+            feed(chunk.subarray(0, n));
             remaining -= n;
           }
         } finally {
           fs.closeSync(fdr);
         }
+      }
+      if (carry) {
+        // Trailing partial word of an unaligned entry: XOR it with the remaining
+        // keystream bytes.
+        const view = Buffer.from(carry);
+        xorTransformAt(view, 0xdeadcafe, state);
+        fs.writeSync(fd, view);
       }
     }
   } finally {
@@ -192,4 +281,4 @@ function writeArchiveTo(entries, outPath) {
   }
 }
 
-module.exports = { readArchive, extractFile, writeArchive, decryptBlock, writeArchiveTo };
+module.exports = { readArchive, extractFile, writeArchive, decryptBlock, writeArchiveTo, xorTransform, xorTransformAt, xorFixed, keyBytesTable };
