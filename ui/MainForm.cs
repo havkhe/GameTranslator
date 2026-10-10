@@ -1152,8 +1152,19 @@ namespace GameTranslatorV3
         {
             try
             {
-                string exe = Path.Combine(_root, "llama", "llama-server.exe");
-                if (!File.Exists(exe)) { MessageBox.Show(this, "未找到 " + exe); return; }
+                string exe = Path.Combine(_settings.LlamaDir ?? "", "llama-server.exe");
+                if (!File.Exists(exe))
+                {
+                    // Name the path that was tried and what to do about it; "not found" on
+                    // its own gives the user nothing to act on.
+                    MessageBox.Show(this,
+                        "未找到 llama-server.exe。\n\n" +
+                        "查找位置：\n" + exe + "\n\n" +
+                        "请在「设置…」里把「llama 目录」指向包含 llama-server.exe 的文件夹。\n\n" +
+                        "旧版（v2）通常在：\nD:\\GameTranslator\\llama",
+                        "未找到模型运行程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
                 string model = Convert.ToString(_cmbModel.SelectedItem);
                 if (string.IsNullOrEmpty(model) || model.StartsWith("（"))
                 {
@@ -1236,6 +1247,7 @@ namespace GameTranslatorV3
                 var txtBudget = new TextBox { Width = 80, Text = _settings.GameBudgetMinutes.ToString() };
                 var txtStall = new TextBox { Width = 80, Text = _settings.StalledAfterMinutes.ToString() };
                 var txtDepth = new TextBox { Width = 60, Text = _settings.ScanDepth.ToString() };
+                var txtLlama = new TextBox { Width = 380, Text = _settings.LlamaDir };
 
                 // Scan-root editor: a list plus add/remove, so several folders can feed the
                 // same game list.
@@ -1266,6 +1278,18 @@ namespace GameTranslatorV3
                 bPick.Click += (s, e) => { using (var f = new FolderBrowserDialog()) if (f.ShowDialog(dlg) == DialogResult.OK) txtDir.Text = f.SelectedPath; };
                 dirRow.Controls.Add(bPick);
                 t.Controls.Add(dirRow, 1, r++);
+
+                t.Controls.Add(new Label { Text = "llama 目录", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                var llamaRow = new FlowLayoutPanel { WrapContents = false, Height = 30 };
+                llamaRow.Controls.Add(txtLlama);
+                var bPickLlama = new Button { Text = "…", Width = 30, Height = 24 };
+                bPickLlama.Click += (s, e) =>
+                {
+                    using (var fb = new FolderBrowserDialog { Description = "选择包含 llama-server.exe 的文件夹" })
+                        if (fb.ShowDialog(dlg) == DialogResult.OK) txtLlama.Text = fb.SelectedPath;
+                };
+                llamaRow.Controls.Add(bPickLlama);
+                t.Controls.Add(llamaRow, 1, r++);
 
                 t.Controls.Add(new Label { Text = "端口", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
                 t.Controls.Add(txtPort, 1, r++);
@@ -1333,6 +1357,13 @@ namespace GameTranslatorV3
                 if (!int.TryParse(txtStall.Text.Trim(), out stall) || stall < 1) { MessageBox.Show(this, "卡死判定至少 1 分钟。"); return; }
                 if (txtPipe.Text.Trim().Length > 0 && !File.Exists(txtPipe.Text.Trim())) { MessageBox.Show(this, "管线脚本不存在。"); return; }
 
+                string llama = txtLlama.Text.Trim();
+                if (llama.Length > 0 && !File.Exists(Path.Combine(llama, "llama-server.exe")))
+                {
+                    if (MessageBox.Show(this, "这个目录里没有 llama-server.exe：\n" + llama + "\n\n仍要保存吗？",
+                            "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                }
+                _settings.LlamaDir = llama;
                 _settings.ModelDir = txtDir.Text.Trim();
                 _settings.Port = port;
                 _settings.PromptFile = txtPrompt.Text.Trim();

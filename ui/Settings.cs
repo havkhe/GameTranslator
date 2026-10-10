@@ -1,4 +1,4 @@
-// Persisted UI settings. Kept as a tiny line-based file rather than JSON so it is
+﻿// Persisted UI settings. Kept as a tiny line-based file rather than JSON so it is
 // readable and editable by hand, and so a corrupt file can never stop the app from
 // starting (a damaged v2 settings.json was one cause of confusing failures).
 using System;
@@ -33,6 +33,26 @@ namespace GameTranslatorV3.Core
         /// and the runner falls back to whichever exists.
         /// </summary>
         public string PipelineJs = "";
+
+        /// <summary>
+        /// Folder holding llama-server.exe.
+        ///
+        /// Not derived from the install root alone: v3 is deployed separately from the
+        /// working v2 install, and the runtimes (llama, node, ruby) legitimately stay in
+        /// one place while the UI moves. Defaulting to the old location when the program's
+        /// own folder has no copy avoids a "llama-server.exe not found" on a fresh deploy.
+        /// </summary>
+        public string LlamaDir = "";
+
+        /// <summary>Best guess for the llama folder: ours if present, else the v2 one.</summary>
+        public static string DefaultLlamaDir(string root)
+        {
+            string mine = Path.Combine(root, "llama");
+            if (File.Exists(Path.Combine(mine, "llama-server.exe"))) return mine;
+            string v2 = @"D:\GameTranslator\llama";
+            if (File.Exists(Path.Combine(v2, "llama-server.exe"))) return v2;
+            return mine;
+        }
 
         /// <summary>
         /// Folders to search for games, several at a time. Results are merged into one
@@ -100,6 +120,7 @@ namespace GameTranslatorV3.Core
         {
             var s = new Settings();
             s.PipelineJs = DefaultPipeline(root);
+            s.LlamaDir = DefaultLlamaDir(root);
             if (!string.IsNullOrEmpty(root))
             {
                 string work = Path.Combine(root, "work");
@@ -128,6 +149,7 @@ namespace GameTranslatorV3.Core
                         case "PromptFile": s.PromptFile = val; break;
                         case "Port": if (int.TryParse(val, out n) && n > 0 && n < 65536) s.Port = n; break;
                         case "PipelineJs": if (val.Length > 0) s.PipelineJs = val; break;
+                        case "LlamaDir": if (val.Length > 0) s.LlamaDir = val; break;
                         case "ScanRoots": s.ScanRootsRaw = val; break;
                         case "ScanDepth": if (int.TryParse(val, out n) && n >= 1 && n <= 12) s.ScanDepth = n; break;
                         case "MaxAttempts": if (int.TryParse(val, out n) && n >= 1 && n <= 10) s.MaxAttempts = n; break;
@@ -151,6 +173,7 @@ namespace GameTranslatorV3.Core
                 sb.AppendLine("WorkDir=" + WorkDir);
                 sb.AppendLine("PromptFile=" + PromptFile);
                 sb.AppendLine("PipelineJs=" + PipelineJs);
+                sb.AppendLine("LlamaDir=" + LlamaDir);
                 sb.AppendLine("ScanRoots=" + ScanRootsRaw);
                 sb.AppendLine("ScanDepth=" + ScanDepth.ToString(CultureInfo.InvariantCulture));
                 sb.AppendLine("Port=" + Port.ToString(CultureInfo.InvariantCulture));
