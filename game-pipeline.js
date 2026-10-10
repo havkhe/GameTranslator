@@ -1327,6 +1327,44 @@ function packGroups(list) {
 }
 
 // ---------------- llama-server request layer ----------------
+//
+// Wait for the model server to answer before translating anything.
+//
+// The GUI starts llama-server and this pipeline at the same time, but a 4B model
+// needs 30-45 s to load. Without this wait every request in that window failed with
+// "connection refused", the recursive split retry turned that into a per-entry
+// failure, and the status pane exploded with FAILED_ENTRY lines (measured: 9841
+// request-failed records for one game, all created before the server finished
+// loading). The check is skipped for "check"/"extract" modes, which never call the
+// model, and when the server is unreachable up front the run stops with one clear
+// message instead of thousands of per-entry records.
+function waitForServer(maxMs) {
+  const deadline = Date.now() + (maxMs || 0);
+  return new Promise((resolve) => {
+    const probe = () => {
+      const req = http.request(
+        { host: "127.0.0.1", port: PORT, path: "/health", method: "GET", timeout: 3000 },
+        (res) => {
+          res.resume();
+          // Any HTTP answer proves something is listening: llama-server reports 200
+          // when ready and 503 while loading, and a minimal test double answers 404.
+          // Only a transport error or a timeout means "not up yet".
+          resolve(true);
+        }
+      );
+      req.on("timeout", () => { req.destroy(); retry(); });
+      req.on("error", () => retry());
+      req.end();
+    };
+    const retry = () => {
+      if (Date.now() >= deadline) return resolve(false);
+      setTimeout(probe, 2000);
+    };
+    probe();
+  });
+}
+
+
 // A degenerate generation (the model looping on "啊啊啊啊…") used to occupy a
 // server slot for many minutes: the client timeout only closed our socket while
 // the server kept decoding, and the retries queued up behind it — the whole tool
@@ -2174,6 +2212,17 @@ async function translate(entries) {
 
   ensureBackup(engine);
   writeRestoreBat();
+
+  // Wait for the model server. The GUI launches it together with this pipeline and
+  // a 4B model needs 30-45 s to load; without waiting, every request in that window
+  // failed and the split retry reported each entry separately (see waitForServer).
+  const waitMs = parseInt(process.env.GT_WAIT_SERVER_MS || "180000", 10);
+  const up = await waitForServer(waitMs);
+  if (!up) {
+    console.log("SERVER_UNAVAILABLE 无法连接 llama-server（127.0.0.1:" + PORT + "），已等待 " +
+      Math.round(waitMs / 1000) + " 秒。请确认模型已加载（GUI 里显示 就绪 ）后重试；本次未做任何翻译，进度未受影响。");
+    process.exit(3);
+  }
 
   const cache = await translate(entries);
 
