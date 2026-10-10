@@ -1,4 +1,4 @@
-﻿// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
+// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
 //   mode: translate (default) | check (only scan for untranslated content)
 //   Requires a local llama-server (llama.cpp) already running on 127.0.0.1:<port>.
 // Extracts RPG Maker MV/MZ (data json, with or without a www/ wrapper) or
@@ -395,8 +395,18 @@ function extractMV(pristineDir, liveDir) {
   const known = loadKnownText();
   let skipped = 0;
   let id = 0;
+  // Flatten embedded line breaks for the queue.
+  //
+  // The wire protocol is one prompt line in, one reply line out. An entry holding a
+  // newline was sent flattened (buildPrompt replaces line breaks with a space) yet still
+  // counted as ONE group item, while the model answered it as TWO lines. The reply then
+  // had the wrong line count, the group failed and split, and the isolated entry failed
+  // again — measured on the live game as 45 SUSPECT_SHORT and 42 FAILED_ENTRY lines with
+  // the cache frozen, and a 45% batch failure rate. Flattening the entry itself makes
+  // the key, the prompt and the cache agree. The cost is that the source's internal
+  // break is not reproduced; the translation is still correct and reads as one line.
   const add = (file, p, text, opts) => {
-    const t = String(text);
+    const t = String(text).replace(/\r\n|\n|\r/g, " ");
     if (!looksTranslatable(t)) return;
     if (opts && opts.skipTranslated) {
       const key = normText(t);
@@ -414,6 +424,17 @@ function extractMV(pristineDir, liveDir) {
     seen.set(t, id);
     entries.push({ id: id++, file, path: p, text: t });
   };
+  // Flatten embedded line breaks for the queue.
+  //
+  // The wire protocol is one prompt line in, one reply line out. An entry holding a
+  // newline was sent flattened (buildPrompt replaces line breaks with a space) yet still
+  // counted as ONE group item, while the model answered it as TWO lines. The reply then
+  // had the wrong line count, the group failed and split, and the isolated entry failed
+  // again — measured on the live game as 45 SUSPECT_SHORT and 42 FAILED_ENTRY lines with
+  // the cache frozen, and a 45% batch failure rate. Flattening the entry itself makes
+  // the key, the prompt and the cache agree. The cost is that the source's internal
+  // break is not reproduced; the translation is still correct and reads as one line.
+  const entryText = (raw) => String(raw).replace(/\r\n|\n|\r/g, " ");
   const walkDir = (dataDir, skipTranslated) => {
     if (!dataDir) return;
     // Recursive: data\resources\<locale>\*.json holds the dialogue of localized
@@ -1772,14 +1793,23 @@ const MIN_RATIO_CHECK = 3;
 const MAX_ATTEMPTS_PER_ENTRY = 3;
 const attemptsUsed = new Map();   // normalised source text -> attempts spent this run (count UP)
 
-// Attempts are counted UP from zero.
+// Attempts are counted UP from zero, and the counter is reset at the start of every
+// translation run (see translate()).
 //
-// The first version counted down and asked "is it exhausted?" as
-// `(map.get(key) || 0) <= 0`. For an entry never attempted the map returned
-// undefined, `|| 0` turned that into 0, and 0 looked exhausted — so EVERY entry was
-// treated as spent, translateGroup returned null before sending anything, every
-// group split down to singletons and the run produced no translations at all.
-// An upward counter cannot be confused this way.
+// Both details matter, and both were learned from a stalled batch:
+//
+//   * Counting down with `(map.get(key) || 0) <= 0` treated an entry that had never
+//     been attempted (undefined) as exhausted, so translateGroup returned null before
+//     sending anything.
+//   * Keeping the counter across runs made the whole pipeline idle: an entry that used
+//     its three attempts in one run was skipped for the rest of the process lifetime,
+//     but because it was never cached it also never left the pending list. Restarting
+//     therefore re-sent only the entries that still had budget, cached nothing, and
+//     reported PROGRESS unchanged (measured: 189 requests, ~50 answers, 0 entries
+//     cached, one distinct PROGRESS value across 34 lines).
+//
+// The budget exists to stop a single run from re-sending one refused line forever; it
+// is not a permanent verdict about the line, so a fresh run gets a fresh budget.
 function noteAttempt(text) {
   const k = normText(text);
   attemptsUsed.set(k, (attemptsUsed.get(k) || 0) + 1);
@@ -1866,14 +1896,17 @@ async function translateGroupRecursive(group, cache, fails, stats, depth = 0) {
         console.log("GLOSSARY_APPLY", JSON.stringify(String(res[i]).slice(0, 20)), "->", JSON.stringify(String(applyGlossary(res[i])).slice(0, 20)), "size=" + glossary.length);
       }
       res[i] = applyGlossary(res[i]);
-      // Recorded, then judged: an entry that used its last attempt in this group is
-      // still evaluated here (a good answer is kept), but it will not be re-sent.
-      if (attemptsExhausted(target.text)) {
-        skip.add(i);
-        fails.push({ hash: textHash(target.text), err: "attempts-exhausted", text: target.text.slice(0, 40) });
-        console.log("ATTEMPTS_EXHAUSTED", JSON.stringify(target.text.slice(0, 40)));
-        continue;
-      }
+      // An answer arrived, so it is judged on its merits — the attempt budget is NOT
+      // consulted here.
+      //
+      // This check used to sit at this point and reject the entry when its count had
+      // reached the limit. But the count was incremented for this very group a few
+      // lines above, so the THIRD attempt of every entry was always seen as exhausted
+      // and thrown away: the entry cost three requests, produced a good translation on
+      // the last one, and cached nothing. The budget decides only whether to SEND
+      // another request (see the guard at the top of translateGroup); it must never
+      // discard an answer that has already been validated.
+      //
       // A translation far shorter than its source means the model truncated or gave
       // up. Both sides are measured with contentLength() (no padding, no symbol runs)
       // and the check only applies when the source carries enough real text for a
@@ -2048,6 +2081,11 @@ async function translateOne(text) {
 async function translate(entries) {
   if (fs.existsSync(PAUSE_FLAG)) fs.rmSync(PAUSE_FLAG);
   if (fs.existsSync(STOP_FLAG)) fs.rmSync(STOP_FLAG);
+  // Fresh attempt budget for this run. Without this reset the budget accumulated across
+  // runs, and an entry that used its attempts once was skipped for the rest of the
+  // process lifetime while never leaving the pending list — the run then sent requests,
+  // got answers, and cached nothing (see noteAttempt).
+  attemptsUsed.clear();
   const cache = makeCache(entries);
   if (cache.size) console.log("CACHE_LOADED", cache.size);
   if (process.env.GT_DEBUG_CACHE) {

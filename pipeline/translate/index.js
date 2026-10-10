@@ -130,11 +130,12 @@ async function translate(o) {
         const e = group[i];
         const target = e.parent || e;
         if (res[i] === null) { skip.add(i); continue; }
-        if (spent(target.text)) {
-          skip.add(i);
-          fails.push({ hash: hashText(target.text), err: "attempts-exhausted", text: target.text.slice(0, 40) });
-          continue;
-        }
+        // NOTE: the attempt budget is deliberately NOT consulted here. It decides only
+        // whether to send another request (the guard at the top of decide()). Checking
+        // it at this point rejected the entry once its count for this group had been
+        // incremented a few lines above, so the third attempt of every entry was always
+        // discarded: three requests spent, a good translation produced on the last one,
+        // and nothing cached.
         const decorated = B.restoreDecoration(res[i], decoration(e));
         const q = B.qualityCheck(target.text, res[i]);
         if (q.fatal.length) {
