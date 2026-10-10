@@ -237,59 +237,46 @@ function xorFixed(buf, key) {
 //   bits (j%4)*8..+8 of the key.
 // The key sequence is period-2^30 at best and NOT periodic at any small size, so
 // a small table indexed by `word % N` is wrong beyond N words (an earlier version
-// of this file did exactly that and silently corrupted files >16 KB). Instead the
-// key bytes are expanded into a byte table of a few MB, re-derived rarely.
-const KEY_BYTES_TARGET = 64 * 1024 * 1024; // 64 MB of keystream = 16M words
-const STREAMS = new Map();
-function keyBytesTable(seedKey) {
-  const k = seedKey >>> 0;
-  let t = STREAMS.get(k);
-  if (t) return t;
-  const bytes = Buffer.alloc(KEY_BYTES_TARGET);
-  let key = k;
-  let o = 0;
-  const words = KEY_BYTES_TARGET >>> 2;
-  for (let w = 0; w < words; w++) {
-    bytes[o] = key & 0xff;
-    bytes[o + 1] = (key >>> 8) & 0xff;
-    bytes[o + 2] = (key >>> 16) & 0xff;
-    bytes[o + 3] = (key >>> 24) & 0xff;
-    key = (Math.imul(key, 7) + 3) >>> 0;
-    o += 4;
-  }
-  t = { bytes, lastKey: key };
-  STREAMS.set(k, t);
-  return t;
+// of this file did exactly that and silently corrupted files >16 KB).
+//
+// The keystream is therefore generated on the fly. An earlier revision expanded 64 MB of it
+// into a Buffer PER SEED KEY and kept every one in a module-level Map forever; that is fine
+// for a single file but grows without bound when many members are decrypted in one process —
+// verifying a 620-member archive exhausted the heap ("RangeError: Array buffer allocation
+// failed"). The generator is one integer recurrence, so stepping it to the wanted position
+// costs a little CPU and no memory.
+function advanceKey(key, words) {
+  let k = key >>> 0;
+  for (let i = 0; i < words; i++) k = (Math.imul(k, 7) + 3) >>> 0;
+  return k;
 }
 
-// Byte at keystream position `pos`, extending the table when needed.
-function ensureKeyBytes(seedKey, pos) {
-  const t = keyBytesTable(seedKey);
-  if (pos + 8 < t.bytes.length) return t.bytes;
-  // Grow on demand (rare: only files larger than 256 MB, split per entry anyway).
-  const need = Math.min(Math.max(t.bytes.length * 2, pos + 1024), 2048 * 1024 * 1024);
-  const bigger = Buffer.alloc(need);
-  t.bytes.copy(bigger);
-  let key = t.lastKey >>> 0;
-  for (let o = t.bytes.length; o < need; o += 4) {
-    bigger[o] = key & 0xff;
-    bigger[o + 1] = (key >>> 8) & 0xff;
-    bigger[o + 2] = (key >>> 16) & 0xff;
-    bigger[o + 3] = (key >>> 24) & 0xff;
-    key = (Math.imul(key, 7) + 3) >>> 0;
-  }
-  t.bytes = bigger;
-  t.lastKey = key;
-  return t.bytes;
-}
-
-// Transform `data` in place; `byteOffset` is the keystream position of data[0].
-// Returns the number of bytes transformed.
+/**
+ * XOR `data` in place with the keystream for `seedKey`, starting at keystream position
+ * `byteOffset`. Returns the number of bytes transformed.
+ *
+ * Byte-accurate for any offset: the generator advances one 4-byte word at a time, so the
+ * position is reached by stepping whole words and taking the remaining 1-3 bytes from the
+ * next word. Memory use is O(1) beyond the caller's own buffer.
+ */
 function xorTransformAt(data, seedKey, byteOffset) {
-  const pos = byteOffset || 0;
-  const bytes = ensureKeyBytes(seedKey, pos + data.length);
   const n = data.length;
-  for (let i = 0; i < n; i++) data[i] ^= bytes[pos + i];
+  if (!n) return 0;
+  const offset = byteOffset || 0;
+  let key = advanceKey(seedKey >>> 0, offset >>> 2);
+  const skip = offset & 3;
+  const word = Buffer.alloc(4);
+  for (let i = 0; i < n; i++) {
+    const inWord = (skip + i) & 3;
+    if (inWord === 0) {
+      word[0] = key & 0xff;
+      word[1] = (key >>> 8) & 0xff;
+      word[2] = (key >>> 16) & 0xff;
+      word[3] = (key >>> 24) & 0xff;
+      key = (Math.imul(key, 7) + 3) >>> 0;
+    }
+    data[i] ^= word[inWord];
+  }
   return n;
 }
 
@@ -451,4 +438,4 @@ function writeArchiveTo(entries, outPath) {
   }
 }
 
-module.exports = { readArchive, extractFile, writeArchive, decryptBlock, writeArchiveTo, writeArchiveV1To, decryptDataV1, xorTransform, xorTransformAt, xorFixed, keyBytesTable };
+module.exports = { readArchive, extractFile, writeArchive, decryptBlock, writeArchiveTo, writeArchiveV1To, decryptDataV1, xorTransform, xorTransformAt, xorFixed };
