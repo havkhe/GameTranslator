@@ -84,11 +84,28 @@ function detect(dir) {
   return null;
 }
 
-// A game counts as finished when its last run reported nothing left to do.
+// A game counts as finished when its last run actually translated it.
+//
+// Checking only for the patch report was wrong: a run made while the model server
+// was down still writes a patch report (with nothing translated), so the game was
+// treated as done and the failure was silently frozen in. A run that translated
+// little of what it extracted must be retried, which is what makes this batch
+// self-healing after an outage.
 function finished(dir) {
   const base = sanitize(dir);
   const rep = path.join(WORK, base + "-patch-report.json");
   if (!fs.existsSync(rep)) return false;
+  const tr = path.join(WORK, base + "-translate-report.json");
+  if (fs.existsSync(tr)) {
+    try {
+      const j = JSON.parse(fs.readFileSync(tr, "utf8"));
+      const entries = j.entries || 0;
+      const translated = j.translated || 0;
+      if (entries > 0 && translated < entries * 0.9) return false;   // retry
+    } catch (e) {
+      return false;
+    }
+  }
   try {
     const j = JSON.parse(fs.readFileSync(rep, "utf8"));
     if (typeof j.missing === "number" && j.missing > 0) return false;
