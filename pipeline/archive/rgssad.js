@@ -107,14 +107,17 @@ function repack(archiveFile, workDir) {
     const rel = m.name.replace(/\\/g, "/");
     if (rel.startsWith("Data/")) {
       const fp = path.join(outDir, rel);
-      entries.push({ name: m.name, size: fs.statSync(fp).size, file: fp });
+      // Carry the member's own key through. Archives written by other tools (MTool) give
+      // each member a different key, and the writer must encrypt with that key or the game
+      // decodes the file back to garbage while the archive still looks valid.
+      entries.push({ name: m.name, size: fs.statSync(fp).size, file: fp, key: orig.fileKey });
     } else if (legacy) {
       // v1/v2: already-encrypted bytes must be copied through untouched.
       const raw = Buffer.from(origBuf.subarray(orig.offset, orig.offset + orig.size));
-      entries.push({ name: m.name, size: orig.size, buf: raw, raw: true });
+      entries.push({ name: m.name, size: orig.size, buf: raw, raw: true, key: orig.fileKey });
     } else {
-      // v3: hand the writer plaintext; it encrypts per member.
-      entries.push({ name: m.name, size: orig.size, buf: codec.extractFile(arch, orig) });
+      // v3: hand the writer plaintext; it encrypts per member under the original key.
+      entries.push({ name: m.name, size: orig.size, buf: codec.extractFile(arch, orig), key: orig.fileKey });
     }
   }
 

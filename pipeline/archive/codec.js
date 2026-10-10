@@ -375,9 +375,18 @@ function writeArchiveTo(entries, outPath) {
     let off = dataStart;
     for (const e of entries) {
       const nameBuf = Buffer.from(e.name, "utf8");
+      // The per-entry key comes from the caller when it has one.
+      //
+      // This used to write the constant 0xdeadcafe for every member. That is the key the
+      // standard RGSSAD v3 writer uses, but archives produced by other tools (MTool among
+      // them) give each member its OWN key — measured: fileKey 0x4df2 for a Graphics member.
+      // Re-encrypting such a member under 0xdeadcafe stores it with the wrong key, so the game
+      // decrypts it back to garbage: every image and sound file was destroyed on repack while
+      // the archive still looked structurally valid.
+      const fileKey = (e.key === undefined || e.key === null) ? 0xdeadcafe : (e.key >>> 0);
       fs.writeSync(fd, encDir(u32Buf(off)));
       fs.writeSync(fd, encDir(u32Buf(e.size)));
-      fs.writeSync(fd, encDir(u32Buf(0xdeadcafe)));
+      fs.writeSync(fd, encDir(u32Buf(fileKey)));
       fs.writeSync(fd, encDir(u32Buf(nameBuf.length)));
       fs.writeSync(fd, encDir(nameBuf));
       off += e.size;
@@ -390,6 +399,8 @@ function writeArchiveTo(entries, outPath) {
     // so the common path does no copying at all.
     const CHUNK = 8 * 1024 * 1024;
     for (const e of entries) {
+      // Same reasoning as the directory table: encrypt each member under its own key.
+      const dataKey = (e.key === undefined || e.key === null) ? 0xdeadcafe : (e.key >>> 0);
       let state = 0; // keystream bytes already produced for this entry
       let carry = null;
       const handle = (view) => {
@@ -397,7 +408,7 @@ function writeArchiveTo(entries, outPath) {
         // into memory) must not be modified, otherwise a second repack of the
         // same list would encrypt already-encrypted data.
         const out = Buffer.from(view);
-        const done = xorTransformAt(out, 0xdeadcafe, state);
+        const done = xorTransformAt(out, dataKey, state);
         fs.writeSync(fd, out.subarray(0, done));
         state += done;
         carry = done < out.length ? Buffer.from(out.subarray(done)) : null;
