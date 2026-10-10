@@ -99,10 +99,21 @@ namespace GameTranslatorV3
                     "退出前确认", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
 
                 if (answer == DialogResult.Cancel) { e.Cancel = true; return; }
-                if (answer == DialogResult.No) { AppendLog("窗口关闭，翻译任务继续在后台运行。"); return; }
+                if (answer == DialogResult.No)
+                {
+                    // The task must keep working, so its model server is left running too.
+                    AppendLog("窗口关闭，翻译任务继续在后台运行。");
+                    return;
+                }
                 AppendLog("正在停止翻译任务…");
                 if (_cts != null) _cts.Cancel();
+                _runner.Dispose();      // kill the pipeline and the server it needs
+                return;
             }
+
+            // No task running: still release the model server this window started, or it
+            // would hold several GB of memory with nothing using it. Dispose only ever
+            // stops the server this runner started, by PID.
             _runner.Dispose();
         }
 
