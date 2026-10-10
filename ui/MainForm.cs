@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -137,6 +137,43 @@ namespace GameTranslatorV3
             _list.Columns.Add("条目", 70);
             _list.Columns.Add("进度", 90);
             _list.Columns.Add("状态", 220);
+
+            // Right-click menu: start the game, or open its folder. Both are safe at any
+            // time, so they are never disabled — not even while a batch runs.
+            var menu = new ContextMenuStrip();
+            var miLaunch = new ToolStripMenuItem("启动游戏");
+            miLaunch.Click += (s, e) => Launch(CurrentGame());
+            var miOpen = new ToolStripMenuItem("打开所在目录");
+            miOpen.Click += (s, e) => OpenFolder(CurrentGame());
+            var miOpenData = new ToolStripMenuItem("打开数据目录 (data)");
+            miOpenData.Click += (s, e) => OpenDataDir(CurrentGame());
+            var miCopy = new ToolStripMenuItem("复制游戏路径");
+            miCopy.Click += (s, e) => CopyPath(CurrentGame());
+            menu.Items.Add(miLaunch);
+            menu.Items.Add(miOpen);
+            menu.Items.Add(miOpenData);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(miCopy);
+            menu.Opening += (s, e) =>
+            {
+                var g = CurrentGame();
+                bool has = g != null;
+                bool canLaunch = has && !string.IsNullOrEmpty(g.Exe) && File.Exists(g.Exe);
+                miLaunch.Enabled = canLaunch;
+                miLaunch.Text = canLaunch ? "启动游戏" : "启动游戏（找不到 exe）";
+                miOpen.Enabled = has;
+                miOpenData.Enabled = has && GetDataDir(g) != null;
+                miCopy.Enabled = has;
+            };
+            _list.ContextMenuStrip = menu;
+            // Right-click selects the row under the cursor first, so the menu always acts
+            // on the game the user pointed at rather than a stale selection.
+            _list.MouseDown += (s, e) =>
+            {
+                if (e.Button != MouseButtons.Right) return;
+                var hit = _list.GetItemAt(e.X, e.Y);
+                if (hit != null) { hit.Selected = true; hit.Focused = true; }
+            };
 
             // actions: start and stop are mutually exclusive, so they live together
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
@@ -285,6 +322,12 @@ namespace GameTranslatorV3
             public int Entries = -1;
             public bool Checked;
             public string Status = "";
+            /// <summary>Executable to launch, or null when none was found.</summary>
+            public string Exe;
+            /// <summary>Folder worth opening in Explorer.</summary>
+            public string OpenDir;
+            /// <summary>Why launching is not possible, shown to the user instead of failing silently.</summary>
+            public string LaunchProblem;
         }
 
         private void LoadGames()
@@ -321,6 +364,11 @@ namespace GameTranslatorV3
             _list.Items.Clear();
             foreach (var g in _games)
             {
+                // Resolve lazily here rather than only when a folder is scanned: games
+                // restored from games-cache.json have never been through AddOrUpdate, and
+                // without this the 启动游戏 context item would stay greyed out for them.
+                if (g.Exe == null && g.LaunchProblem == null) ResolveLaunchTarget(g);
+
                 var it = new ListViewItem("");
                 it.SubItems.Add(g.Name);
                 it.SubItems.Add(g.Engine);
@@ -411,14 +459,155 @@ namespace GameTranslatorV3
         {
             var existing = _games.FirstOrDefault(g => string.Equals(g.Dir, dir, StringComparison.OrdinalIgnoreCase));
             if (existing != null) return;
-            _games.Add(new GameItem
+            var item = new GameItem
             {
                 Dir = dir,
                 Name = Path.GetFileName(dir.TrimEnd('\\', '/')),
                 Engine = DetectEngine(dir),
                 Entries = -1,
                 Checked = false
-            });
+            };
+            ResolveLaunchTarget(item);
+            _games.Add(item);
+        }
+
+        /// <summary>
+        /// Work out how to start the game, and record why not when that is impossible.
+        ///
+        /// Games arrive in two shapes here: an exploded folder with Game.exe, and a bare
+        /// archive (Game.rgss3a) whose containing folder may hold no executable at all.
+        /// The second case is common in translated releases, so the launch item explains
+        /// the situation instead of silently doing nothing.
+        /// </summary>
+        private static void ResolveLaunchTarget(GameItem g)
+        {
+            g.OpenDir = g.Dir;
+            try
+            {
+                // Prefer an executable that belongs to the game itself.
+                string preferred = Path.Combine(g.Dir, "Game.exe");
+                if (File.Exists(preferred)) { g.Exe = preferred; return; }
+
+                var exes = Directory.GetFiles(g.Dir, "*.exe")
+                    .Where(f => !IsToolExe(Path.GetFileName(f)))
+                    .ToList();
+                if (exes.Count > 0)
+                {
+                    // A translated release often renames the launcher, e.g. "Game_Chinese.exe".
+                    g.Exe = exes.FirstOrDefault(f => Path.GetFileName(f).IndexOf("game", StringComparison.OrdinalIgnoreCase) >= 0)
+                            ?? exes[0];
+                    return;
+                }
+
+                g.LaunchProblem = "这个目录里没有可执行文件（.exe），无法从这里启动。\n" +
+                                  "它看起来是解包后的数据目录，游戏本体在上一层。\n\n" +
+                                  "提示：用「打开所在目录」看一下上层文件夹。";
+            }
+            catch (Exception ex)
+            {
+                g.LaunchProblem = "检查可执行文件时出错：" + ex.Message;
+            }
+        }
+
+        /// <summary>Tool executables that live inside a game folder but are not the game.</summary>
+        private static bool IsToolExe(string name)
+        {
+            var n = name.ToLowerInvariant();
+            return n.StartsWith("mtool") || n.StartsWith("nwjs") || n == "nw.exe" ||
+                   n.StartsWith("unins") || n.StartsWith("vcredist") ||
+                   n.StartsWith("npptools") || n.Contains("translator") ||
+                   n.StartsWith("ruby") || n.StartsWith("node") ||
+                   n.StartsWith("一键") || n.StartsWith("启动器");
+        }
+
+        private void Launch(GameItem g)
+        {
+            if (g == null) return;
+            if (string.IsNullOrEmpty(g.Exe) || !File.Exists(g.Exe))
+            {
+                MessageBox.Show(this,
+                    g.LaunchProblem ?? ("找不到可执行文件：\n" + g.Dir),
+                    "无法启动游戏", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try
+            {
+                var psi = new ProcessStartInfo(g.Exe)
+                {
+                    // The working directory must be the game root: RPG Maker resolves
+                    // its data, audio and plugin paths relative to it.
+                    WorkingDirectory = g.Dir,
+                    UseShellExecute = true
+                };
+                Process.Start(psi);
+                AppendLog("已启动游戏：" + Path.GetFileName(g.Exe) + "   (" + g.Name + ")");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("启动游戏失败：" + ex.Message);
+                _runner.LogError("启动游戏 " + g.Name + " 失败：" + ex.Message);
+                MessageBox.Show(this, "启动失败：\n" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void OpenFolder(GameItem g)
+        {
+            if (g == null) return;
+            string dir = !string.IsNullOrEmpty(g.OpenDir) && Directory.Exists(g.OpenDir) ? g.OpenDir : g.Dir;
+            try
+            {
+                if (Directory.Exists(dir)) Process.Start("explorer.exe", "/select,\"" + dir + "\"");
+                else if (File.Exists(dir)) Process.Start("explorer.exe", "/select,\"" + dir + "\"");
+                else MessageBox.Show(this, "目录不存在：\n" + dir, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("打开目录失败：" + ex.Message);
+                _runner.LogError("打开目录 " + dir + " 失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>The folder holding the engine's data, for either MV/MZ or the VX family.</summary>
+        private static string GetDataDir(GameItem g)
+        {
+            if (g == null) return null;
+            string mv = Path.Combine(g.Dir, "www", "data");
+            if (Directory.Exists(mv)) return mv;
+            string data = Path.Combine(g.Dir, "data");
+            if (Directory.Exists(data)) return data;
+            return null;
+        }
+
+        private void OpenDataDir(GameItem g)
+        {
+            string dir = GetDataDir(g);
+            if (dir == null)
+            {
+                MessageBox.Show(this, "这个游戏目录里没有 data 文件夹。\n\n" +
+                    "如果游戏是打包的（Game.rgss3a / Game.rgss2a），数据在归档内部，需要先解包。",
+                    "没有数据目录", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try { Process.Start("explorer.exe", "/select,\"" + dir + "\""); }
+            catch (Exception ex) { AppendLog("打开数据目录失败：" + ex.Message); }
+        }
+
+        private void CopyPath(GameItem g)
+        {
+            if (g == null) return;
+            try
+            {
+                Clipboard.SetText(g.Dir);
+                AppendLog("已复制路径：" + g.Dir);
+            }
+            catch (Exception ex) { AppendLog("复制失败：" + ex.Message); }
+        }
+
+        /// <summary>The game the context menu or a single-game action applies to.</summary>
+        private GameItem CurrentGame()
+        {
+            var it = _list != null && _list.SelectedItems.Count > 0 ? _list.SelectedItems[0] : null;
+            return it == null ? null : it.Tag as GameItem;
         }
 
         private static string DetectEngine(string dir)
