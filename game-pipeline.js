@@ -1983,6 +1983,17 @@ async function translate(entries) {
   for (let i = 0; i < groups.length; i++) {
     checkFlags();
     if (runState.degraded) break;
+    // Entries the user flagged with 检查翻译 get a fresh attempt budget. The budget
+    // exists to stop a run re-sending a line the model keeps refusing; it must not
+    // veto an explicit retranslation request. Without this, the flagged entry spent
+    // its budget on the first attempt and every later run skipped it, so the file was
+    // never repaired (the old translation stayed forever).
+    if (retranslate.size) {
+      for (const g of groups[i]) {
+        const src = (g.parent || g).text;
+        if (retranslate.has(normText(src))) attemptsLeft.delete(normText(src));
+      }
+    }
     await translateGroupRecursive(groups[i], cache, fails, stats);
     done++;
     cache.save();
