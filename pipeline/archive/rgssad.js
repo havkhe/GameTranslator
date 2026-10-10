@@ -62,11 +62,26 @@ function unpack(archiveFile, workDir) {
 
 /**
  * Rebuild the archive from <workDir>\unpacked, replacing the Data/ members with the
- * translated files and copying everything else through byte-for-byte.
+ * translated files and carrying every other member across unchanged.
  *
- * The pass-through matters: Graphics and Audio are hundreds of megabytes, and for v1/v2
- * the whole archive shares ONE key stream, so an already-encrypted member cannot be
- * re-encrypted without double-encrypting it.
+ * The two container generations need OPPOSITE treatment for the non-Data members, and
+ * getting this wrong is what a failed byte-for-byte test caught:
+ *
+ *   v1/v2  ONE continuous key stream runs over the whole archive. The stored bytes of a
+ *          member cannot be fed through the writer again — that would encrypt data that is
+ *          already encrypted — so they must be copied verbatim (raw: true).
+ *
+ *   v3     each member is keyed from its own offset, so the writer expects PLAINTEXT. The
+ *          previous version of this function passed the stored (encrypted) bytes through,
+ *          on the assumption that "re-encrypting them is a no-op". It is not: the result had
+ *          the same length but differed from byte 1709709 onwards, i.e. every Graphics and
+ *          Audio member was corrupted, which would have broken the game's images and sound.
+ *          Measured on a real 69 MB archive:
+ *              stored bytes passed through   -> sha b5aad0502bd13368   (wrong)
+ *              decrypted then re-encrypted   -> sha 3ed02eec027f989b   (identical to source)
+ *          So for v3 every member is decrypted on the way in and re-encrypted by the writer.
+ *          Cost is bounded: the writer streams in 8 MB chunks, so it never holds a whole
+ *          member list in memory.
  */
 function repack(archiveFile, workDir) {
   const manifest = JSON.parse(fs.readFileSync(path.join(workDir, "manifest.json"), "utf8"));
@@ -75,6 +90,7 @@ function repack(archiveFile, workDir) {
   const arch = codec.readArchive(origBuf);
   const byName = new Map();
   for (const e of arch.entries) byName.set(e.name, e);
+  const legacy = arch.version === 1 || arch.version === 2;
 
   const entries = [];
   for (const m of manifest) {
@@ -84,18 +100,19 @@ function repack(archiveFile, workDir) {
     if (rel.startsWith("Data/")) {
       const fp = path.join(outDir, rel);
       entries.push({ name: m.name, size: fs.statSync(fp).size, file: fp });
-    } else if (arch.version === 1 || arch.version === 2) {
+    } else if (legacy) {
+      // v1/v2: already-encrypted bytes must be copied through untouched.
       const raw = Buffer.from(origBuf.subarray(orig.offset, orig.offset + orig.size));
       entries.push({ name: m.name, size: orig.size, buf: raw, raw: true });
     } else {
-      const raw = origBuf.subarray(orig.offset, orig.offset + orig.size);
-      entries.push({ name: m.name, size: orig.size, buf: raw });
+      // v3: hand the writer plaintext; it encrypts per member.
+      entries.push({ name: m.name, size: orig.size, buf: codec.extractFile(arch, orig) });
     }
   }
 
   const outTmp = archiveFile + ".new";
   console.log("REPACKING", archiveFile);
-  if (arch.version === 1 || arch.version === 2) codec.writeArchiveV1To(entries, outTmp, arch.version);
+  if (legacy) codec.writeArchiveV1To(entries, outTmp, arch.version);
   else codec.writeArchiveTo(entries, outTmp);
   fs.renameSync(outTmp, archiveFile);
   console.log("REPACKED", entries.length, "entries");
