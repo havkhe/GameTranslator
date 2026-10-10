@@ -182,7 +182,14 @@ function detectEngine(dir) {
     }
   })();
   const jsonData = findDataDir(dir);
-  if (jsonData) return { kind: "MV", dataDir: jsonData };
+  // A `data` directory only means MV if it actually holds MV/MZ data. VX Ace keeps
+  // its files in `Data` too, so trusting the directory name alone made VX Ace games
+  // whose Data/ contains no JSON (only .rvdata2 — e.g. MTool-translated titles)
+  // report kind "MV" with zero strings to translate. Earlier the .rvdata2 check sat
+  // after this line, so it could never fire for them.
+  const hasVxData = dataExts.some((f) => f.endsWith(".rvdata2"));
+  const hasVxDataOld = dataExts.some((f) => f.endsWith(".rvdata"));
+  if (jsonData && !hasVxData && !hasVxDataOld) return { kind: "MV", dataDir: jsonData };
   const archive = findArchive(dir);
   if (archive) {
     // The filename alone does not decide the engine: read the version byte.
