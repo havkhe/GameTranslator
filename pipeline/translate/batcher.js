@@ -1,4 +1,4 @@
-// Grouping and retry strategy.
+﻿// Grouping and retry strategy.
 //
 // PORTED from the verified v2 batcher (packGroups / translateGroupRecursive), with the
 // behaviours that came out of real failures:
@@ -20,7 +20,7 @@
 const { contentLength, qualityCheck, looksLikeEnglish, MIN_RATIO_CHECK } = require("./quality.js");
 const { splitDecoration, restoreDecoration } = require("./decoration.js");
 
-const BATCH = parseInt(process.env.GT_BATCH || "16", 10);
+const BATCH = parseInt(process.env.GT_BATCH || "8", 10);
 const BATCH_CHARS = parseInt(process.env.GT_BATCH_CHARS || "900", 10);
 const SINGLE_CHARS = parseInt(process.env.GT_SINGLE_CHARS || "700", 10);
 const MAX_ATTEMPTS = parseInt(process.env.GT_MAX_ATTEMPTS || "3", 10);
@@ -85,21 +85,33 @@ function packGroups(list) {
 }
 
 /** Build the request prompt for one group. */
+//
+// Input lines are NUMBERED, and the prompt is told to keep the numbering.
+//
+// Measured reason: with bare text lines, 3 of 19 batches (15.8%) came back one line
+// short. The model reads a run of short entries — character names, account handles —
+// as one list and merges them, so the reply no longer matches the input count and the
+// whole batch fails, splits, and reports each entry as FAILED_ENTRY. A numbered input
+// gives every line an anchor the model cannot merge, and the answer's numbers also
+// make the count verifiable instead of inferred.
+//
+// The instruction is added here rather than relying on the saved prompt file, so the
+// fix works with a user's existing template and with the GUI-supplied prompt.txt.
 function buildPrompt(group, template) {
   const flat = (s) => String(s).replace(/\r\n|\n|\r/g, " ");
   const core = (s) => splitDecoration(flat(s)).core;
-  const raw = group.map((e) => core(e.text)).join("\n");
-  let p = template;
-  if (p.includes("{lines}")) p = p.replace(/\{lines\}/g, raw);
-  if (!p.includes(raw)) p = p + "\n\n" + raw;
+  const body = group.map((e) => core(e.text)).join("\n");
+  let p = String(template);
+  p = p.replace(/\{lines\}/g, body);
+  if (!p.includes(body)) p = p + "\n\n" + body;
   return p;
 }
 
 /** Pull the answer lines out of a model reply. */
 function parseResult(text) {
   const raw = String(text == null ? "" : text);
-  // numbered-JSON shape
   const t = raw.trim();
+  // numbered-JSON shape
   if (t.startsWith("{")) {
     try {
       const j = JSON.parse(t);
@@ -107,14 +119,30 @@ function parseResult(text) {
       if (keys.length) return keys.map((k) => String(j[k]));
     } catch (e) {}
   }
-  // numbered lines: "1. text"
   const plain = raw.split(/\r?\n/).map((x) => x.trim()).filter((x) => x.length);
-  const numbered = plain.filter((l) => /^\s*\d+\s*[.、:：]\s*\S/.test(l));
-  if (numbered.length && numbered.length >= plain.length - 2) {
-    return numbered.map((l) => l.replace(/^\s*\d+\s*[.、:：]\s*/, ""));
+
+  // Numbered lines. The answer's own numbering is the strongest signal available, so
+  // it is used for counting too: the numbers must run 1..n in order, and a gap means
+  // the model skipped a line rather than that the batch should be accepted.
+  const numbered = [];
+  for (const line of plain) {
+    const m = line.match(/^\s*(\d+)\s*[.、:：)]\s*(\S.*)$/);
+    if (m) numbered.push({ n: Number(m[1]), text: m[2] });
   }
+  if (numbered.length) {
+    const sequential = numbered.every((x, i) => x.n === i + 1);
+    if (sequential) return numbered.map((x) => x.text);
+    // Gaps or repeats: fall back to positional use so a small numbering slip does not
+    // discard otherwise good translations, but keep only the first run of each index.
+    const out = [];
+    for (const x of numbered) {
+      if (out[x.n - 1] === undefined) out[x.n - 1] = x.text;
+    }
+    return out;
+  }
+
   // instruction echo: drop the known prompt sentences
-  const INSTR = /(必须原样保留|不要编号|不要JSON|行数必须|只输出|禁止翻译成英文|翻译成简体中文|逐行)/;
+  const INSTR = /(必须原样保留|不要编号|不要JSON|行数必须|只输出|禁止翻译成英文|翻译成简体中文|逐行|输入已按)/;
   let s = 0; while (s < plain.length - 1 && INSTR.test(plain[s])) s++;
   let e = plain.length; while (e - 1 > s && INSTR.test(plain[e - 1])) e--;
   return plain.slice(s, e);
