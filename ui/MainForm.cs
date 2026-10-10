@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -70,6 +70,38 @@ namespace GameTranslatorV3
 
             BuildUi();
             LoadGames();
+
+            // Closing the window must end everything this window started. The pipeline is
+            // a separate Node process and the model server is another, so neither dies
+            // with the form; without this the user is left with a running translation task
+            // and no control to stop it, which is exactly what happened once.
+            FormClosing += OnFormClosing;
+        }
+
+        private void OnFormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (_runner.IsRunning)
+            {
+                var answer = MessageBox.Show(this,
+                    "翻译任务仍在运行。\n\n" +
+                    "是 = 停止任务并退出（已完成的译文会保留）\n" +
+                    "否 = 让任务在后台继续（关掉窗口后它不会停）\n" +
+                    "取消 = 返回窗口",
+                    "退出前确认", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+
+                if (answer == DialogResult.Cancel) { e.Cancel = true; return; }
+                if (answer == DialogResult.No)
+                {
+                    // The user asked for it to keep going, so nothing is killed. The model
+                    // server is left alone too, since it is what the task depends on.
+                    AppendLog("窗口关闭，翻译任务继续在后台运行。");
+                    return;
+                }
+                AppendLog("正在停止翻译任务…");
+                if (_cts != null) _cts.Cancel();
+            }
+
+            _runner.Dispose();
         }
 
         // ---------------------------------------------------------------- UI --------
@@ -791,7 +823,9 @@ namespace GameTranslatorV3
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-                Process.Start(psi);
+                var proc = Process.Start(psi);
+                // Remember the PID so closing the window can stop exactly this server.
+                if (proc != null) _runner.RememberLlamaProcess(proc.Id);
                 AppendLog("已启动模型服务（端口 " + _settings.Port + "）。模型加载需要 30-45 秒，管线会等待。");
                 _status.Text = "模型服务启动中…";
             }

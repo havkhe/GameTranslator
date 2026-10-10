@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -338,6 +338,9 @@ namespace GameTranslatorV3.Core
         public static void KillTree(Process proc)
         {
             if (proc == null) return;
+            // The process may already have finished, which is the ordinary case when the
+            // window closes after a run completes. taskkill reports a non-zero exit then,
+            // and that must not be treated as a failure.
             try { if (proc.HasExited) return; } catch { return; }
             try
             {
@@ -350,16 +353,66 @@ namespace GameTranslatorV3.Core
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 });
-                if (killer != null) killer.WaitForExit(5000);
+                if (killer != null)
+                {
+                    killer.WaitForExit(5000);
+                    try { killer.StandardOutput.ReadToEnd(); killer.StandardError.ReadToEnd(); } catch { }
+                    try { killer.Dispose(); } catch { }
+                }
             }
             catch { }
+            // The process can exit between the check above and taskkill running, and
+            // Kill() then throws; both outcomes are already what we wanted.
             try { if (!proc.HasExited) proc.Kill(); } catch { }
+            try { proc.Dispose(); } catch { }
         }
 
         public void StopCurrent()
         {
             var p = _current;
             if (p != null) KillTree(p);
+        }
+
+        private int _llamaPid;
+
+        /// <summary>Remember the model server this runner launched, so Dispose can stop it.</summary>
+        public void RememberLlamaProcess(int pid) { _llamaPid = pid; }
+
+        public bool IsRunning { get { return _current != null; } }
+
+        /// <summary>
+        /// Release everything this runner started. Called when the window closes.
+        ///
+        /// Without this, the pipeline survived closing the UI: it is a separate Node
+        /// process, so closing a window does not end it, and the result the user saw was
+        /// a translation task that kept running with no way to stop it because the only
+        /// control that stops it had gone. Killing the tree is the reliable form — the
+        /// pipeline itself spawns Ruby for VX Ace work.
+        /// </summary>
+        public void Dispose()
+        {
+            StopCurrent();
+            if (_llamaPid > 0)
+            {
+                // Only the server THIS runner started, identified by PID. Killing by the
+                // name llama-server would also take down a server the user started on
+                // purpose, or one the old v2 GUI owns.
+                try
+                {
+                    var killer = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "taskkill",
+                        Arguments = "/PID " + _llamaPid + " /T /F",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    });
+                    if (killer != null) killer.WaitForExit(5000);
+                }
+                catch { }
+                _llamaPid = 0;
+            }
         }
 
         private void Raise(Action<string> handler, string a) { if (handler != null) handler(a); }
