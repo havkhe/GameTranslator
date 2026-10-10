@@ -143,26 +143,42 @@ async function translate(o) {
           fails.push({ hash: hashText(target.text), err: "quality:" + q.fatal.join("|"), text: target.text.slice(0, 40) });
           continue;
         }
-        const st = partState.get(e) || { got: [] };
-        partState.set(e, st);
-        if (e.parent) {
+        // The join buffer is keyed by `partObj`, shared by every part of one entry.
+        //
+        // It must be the PART object, not the line object: packGroups turns a
+        // multi-line entry into one item per source line and each item is a distinct
+        // object, so keying by the item gave every line its own buffer holding one
+        // line. The count never reached `parts` and the entry was never joined or
+        // cached — silently, with no failure record (measured: 8 of 9 cached, the
+        // multi-line one simply absent).
+        //
+        // The multi-line case is tested FIRST because such parts also carry `parent`
+        // (the original entry); testing `parent` first sent them down the long-line
+        // path, which rejoins with "" and therefore loses every line break.
+        const keyObj = e.partObj || e;
+        const st = partState.get(keyObj) || { got: [] };
+        partState.set(keyObj, st);
+        if (e.__multi) {
           st.got[e.part - 1] = decorated;
           if (st.got.filter(Boolean).length === e.parts) {
-            partState.delete(e);
-            const joined = st.got.join("");
+            partState.delete(keyObj);
+            // Rejoin with the source's own breaks: the wire protocol is one line in,
+            // one line out, so the request carried the lines separated and the reply
+            // comes back separated too.
+            const joined = st.got.join(e.__multi.breaks[0] !== undefined ? e.__multi.breaks[0] : "\n");
             if (B.contentLength(joined) < B.contentLength(target.text) * 0.25) {
-              fails.push({ hash: hashText(target.text), err: "parts-too-short", text: target.text.slice(0, 40) });
+              fails.push({ hash: hashText(target.text), err: "multiline-too-short", text: target.text.slice(0, 40) });
             } else {
               cache.set(target.text, joined);
             }
           }
-        } else if (e.__multi) {
+        } else if (e.parent) {
           st.got[e.part - 1] = decorated;
           if (st.got.filter(Boolean).length === e.parts) {
-            partState.delete(e);
-            const joined = B.joinParts(null, st.got, target.text);
+            partState.delete(keyObj);
+            const joined = st.got.join("");
             if (B.contentLength(joined) < B.contentLength(target.text) * 0.25) {
-              fails.push({ hash: hashText(target.text), err: "multiline-too-short", text: target.text.slice(0, 40) });
+              fails.push({ hash: hashText(target.text), err: "parts-too-short", text: target.text.slice(0, 40) });
             } else {
               cache.set(target.text, joined);
             }

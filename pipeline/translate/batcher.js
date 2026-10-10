@@ -1,4 +1,4 @@
-﻿// Grouping and retry strategy.
+// Grouping and retry strategy.
 //
 // PORTED from the verified v2 batcher (packGroups / translateGroupRecursive), with the
 // behaviours that came out of real failures:
@@ -76,8 +76,11 @@ function packGroups(list) {
         else parts.push(p);
       }
       if (parts.length < 2) { expanded.push(e); continue; }
+      // `partObj` is the identity the caller uses to accumulate the pieces of this
+      // entry. It must be shared by every part (and by nothing else), otherwise each
+      // line gets its own buffer and the entry is never joined.
       const multi = { lines: parts, breaks };
-      parts.forEach((ln, i) => expanded.push({ id: e.id, text: ln, part: i + 1, parts: parts.length, parent: e, __multi: multi }));
+      parts.forEach((ln, i) => expanded.push({ id: e.id, text: ln, part: i + 1, parts: parts.length, parent: e, partObj: multi, __multi: multi }));
     }
     out.push(expanded);
   }
