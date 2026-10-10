@@ -1,4 +1,4 @@
-// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
+﻿// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
 //   mode: translate (default) | check (only scan for untranslated content)
 //   Requires a local llama-server (llama.cpp) already running on 127.0.0.1:<port>.
 // Extracts RPG Maker MV/MZ (data json, with or without a www/ wrapper) or
@@ -1753,16 +1753,23 @@ const MIN_RATIO_CHECK = 3;
 // of one line in 210 seconds). After this many attempts the entry is recorded in
 // failures.json and left for the next run, so the rest of the game can proceed.
 const MAX_ATTEMPTS_PER_ENTRY = 3;
-const attemptsLeft = new Map();   // normalised source text -> attempts remaining
+const attemptsUsed = new Map();   // normalised source text -> attempts spent this run (count UP)
 
+// Attempts are counted UP from zero.
+//
+// The first version counted down and asked "is it exhausted?" as
+// `(map.get(key) || 0) <= 0`. For an entry never attempted the map returned
+// undefined, `|| 0` turned that into 0, and 0 looked exhausted — so EVERY entry was
+// treated as spent, translateGroup returned null before sending anything, every
+// group split down to singletons and the run produced no translations at all.
+// An upward counter cannot be confused this way.
 function noteAttempt(text) {
   const k = normText(text);
-  const left = attemptsLeft.has(k) ? attemptsLeft.get(k) : MAX_ATTEMPTS_PER_ENTRY;
-  attemptsLeft.set(k, left - 1);
-  return left - 1;
+  attemptsUsed.set(k, (attemptsUsed.get(k) || 0) + 1);
+  return attemptsUsed.get(k);
 }
 function attemptsExhausted(text) {
-  return (attemptsLeft.get(normText(text)) || 0) <= 0;
+  return (attemptsUsed.get(normText(text)) || 0) >= MAX_ATTEMPTS_PER_ENTRY;
 }
 
 // ---------------- decorative runs: translate the text, restore the decoration -----
@@ -2085,7 +2092,7 @@ async function translate(entries) {
     if (retranslate.size) {
       for (const g of groups[i]) {
         const src = (g.parent || g).text;
-        if (retranslate.has(normText(src))) attemptsLeft.delete(normText(src));
+        if (retranslate.has(normText(src))) attemptsUsed.delete(normText(src));
       }
     }
     await translateGroupRecursive(groups[i], cache, fails, stats);
