@@ -85,6 +85,62 @@ namespace GameTranslatorV3
             _ticker.Start();
 
             FormClosing += OnFormClosing;
+            Load += OnLoadFix;
+
+            // The one-shot that actually shows the window; see ForceWindowVisible.
+            var once = new System.Threading.Timer(_ =>
+            {
+                try { BeginInvoke(new Action(ForceWindowVisible)); } catch { }
+            }, null, 1200, System.Threading.Timeout.Infinite);
+            FormClosed += (s, e) => { try { once.Dispose(); } catch { } };
+        }
+
+        private void OnLoadFix(object sender, EventArgs e) { ForceWindowVisible(); }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        private const int SW_SHOWNORMAL = 1;
+        private const int SW_SHOW = 5;
+        private const int SW_RESTORE = 9;
+
+        /// <summary>
+        /// Force the window visible after the message loop is running.
+        ///
+        /// Diagnosed as "the app starts but no window appears", twice. The facts, from the
+        /// form itself: construction succeeds, the native handle is created (2294514),
+        /// WindowState is Normal, Opacity 1, ShowInTaskbar true — and Visible is false. The
+        /// Load event never fires and neither does a one-shot Timer, so an explicit Show()
+        /// and an OnLoad handler both do nothing; whatever prevents the window from being
+        /// displayed happens before the message loop begins. Raising the window from outside
+        /// with ShowWindow(hwnd, SW_SHOW) does work, verified on a live instance
+        /// (visible=False -> visible=True, foreground acquired).
+        ///
+        /// So the window is shown natively here, by handle, from a timer that starts with the
+        /// loop. A timer is used rather than Load precisely because Load never fires; if the
+        /// root cause is found later this becomes redundant, not harmful — ShowWindow on an
+        /// already-visible window is a no-op.
+        /// </summary>
+        private void ForceWindowVisible()
+        {
+            try
+            {
+                if (!IsHandleCreated) return;
+                var h = Handle;
+                if (IsWindowVisible(h)) { AppendLog("窗口已可见。"); return; }
+                ShowWindow(h, SW_SHOWNORMAL);
+                ShowWindow(h, SW_SHOW);
+                ShowWindow(h, SW_RESTORE);
+                SetForegroundWindow(h);
+                AppendLog("已强制显示窗口 (visible=" + IsWindowVisible(h) + ")。");
+            }
+            catch (Exception ex) { AppendLog("强制显示窗口失败：" + ex.Message); }
         }
 
         private void OnFormClosing(object sender, FormClosingEventArgs e)

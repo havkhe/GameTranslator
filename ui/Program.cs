@@ -1,12 +1,26 @@
-// Entry point. Any failure while starting the window is written to
-// work\startup-error.log and shown in a message box, so the app never disappears
-// silently — a silent exit was one of the harder v2 problems to diagnose.
+// v3 launcher.
 //
-// Startup is also traced step by step (work\startup-trace.log). A window can be created
-// yet never become visible, and without a trace that looks like "the app will not open"
-// with nothing to go on: the trace names the last step that completed.
+// WHY THIS FILE EXISTS SEPARATELY:
+//
+// The v3 window was being created (title, size, position and native handle all correct)
+// but never became visible: IsWindowVisible was false, the Load event never fired, and
+// neither a WinForms Timer nor a thread-pool timer ever ran — so the message loop was not
+// dispatching, while Application.Run(form) was definitely being called. Forcing the window
+// visible from outside the process with ShowWindow(hwnd, SW_SHOW) does work, which proves
+// the window itself is sound and only the in-process showing path is broken.
+//
+// Rather than ship a window the user cannot reach, this launcher:
+//   1. creates the form, shows it natively by handle, and pumps messages with the classic
+//      Application.Run() on a form that was ALREADY shown explicitly;
+//   2. opens a tray icon as a guaranteed way back to the window;
+//   3. retries the native ShowWindow a few times over the first seconds, since the first
+//      attempt can land before the handle is usable.
+// Each step is traced, so if the window still does not appear the log says which step ran.
 using System;
+using System.Diagnostics;
+using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -15,18 +29,23 @@ namespace GameTranslatorV3
 {
     internal static class Program
     {
-        private static string _root;
+        private static string _root = "";
+        private static string _traceFile = "";
+        private static NotifyIcon _tray;
+        private static MainForm _form;
 
-        private static void Trace(string step)
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr h, int cmd);
+        [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
+        private const int SW_SHOWNORMAL = 1, SW_SHOW = 5, SW_RESTORE = 9;
+
+        private static void Trace(string s)
         {
             try
             {
-                string dir = Path.Combine(_root ?? AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'), "work");
-                Directory.CreateDirectory(dir);
-                File.AppendAllText(Path.Combine(dir, "startup-trace.log"),
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  pid=" +
-                    System.Diagnostics.Process.GetCurrentProcess().Id + "  " + step + Environment.NewLine,
-                    Encoding.UTF8);
+                File.AppendAllText(_traceFile,
+                    DateTime.Now.ToString("HH:mm:ss.fff") + "  pid=" +
+                    Process.GetCurrentProcess().Id + "  " + s + Environment.NewLine, Encoding.UTF8);
             }
             catch { }
         }
@@ -35,109 +54,154 @@ namespace GameTranslatorV3
         private static void Main()
         {
             _root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-            Trace("start");
+            try { Directory.CreateDirectory(Path.Combine(_root, "work")); } catch { }
+            _traceFile = Path.Combine(_root, "work", "startup-trace.log");
+            Trace("launcher start");
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Trace("visual styles set");
 
-            // Only one window at a time.
-            //
-            // Without this, launching the exe again started a second instance whose window
-            // opened at exactly the same place as the first, covering it. From the user's
-            // side the app appeared not to open at all while three copies were running.
+            // One window only. A second launch raises the running one rather than opening a
+            // second copy at the same place, which looked like the app doing nothing.
             bool owned;
             using (var single = new Mutex(true, @"Local\GameTranslatorV3_SingleInstance", out owned))
             {
-                if (!owned)
-                {
-                    Trace("another instance is running; bringing it to the front and exiting");
-                    BringExistingWindowToFront();
-                    return;
-                }
+                if (!owned) { Trace("already running; raising it and exiting"); RaiseExisting(); return; }
 
-                // An exception on the UI thread would otherwise tear the app down with no
-                // message at all in a release build.
-                Application.ThreadException += (s, e) =>
-                {
-                    Trace("THREAD EXCEPTION: " + e.Exception);
-                    TryLog(_root, e.Exception);
-                    MessageBox.Show("运行中出错：\n\n" + e.Exception.Message +
-                        "\n\n详细信息见 work\\startup-error.log", "错误",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                };
-                AppDomain.CurrentDomain.UnhandledException += (s, e) =>
-                {
-                    Trace("UNHANDLED: " + e.ExceptionObject);
-                    TryLog(_root, e.ExceptionObject as Exception ?? new Exception(Convert.ToString(e.ExceptionObject)));
-                };
+                Application.ThreadException += (s, e) => Trace("THREAD EXCEPTION: " + e.Exception);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => Trace("UNHANDLED: " + e.ExceptionObject);
 
                 try
                 {
                     Trace("constructing MainForm");
-                    using (var form = new MainForm(_root))
-                    {
-                        Trace("MainForm constructed; entering message loop");
-                        Application.Run(form);
-                        Trace("message loop exited");
-                    }
+                    _form = new MainForm(_root);
+                    Trace("constructed; handle=" + _form.Handle + " visible=" + _form.Visible);
+
+                    SetupTray();
+                    StartShowRetries();
+
+                    // Show by handle BEFORE the loop: the in-process Show() path does not take
+                    // effect here, but the native call does.
+                    TryNativeShow("before run");
+                    Trace("entering message loop");
+                    Application.Run(_form);
+                    Trace("message loop exited");
                 }
                 catch (Exception ex)
                 {
                     Trace("FATAL: " + ex);
-                    TryLog(_root, ex);
-                    MessageBox.Show(
-                        "程序启动或运行中出错：\n\n" + ex.Message +
-                        "\n\n详细信息已写入：\n" + Path.Combine(_root, "work", "startup-error.log"),
-                        "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    try
+                    {
+                        File.AppendAllText(Path.Combine(_root, "work", "startup-error.log"),
+                            DateTime.Now + Environment.NewLine + ex + Environment.NewLine, Encoding.UTF8);
+                    }
+                    catch { }
+                    MessageBox.Show("程序出错：\n\n" + ex.Message, "错误");
+                }
+                finally
+                {
+                    if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
                 }
             }
-            Trace("exit");
+            Trace("launcher exit");
         }
 
-        /// <summary>
-        /// Raise the window of the instance already running.
-        ///
-        /// It is not enough to exit: the user asked for the app and would see nothing
-        /// happen, which is the same complaint this fixes.
-        /// </summary>
-        private static void BringExistingWindowToFront()
+        private static void TryNativeShow(string tag)
         {
             try
             {
-                var me = System.Diagnostics.Process.GetCurrentProcess();
-                foreach (var p in System.Diagnostics.Process.GetProcessesByName(me.ProcessName))
+                if (_form == null || !_form.IsHandleCreated) { Trace(tag + ": no handle"); return; }
+                var h = _form.Handle;
+                if (IsWindowVisible(h)) { Trace(tag + ": already visible"); return; }
+                ShowWindow(h, SW_SHOWNORMAL);
+                ShowWindow(h, SW_SHOW);
+                ShowWindow(h, SW_RESTORE);
+                SetForegroundWindow(h);
+                Trace(tag + ": ShowWindow done, visible=" + IsWindowVisible(h));
+            }
+            catch (Exception ex) { Trace(tag + " failed: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// Keep trying to show the window during the first seconds. The first attempt can
+        /// land before the window is ready, and the loop is not dispatching, so a timer is
+        /// not an option — a background thread schedules the attempts instead.
+        /// </summary>
+        private static void StartShowRetries()
+        {
+            var th = new Thread(() =>
+            {
+                foreach (var delay in new[] { 300, 800, 1500, 3000, 6000 })
+                {
+                    Thread.Sleep(delay);
+                    try
+                    {
+                        if (!_form.IsHandleCreated) continue;
+                        var h = _form.Handle;
+                        if (IsWindowVisible(h)) { Trace("shown after " + delay + "ms"); return; }
+                        ShowWindow(h, SW_SHOW);
+                        SetForegroundWindow(h);
+                        Trace("retry at " + delay + "ms: visible=" + IsWindowVisible(h));
+                        if (IsWindowVisible(h)) return;
+                    }
+                    catch (Exception ex) { Trace("retry failed: " + ex.Message); }
+                }
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        /// <summary>A tray icon is the guaranteed way back to the window.</summary>
+        private static void SetupTray()
+        {
+            try
+            {
+                _tray = new NotifyIcon
+                {
+                    Icon = SystemIcons.Application,
+                    Text = "RPG Maker 汉化管理器 v3",
+                    Visible = true
+                };
+                var menu = new ContextMenuStrip();
+                menu.Items.Add("显示窗口", null, (s, e) => ShowWindowNow());
+                menu.Items.Add("退出", null, (s, e) => { try { _form.Close(); } catch { } });
+                _tray.ContextMenuStrip = menu;
+                _tray.DoubleClick += (s, e) => ShowWindowNow();
+                Trace("tray icon created");
+            }
+            catch (Exception ex) { Trace("tray failed: " + ex.Message); }
+        }
+
+        private static void ShowWindowNow()
+        {
+            try
+            {
+                if (_form == null) return;
+                if (_form.WindowState == FormWindowState.Minimized) _form.WindowState = FormWindowState.Normal;
+                _form.Show();
+                _form.Activate();
+                TryNativeShow("tray click");
+            }
+            catch (Exception ex) { Trace("show from tray failed: " + ex.Message); }
+        }
+
+        private static void RaiseExisting()
+        {
+            try
+            {
+                var me = Process.GetCurrentProcess();
+                foreach (var p in Process.GetProcessesByName(me.ProcessName))
                 {
                     if (p.Id == me.Id) continue;
                     p.Refresh();
                     if (p.MainWindowHandle == IntPtr.Zero) continue;
                     ShowWindow(p.MainWindowHandle, SW_RESTORE);
                     SetForegroundWindow(p.MainWindowHandle);
-                    Trace("raised window of pid " + p.Id);
+                    Trace("raised pid " + p.Id);
                     return;
                 }
             }
-            catch (Exception ex) { Trace("could not raise the existing window: " + ex.Message); }
-        }
-
-        private const int SW_RESTORE = 9;
-
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        private static void TryLog(string root, Exception ex)
-        {
-            try
-            {
-                string dir = Path.Combine(root, "work");
-                Directory.CreateDirectory(dir);
-                File.AppendAllText(Path.Combine(dir, "startup-error.log"),
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + Environment.NewLine + ex + Environment.NewLine + Environment.NewLine,
-                    Encoding.UTF8);
-            }
-            catch { }
+            catch (Exception ex) { Trace("raise failed: " + ex.Message); }
         }
     }
 }
