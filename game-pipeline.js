@@ -1564,8 +1564,11 @@ function buildPrompt(batch) {
   // inside a line is a display-wrap artifact, so a space is the honest rendering
   // (the source breaks are restored when the reply is written back).
   const flat = (s) => String(s).replace(/\r\n|\n|\r/g, " ");
-  const raw = batch.map((e) => flat(e.text)).join("\n");
-  const numbered = batch.map((e, j) => j + 1 + ". " + flat(e.text)).join("\n");
+  // Decoration is not sent to the model (see splitDecoration); it is re-attached to
+  // the answer. The prompt therefore carries the clean core of each line.
+  const core = (s) => splitDecoration(flat(s)).core;
+  const raw = batch.map((e) => core(e.text)).join("\n");
+  const numbered = batch.map((e, j) => j + 1 + ". " + core(e.text)).join("\n");
   let p = basePrompt;
   if (p.includes("{numbered}")) p = p.replace(/\{numbered\}/g, numbered);
   if (p.includes("{lines}")) p = p.replace(/\{lines\}/g, raw);
@@ -1679,6 +1682,52 @@ function attemptsExhausted(text) {
   return (attemptsLeft.get(normText(text)) || 0) <= 0;
 }
 
+// ---------------- decorative runs: translate the text, restore the decoration -----
+//
+// Lines carry decoration that needs no translation: a repeated trailing mark
+// ("やっと続け～～～～", "……そうか…………"), a repeated punctuation run
+// ("本当に最高！！"), or a symmetric banner ("◆◆イベントルール◆◆"). Sending those to
+// the model costs tokens and invites two failures seen in practice: the model
+// reproduces the run at a different length (the answer then fails validation), or it
+// leaves it alone and the answer looks untranslated.
+//
+// The runs are split off before the request and put back on the result, so the game
+// still displays them. This is lossless by construction: nothing is discarded, the
+// prefix and suffix are simply carried around the translation.
+const DECOR_BODY = "[♥♡♪♫☆★✩✪◆◇■□●○◎※〓…‥ー―‐〜~～]";
+const PUNCT_TAIL = /(?:[\s\u3000]*[。、！？!?，,．.]{2,}[\s\u3000]*)+$/;
+
+function splitDecoration(s) {
+  const text = String(s);
+  let prefix = "", suffix = "", core = text;
+  const lead = core.match(new RegExp("^(?:[\\s\\u3000]*" + DECOR_BODY + "+[\\s\\u3000]*)+"));
+  if (lead) { prefix = lead[0]; core = core.slice(lead[0].length); }
+  let tail = core.match(new RegExp("(?:[\\s\\u3000]*" + DECOR_BODY + "+[\\s\\u3000]*)+$"));
+  if (!tail) tail = core.match(PUNCT_TAIL);
+  if (tail) { suffix = tail[0]; core = core.slice(0, core.length - tail[0].length); }
+  if (!core.trim()) return { core: text, prefix: "", suffix: "" };   // decoration only
+  return { core, prefix, suffix };
+}
+function restoreDecoration(translation, parts) {
+  let out = String(translation).trim();
+  if (!parts || (!parts.prefix && !parts.suffix)) return out;
+  const p = parts.prefix.trim(), suf = parts.suffix.trim();
+  if (p && !out.startsWith(p)) out = p + out;
+  if (suf) {
+    const last = suf.slice(-1);
+    if (!out.endsWith(suf) && !new RegExp("\\" + last + "{2,}$").test(out)) out = out + suf;
+  }
+  return out;
+}
+// The decoration attached to an entry, remembered so the answer can be completed.
+const decorationOf = new WeakMap();
+function rememberDecoration(entry) {
+  const src = (entry.parent || entry).text;
+  let d = decorationOf.get(entry);
+  if (!d) { d = splitDecoration(src); decorationOf.set(entry, d); }
+  return d;
+}
+
 // Translation results for the individual lines of one multi-line (or long) entry,
 // keyed by the part object itself. A WeakMap keeps this from outliving the run.
 const partState = new WeakMap();
@@ -1740,10 +1789,13 @@ async function translateGroupRecursive(group, cache, fails, stats, depth = 0) {
       // their lines overwrite each other.
       const st = partState.get(e) || { got: [] };
       partState.set(e, st);
+      // The request carried the decoration-free core; put this line's decoration back
+      // before the pieces are joined, so each line keeps its own hearts and dashes.
+      const decorated = restoreDecoration(res[i], rememberDecoration(e));
       if (e.parent) {
         // A split long line: collect parts, verify the joined result, then store
         // it under the *original* text so patch time can find it again.
-        st.got[e.part - 1] = res[i];
+        st.got[e.part - 1] = decorated;
         if (st.got.filter(Boolean).length === e.parts) {
           partState.delete(e);
           const joined = st.got.join("");
@@ -1756,7 +1808,7 @@ async function translateGroupRecursive(group, cache, fails, stats, depth = 0) {
       } else {
         // A line of a multi-line entry: collect the lines and rejoin them with the
         // source's own line breaks once every line has been translated.
-        st.got[e.part - 1] = res[i];
+        st.got[e.part - 1] = decorated;
         if (st.got.filter(Boolean).length === e.parts) {
           partState.delete(e);
           const got = st.got;
@@ -1776,7 +1828,9 @@ async function translateGroupRecursive(group, cache, fails, stats, depth = 0) {
       // dropped, so PROGRESS never moved and the next run retranslated everything
       // (measured: 0 of 12,123 entries cached after a full pass). Every accepted
       // line is cached, whether or not it needed joining with siblings.
-      if (!e.parent) cache.set(target.text, res[i]);
+      // The decoration that was withheld from the request goes back on here, so the
+      // game still shows its hearts, dashes and exclamation runs.
+      if (!e.parent) cache.set(target.text, decorated);
     }
     // Retry ONLY what validation rejected, and only once.
     //
@@ -1855,17 +1909,19 @@ function pruneFailures(fails, stillMissing) {
 // every time). The entry stays in failures.json and is retried on the next run.
 async function translateOne(text) {
   if (runState.degraded) return null;
-  const prompt = "将下面日文翻译成简体中文（只能输出简体中文，禁止英文）：\n" + glossaryPromptBlock() + String(text).replace(/\r\n|\n|\r/g, " ");
+  // Decoration is withheld from this request too, and put back on the answer.
+  const decorParts = splitDecoration(String(text).replace(/\r\n|\n|\r/g, " "));
+  const prompt = "将下面日文翻译成简体中文（只能输出简体中文，禁止英文）：\n" + glossaryPromptBlock() + decorParts.core;
   try {
     const resp = await ask(prompt);
     // Parse like the batch path so a numbered-JSON answer is unwrapped instead of
     // being stored as literal JSON text. Everything else stays as before: this is
     // the last-chance single request and its result is validated below.
     const parsed = parseResult(resp);
-    const one = normalizeResult(parsed, 1);
-    const c = cleanOutput(one ? one[0] : resp);
+    const norm = normalizeResult(parsed, 1);
+    const c = cleanOutput(norm ? norm[0] : resp);
     if (c && !/^注意：/.test(c) && c.length >= 2 && !looksLikeEnglish(c, text) && c.length >= text.length * 0.25) {
-      return applyGlossary(c);
+      return applyGlossary(restoreDecoration(c, decorParts));
     }
   } catch (err) {}
   return null;
