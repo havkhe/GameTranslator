@@ -1,4 +1,4 @@
-// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
+﻿// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
 //   mode: translate (default) | check (only scan for untranslated content)
 //   Requires a local llama-server (llama.cpp) already running on 127.0.0.1:<port>.
 // Extracts RPG Maker MV/MZ (data json, with or without a www/ wrapper) or
@@ -48,20 +48,23 @@ const BAK_DIR = path.join(GAME_DIR, "data_原版备份");
 const hasJp = (s) => /[\u3040-\u30ff\u4e00-\u9fff]/.test(s);
 
 // Asset/identifier names, e.g. "ダイスケ立ち(全裸)1_floor1901",
-// "ルーティ_立ち絵_kao_mini", "ダイゴマン@一生やんちゃ".
+// "ルーティ_立ち絵_kao_mini", "004:クエストMAP", "ヒ＿ロ＿カ右固定民".
 //
 // The model correctly refuses to translate these, and refusing means the answer
 // comes back identical, which the quality gate rejects. That rejection used to be
 // a BATCH failure: one such entry discarded up to 15 good translations and made
-// the caller split the request in half, again and again — measured on a real game:
-// 4467 splits for 1621 requests, and the entries never landed.
+// the caller split the request in half, again and again. Worse, when the pending
+// queue STARTS with such entries every split bottomed out on them, nothing was
+// ever cached, and the game made no progress at all while the GPU ran at 100%
+// (measured: 90 seconds with a frozen cache while the server processed requests).
 //
 // The rule is deliberately narrow because it runs at extraction time: skipping
 // something is later indistinguishable from "the game had nothing there". It needs
-// an `_` or `@` glued to an identifier AND no sentence punctuation AND no newline.
-// Validated against 77,997 real translated strings: it would have skipped 0.10% of
-// them, all of the same asset-label shape ("戦闘中_3P", "探偵事務所_1"), and none
-// of the dialogue. Set GT_NO_ASSET_FILTER=1 to switch it off.
+// an identifier marker (`_`, `@`, a full-width `＿`, or a leading "004:" style tag)
+// and no sentence punctuation and no newline. Validated against 78,603 real
+// translated strings: it would skip 0.212% of them, all of the same asset-label
+// shape ("立ち絵表示＿通常", "戦闘中_3P"), and no dialogue. Set
+// GT_NO_ASSET_FILTER=1 to switch it off.
 const ASSET_NAME = /[\u3040-\u30ff\u4e00-\u9fff][_@][A-Za-z0-9]|[A-Za-z0-9][_@][\u3040-\u30ff\u4e00-\u9fff]/;
 const looksLikeAssetName = (s) => {
   if (process.env.GT_NO_ASSET_FILTER === "1") return false;
@@ -69,8 +72,10 @@ const looksLikeAssetName = (s) => {
   if (!t) return false;
   if (/[。、！？…「」『』]/.test(t)) return false;   // prose punctuation
   if (/[\r\n]/.test(t)) return false;                // wrapped dialogue
-  if (!/[_@]/.test(t)) return false;
-  return ASSET_NAME.test(t);
+  if (ASSET_NAME.test(t)) return true;
+  if (/[０-９0-9]+\s*[:：]/.test(t)) return true;     // "004:クエストMAP" plugin label
+  if (/\uff3f/.test(t) && /[\u3040-\u30ff\u4e00-\u9fff]/.test(t)) return true;  // full-width underscore
+  return false;
 };
 
 const looksTranslatable = (s) => {
@@ -1617,6 +1622,10 @@ async function translateGroup(group) {
   return null;
 }
 
+function contentLength(s) {
+  return String(s).replace(/[\s\u3000]/g, "").length;
+}
+
 // Translation results for the individual lines of one multi-line (or long) entry,
 // keyed by the part object itself. A WeakMap keeps this from outliving the run.
 const partState = new WeakMap();
@@ -1624,7 +1633,7 @@ const partState = new WeakMap();
 // Translate a request-sized group; on failure split it in half and retry the
 // halves (GalTransl does the same with the first third). Splitting beats
 // retrying the same batch: a single bad line can no longer sink 15 good ones.
-async function translateGroupRecursive(group, cache, fails, stats) {
+async function translateGroupRecursive(group, cache, fails, stats, depth = 0) {
   if (!group.length) return;
   const res = await translateGroup(group);
   if (res) {
@@ -1639,10 +1648,13 @@ async function translateGroupRecursive(group, cache, fails, stats) {
       res[i] = applyGlossary(res[i]);
       // A translation far shorter than its source means the model truncated or
       // gave up. The comparison must use the ORIGINAL entry, not the chunk this
-      // request happened to carry: judging a chunk against its own length rejected
-      // good translations of long lines, and one rejected part meant the whole
-      // entry could never be assembled — it stayed pending on every single run.
-      if (target.text.length > 12 && res[i].length < target.text.length * 0.25) {
+      // request happened to carry, and must ignore layout whitespace: RPG Maker
+      // text is padded with full-width spaces for centring, so
+      // "　　　　　みんなごめ\nん" is 34 characters but holds 5 of dialogue.
+      // Measuring the raw length demanded a 9-character answer for a 5-character
+      // line, so a correct short translation was rejected on every single run and
+      // the game never progressed while the GPU stayed busy.
+      if (target.text.length > 12 && contentLength(res[i]) < contentLength(target.text) * 0.25) {
         skip.add(i);
         fails.push({ hash: textHash(target.text), err: "too-short", text: target.text.slice(0, 40) });
         console.log("SUSPECT_SHORT", JSON.stringify(target.text.slice(0, 40)));
@@ -1677,7 +1689,7 @@ async function translateGroupRecursive(group, cache, fails, stats) {
         if (st.got.filter(Boolean).length === e.parts) {
           partState.delete(e);
           const joined = st.got.join("");
-          if (joined.length < target.text.length * 0.25) {
+          if (contentLength(joined) < contentLength(target.text) * 0.25) {
             fails.push({ hash: textHash(target.text), err: "parts-too-short", text: target.text.slice(0, 40) });
           } else {
             cache.set(target.text, joined);
@@ -1694,7 +1706,7 @@ async function translateGroupRecursive(group, cache, fails, stats) {
           const breaks = src.match(/\r\n|\n|\r/g) || [];
           let joined = got[0];
           for (let k = 1; k < got.length; k++) joined += (breaks[k - 1] || "") + got[k];
-          if (joined.length < target.text.length * 0.25) {
+          if (contentLength(joined) < contentLength(target.text) * 0.25) {
             fails.push({ hash: textHash(target.text), err: "multiline-too-short", text: target.text.slice(0, 40) });
           } else {
             cache.set(target.text, joined);
@@ -1707,6 +1719,47 @@ async function translateGroupRecursive(group, cache, fails, stats) {
       // (measured: 0 of 12,123 entries cached after a full pass). Every accepted
       // line is cached, whether or not it needed joining with siblings.
       if (!e.parent) cache.set(target.text, res[i]);
+    }
+    // Retry ONLY what validation rejected, and only once.
+    //
+    // Without this the caller had no way to know that part of the request was
+    // accepted, so `res` (null for the rejected entries) was not an option either:
+    // the batch was re-requested and split in half forever. When the pending queue
+    // begins with entries the model always refuses (asset names), every split
+    // bottomed out on them, nothing was ever cached, and the game stopped making
+    // progress while the GPU stayed at 100%.
+    //
+    // Two guards keep it terminating: the retry list keeps whole multi-line entries
+    // together (splitting them strands the lines that need joining, so they could
+    // never be assembled), and `depth` stops a retry that fails again — those
+    // entries are recorded and left for the next run.
+    if (skip.size) {
+      const retryList = [];
+      const seenItem = new Set();
+      for (const i of skip) {
+        const e = group[i];
+        if (e.__multi) {
+          const k = e.__multi;
+          if (!seenItem.has(k)) { seenItem.add(k); retryList.push(k.lines.map((line, n) => ({ id: e.id, text: line, part: n + 1, parts: k.lines.length, parent: e.parent, __multi: k }))); }
+        } else if (e.parent && e.parent.__multi) {
+          const k = e.parent.__multi;
+          if (!seenItem.has(k)) { seenItem.add(k); retryList.push(k.lines.map((line, n) => ({ id: e.id, text: line, part: n + 1, parts: k.lines.length, parent: e.parent, __multi: k }))); }
+        } else {
+          retryList.push([e]);
+        }
+      }
+      const flatRetry = retryList.flat();
+      if (depth < 1) {
+        stats.partialRetries = (stats.partialRetries || 0) + 1;
+        for (const sub of retryList) {
+          await translateGroupRecursive(sub, cache, fails, stats, depth + 1);
+        }
+      } else {
+        for (const e of flatRetry) {
+          const target = e.parent || e;
+          fails.push({ hash: textHash(target.text), err: "validation-failed", text: target.text.slice(0, 40) });
+        }
+      }
     }
     return;
   }
