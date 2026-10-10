@@ -600,7 +600,22 @@ function repackVxAce(engine, vxWork) {
 
 function extractVxAce(dataDir) {
   runRuby(VX_EXTRACT, [dataDir, EXTRACT]);
-  return JSON.parse(fs.readFileSync(EXTRACT, "utf8"));
+  const all = JSON.parse(fs.readFileSync(EXTRACT, "utf8"));
+  // Drop text that is already Chinese before it becomes a translation task.
+  //
+  // VX Ace reads the game's own Data (or its packed Game.rgss3a) directly, and for
+  // a title translated by another tool that folder already holds the Chinese — MTool
+  // games keep their result inside the archive itself, so the "pristine" backup the
+  // pipeline takes is Chinese too. Sending that to the model asks it to translate
+  // Chinese into Chinese; it correctly refuses, every request fails, and the split
+  // retry turns one game into thousands of error lines (measured: 2117 entries gave
+  // 133 requests plus 2000 split retries and translated nothing, with 1954 of the
+  // 2117 already Chinese). MV avoids this because its source is the backup and its
+  // live scan already skips translated text; this is the equivalent guard here.
+  const keep = all.filter((e) => !isChineseLike(e.text));
+  const dropped = all.length - keep.length;
+  if (dropped) console.log("SKIPPED_ALREADY_TRANSLATED", dropped);
+  return keep;
 }
 
 // Same extraction, but into an explicit output file: used to build the pristine
@@ -1593,6 +1608,23 @@ async function translateGroup(group) {
   // when an answer actually comes back (below), so the stall/degradation detection
   // still sees every request it needs to.
   if (group.every((g) => attemptsExhausted((g.parent || g).text))) return null;
+  // A group whose entries are all already Chinese is not sent either: the model
+  // correctly refuses to translate Chinese into Chinese, so every such request
+  // fails, splits, and fails again. A game translated by another tool has its
+  // Chinese sitting in the live data, and VX Ace extraction reads the live folder
+  // directly (MV gets the pristine backup as its source instead), so this is the
+  // path that produced thousands of request-failed records — a run of 2117 entries
+  // made 133 requests plus 2000 split retries and translated nothing.
+  //
+  // Returning an empty array (not null) tells the caller "nothing to do here", so
+  // the entries are recorded and skipped rather than retried.
+  if (group.every((g) => isChineseLike((g.parent || g).text))) {
+    if (process.env.GT_DEBUG_SKIP || !globalThis.__gtChineseSkipped) {
+      globalThis.__gtChineseSkipped = true;
+      console.log("SKIP_ALREADY_CHINESE", JSON.stringify((group[0].parent || group[0]).text.slice(0, 30)));
+    }
+    return group.map(() => null);
+  }
   const prompt = buildPrompt(group);
   // Cap generation at roughly twice the source size (GalTransl's rule). This is
   // the cheapest guard against a repetition loop: the model physically cannot
@@ -1616,7 +1648,20 @@ async function translateGroup(group) {
       continue;
     }
     const parsed = parseResult(resp);
-    const lines = normalizeResult(parsed, group.length);
+    // Models sometimes echo an input line before translating. stripEchoedInstructions
+    // removes the prompt's instruction sentences, but it matches them against the
+    // ORIGINAL text, and the request carries the decoration-free core (see
+    // splitDecoration), so an echoed core survived and added a line — which made the
+    // count check fail and the whole group fail with it. An exact echo of a source
+    // line is never a translation, so drop those before counting.
+    let cleanedParsed = parsed;
+    if (Array.isArray(parsed) && parsed.length > group.length) {
+      const srcs = new Set(group.map((g) => normText((g.parent || g).text)));
+      const cores = new Set(group.map((g) => normText(splitDecoration((g.parent || g).text).core)));
+      const kept = parsed.filter((l) => !srcs.has(normText(l)) && !cores.has(normText(l)));
+      if (kept.length >= group.length) cleanedParsed = kept;
+    }
+    const lines = normalizeResult(cleanedParsed, group.length);
     if (!lines) continue;
     // An answer arrived, so this group costs one attempt from each of its entries.
     for (const g of group) noteAttempt((g.parent || g).text);
@@ -1738,6 +1783,17 @@ const partState = new WeakMap();
 async function translateGroupRecursive(group, cache, fails, stats, depth = 0) {
   if (!group.length) return;
   const res = await translateGroup(group);
+  // The request decided there was nothing to translate (the text is already
+  // Chinese). Record that and stop: retrying or splitting would only produce the
+  // same verdict, which is what flooded the log with request-failed entries.
+  if (res && res.every((x) => x === null)) {
+    for (const g of group) {
+      const target = g.parent || g;
+      fails.push({ hash: textHash(target.text), err: "already-chinese", text: target.text.slice(0, 40) });
+    }
+    stats.chineseSkipped = (stats.chineseSkipped || 0) + group.length;
+    return;
+  }
   if (res) {
     const skip = new Set();
     for (let i = 0; i < group.length; i++) {
