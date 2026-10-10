@@ -9,7 +9,7 @@ const path = require("path");
 
 const APP = "D:\\GameTranslator";
 const WORK = path.join(APP, "work");
-const BATCH_LOGS = ["D:\\dsh\\gt-audit\\batch2.log", "D:\\dsh\\gt-audit\\batch.log"];
+const BATCH_LOGS = ["D:\\dsh\\gt-audit\\batch3.log", "D:\\dsh\\gt-audit\\batch2.log", "D:\\dsh\\gt-audit\\batch.log"];
 const WATCHDOG = "D:\\dsh\\gt-audit\\watchdog-status.json";
 
 const argv = process.argv.slice(2);

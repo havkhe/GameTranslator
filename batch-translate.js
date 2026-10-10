@@ -120,8 +120,31 @@ function finished(dir) {
   }
 }
 
-function runGame(g) {
+// How many strings does the pipeline still consider translatable in this game?
+// Used by --recheck to decide whether an "already Chinese" verdict really means
+// there is nothing left (the extractor skips Chinese-looking text, so a fully
+// translated game yields very few entries; a partially translated one does not).
+function quickExtractCount(dir) {
   return new Promise((resolve) => {
+    const child = cp.spawn(NODE, [PIPELINE, dir, model, WORK, PORT, "extract"], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    const timer = setTimeout(() => { try { child.kill(); } catch (e) {} }, 600000);
+    child.on("close", () => {
+      clearTimeout(timer);
+      const m = out.match(/EXTRACTED (\d+)/);
+      const skipped = out.match(/SKIPPED_ALREADY_TRANSLATED (\d+)/);
+      const n = m ? parseInt(m[1], 10) : 0;
+      // Entries the extractor produced are the ones it would translate; a game that
+      // is already Chinese still yields a few (proper nouns, kanji-only labels), so
+      // only a substantial count counts as "work left".
+      resolve(n - (skipped ? parseInt(skipped[1], 10) : 0) > 50 ? n : 0);
+    });
+  });
+}
+
+function runGame(g) {  return new Promise((resolve) => {
     const args = [PIPELINE, g.dir, model, WORK, PORT, "translate"];
     const t0 = Date.now();
     log("START  [" + g.kind + "] " + g.dir);
@@ -152,9 +175,41 @@ function runGame(g) {
 (async () => {
   let games = loadGames();
   if (only) games = games.filter((g) => g.dir.toLowerCase().includes(only.toLowerCase()));
+
+  // Respect the scan's own verdict for titles that are already Chinese.
+  //
+  // The GUI marks a game AlreadyCn when its data files are mostly Han with almost
+  // no kana (IsAlreadyTranslated: cn > 500 && kana < cn * 0.2) and its "全部汉化"
+  // button skips those. This batch runner used to ignore the flag, so it extracted
+  // and "translated" thousands of already-Chinese strings — Chinese into Chinese,
+  // wasting hours and risking damage to finished games. Pass --include-cn to
+  // override (useful for a game whose Chinese was applied by another tool and is
+  // still missing pieces), or --recheck to ask the pipeline itself first.
+  const includeCn = argv.includes("--include-cn");
+  const recheck = argv.includes("--recheck");
+  let alreadyCn = games.filter((g) => g.already);
+  if (recheck) {
+    // let the extractor count what is actually left before deciding
+    const kept = [];
+    for (const g of alreadyCn) {
+      const out = await quickExtractCount(g.dir);
+      if (out > 0) { log("RECHECK " + out + " strings left in " + path.basename(g.dir).slice(0, 40)); kept.push(g); }
+      else log("RECHECK nothing to translate in " + path.basename(g.dir).slice(0, 40));
+    }
+    alreadyCn = [];
+    games = games.filter((g) => !g.already).concat(kept);
+  } else if (!includeCn) {
+    games = games.filter((g) => !g.already);
+  }
+
   const pending = games.filter((g) => !finished(g.dir));
   const skipped = games.length - pending.length;
-  log("games in scan: " + games.length + "   already finished: " + skipped + "   to translate: " + pending.length);
+  log("games in scan: " + loadGames().length +
+      "   already Chinese: " + (includeCn ? 0 : alreadyCn.length) +
+      "   finished: " + skipped + "   to translate: " + pending.length);
+  if (!includeCn && alreadyCn.length) {
+    log("skipping (already Chinese, GUI verdict): " + alreadyCn.map((g) => path.basename(g.dir).slice(0, 26)).join(" | "));
+  }
   log("model: " + model);
   // Smallest first: it finishes many games early instead of being stuck inside one
   // huge title, and a small game is the best smoke test that the pipeline is well.
