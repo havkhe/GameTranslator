@@ -14,7 +14,15 @@ const APP = "D:\\GameTranslator";
 const EXE = APP + "\\llama\\llama-server.exe";
 const MODEL = "H:\\model\\Galtransl-v4-4B-2601.gguf";
 const PORT = "18080";
-const THRESHOLD_MB = parseInt(process.env.GT_MEM_LIMIT_MB || "6000", 10);
+// Restart the server when its working set crosses this. The measurement behind
+// the number: a fresh server sits at ~3.6 GB and a long session plateaus near
+// 11.7 GB, while the machine has 16 GB and the old process left only 1.7 GB free.
+// A restart costs the requests in flight (measured: one restart produced ~2800
+// "request-failed" entries in the game being translated, which the pipeline then
+// re-requests), so the threshold is set to leave comfortable headroom rather than
+// to keep memory as low as possible: 9000 MB still leaves > 6 GB free and cuts how
+// often a restart can happen.
+const THRESHOLD_MB = parseInt(process.env.GT_MEM_LIMIT_MB || "9000", 10);
 const CHECK_MS = 60000;
 
 const ARGS = ["-m", MODEL, "--host", "127.0.0.1", "--port", PORT, "-c", "4096", "-ngl", "99",
