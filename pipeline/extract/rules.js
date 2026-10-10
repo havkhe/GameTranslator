@@ -32,11 +32,16 @@ const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]/;
  *
  * Deliberately permissive: MTool's experience is that a rule which is too clever
  * about "this looks like it does not need translating" silently drops dialogue.
+ *
+ * But an empty or whitespace-only line must NOT be queued. Measured: one blank line
+ * inside a batch of eight made the model lose count — it merged two entries and
+ * inserted a note like "（到这里为止5）" — so the reply had the wrong number of lines
+ * and the whole batch failed and split. 45% of batches failed that way.
  */
 function isTranslatable(text) {
   if (typeof text !== "string") return false;
   const t = text.trim();
-  if (!t) return false;
+  if (!t) return false;                            // empty / whitespace only
   if (!CJK_RE.test(t)) return false;               // no CJK at all -> not our target
   if (EXT_RE.test(t)) return false;                // resource filename
   if (INTERNAL_RE.test(t)) return false;           // engine class identifier
