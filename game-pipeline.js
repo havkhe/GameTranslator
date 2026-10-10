@@ -39,7 +39,7 @@ const VX_PATCH = path.join(__dirname, "vxace_patch.rb");
 // and retries, and the status pane fills with FAILED_ENTRY lines. The per-entry cost
 // of the smaller batch is 23% (747 ms vs 605 ms) and it is repaid by not re-sending
 // failed batches; 4 entries was no more reliable than 8 and 11% slower per entry again.
-const BATCH = parseInt(process.env.GT_BATCH || "8", 10);
+const BATCH = parseInt(process.env.GT_BATCH || "4", 10);
 const BATCH_CHARS = 900;
 // A single entry longer than this is sent on its own, split at sentence
 // boundaries, so one runaway line can never blow up a whole batch.
@@ -1715,17 +1715,22 @@ async function translateGroup(group) {
     if (!lines) continue;
     // An answer arrived, so this group costs one attempt from each of its entries.
     for (const g of group) noteAttempt((g.parent || g).text);
+    // Validation is PER ENTRY.
+    //
+    // This used to be all-or-nothing: one entry failing cleanOutput() or
+    // looksLikeEnglish() set ok=false, the whole group returned null, and every good
+    // translation in it was discarded. On a game whose head-of-queue entries are hard
+    // that is a livelock — no entry is ever cached, so the pending list never shrinks
+    // and the same group is re-sent until its budget runs out (measured: 221 requests,
+    // 0 entries cached, PROGRESS identical on all 21 lines for 11 minutes). Returning
+    // null for the bad entry and the text for the good ones lets the caller cache the
+    // successes and retry only what failed.
     const out = [];
-    let ok = true;
     for (let j = 0; j < group.length; j++) {
       const c = cleanOutput(lines[j]);
-      if (c === null || looksLikeEnglish(c, group[j].text)) {
-        ok = false;
-        break;
-      }
-      out.push(c);
+      out.push(c === null || looksLikeEnglish(c, group[j].text) ? null : c);
     }
-    if (ok) return out;
+    if (out.some((x) => x !== null)) return out;
   }
   return null;
 }
