@@ -20,6 +20,44 @@ function isChineseLike(s) {
   return han >= 2 && han * 2 >= t.replace(/\s/g, "").length;
 }
 
+/**
+ * Language statistics for a data folder, used to decide whether it is safe to snapshot.
+ *
+ * `chineseLike` asks whether the translatable text is mostly already Chinese. It only counts strings
+ * that would be extracted in the first place (kana or kanji, not numbers or file paths), and requires
+ * a clear majority so that a Japanese game with a handful of Chinese-looking labels is not mistaken
+ * for a translated one.
+ */
+function languageProfile(dir) {
+  let total = 0, kana = 0, chinese = 0, other = 0;
+  const consider = (s) => {
+    if (typeof s !== "string") return;
+    const t = s.trim();
+    if (!t || t.length < 2) return;
+    // Ignore things that are not natural language: paths, keys, single Latin words.
+    if (/^[A-Za-z0-9_\-./\\ ]+$/.test(t)) return;
+    total++;
+    if (R.KANA_RE.test(t)) kana++;
+    else if (/[\u3400-\u9fff]/.test(t)) { if (isChineseLike(t)) chinese++; else other++; }
+  };
+
+  const walk = (o) => {
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (!o || typeof o !== "object") return;
+    for (const k of Object.keys(o)) {
+      if (k === "note") continue;
+      const v = o[k];
+      if (typeof v === "string") consider(v);
+      else walk(v);
+    }
+  };
+
+  for (const f of listJsonFiles(dir)) {
+    try { walk(JSON.parse(fs.readFileSync(f.full, "utf8"))); } catch (e) { }
+  }
+  return { total, kana, chinese, other, chineseLike: total > 0 && chinese / total > 0.5 };
+}
+
 function listJsonFiles(root) {
   const out = [];
   const walk = (dir, rel) => {
@@ -134,4 +172,4 @@ function extract(pristineDir, liveDir) {
   return { entries, skipped };
 }
 
-module.exports = { extract, isChineseLike, normText, listJsonFiles };
+module.exports = { extract, isChineseLike, normText, listJsonFiles, languageProfile };

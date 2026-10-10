@@ -39,6 +39,7 @@ const PATCH_REPORT = path.join(WORK_DIR, GAME_NAME + "-patch-report.json");
 const { isTranslatable } = require("./extract/rules.js");
 const mvExtract = require("./extract/mv.js");
 const vxAce = require("./extract/vxace.js");
+const resources = require("./extract/resources.js");
 const rgssad = require("./archive/rgssad.js");
 const repackGuard = require("./archive/repack-guard.js");
 const { translate } = require("./translate/index.js");
@@ -98,6 +99,54 @@ function ensureArchiveBackup(engine, gameDir) {
   return bak;
 }
 
+/**
+ * Make sure a loose MV/MZ game has a pristine copy too.
+ *
+ * Packed games were always protected — ensureArchiveBackup() above runs before anything else — but a
+ * loose MV/MZ game with no data_原版备份 had the LIVE data extracted as its source and no backup made
+ * at all. The first translation therefore overwrote the only Japanese copy, and because the next run
+ * then reads the translated live data, a second translation would send Chinese back through the model.
+ *
+ * The copy is made once and then reused, exactly like the archive case, so every later run reads the
+ * original.
+ *
+ * Two details matter:
+ *
+ *   * Language is checked first. If the live data is already Chinese, copying it would create a
+ *     "pristine" backup that is itself translated — the worst outcome, because every future run would
+ *     then translate from it and report success. In that case nothing is copied and the user is told.
+ *   * The dialogue resources are copied too, not just the data folder. Games built with a text plugin
+ *     keep their script in resources/<locale>/*.json beside the data folder, and the game archive
+ *     names them directly, so a data-only backup would restore a game with data but no dialogue.
+ */
+function ensureDataBackup(engine, gameDir) {
+  const bakDir = path.join(gameDir, BACKUP_DIRNAME);
+  if (fs.existsSync(bakDir) && fs.readdirSync(bakDir).some((f) => /\.json$/i.test(f))) return bakDir;
+
+  // Refuse to snapshot data that already looks translated.
+  const profile = mvExtract.languageProfile ? mvExtract.languageProfile(engine.live) : null;
+  if (profile && profile.total > 50 && profile.chineseLike) {
+    console.log("BACKUP_REFUSED", "live data already looks translated (" +
+      profile.kana + " kana of " + profile.total + " strings); not creating a backup from it");
+    return null;
+  }
+
+  try {
+    fs.mkdirSync(bakDir, { recursive: true });
+    fs.cpSync(engine.live, bakDir, { recursive: true });
+    // resources/ holds the dialogue of plugin-based games and sits next to the data folder.
+    for (const res of ["resources", "Resources"]) {
+      const src = path.join(path.dirname(engine.live), res);
+      if (fs.existsSync(src)) fs.cpSync(src, path.join(bakDir, res), { recursive: true });
+    }
+    console.log("BACKUP_CREATED", bakDir);
+    return bakDir;
+  } catch (e) {
+    console.log("BACKUP_FAILED", e.message);
+    return null;
+  }
+}
+
 (async () => {
   console.log("GAME", GAME_DIR);
   fs.mkdirSync(WORK_DIR, { recursive: true });
@@ -136,6 +185,11 @@ function ensureArchiveBackup(engine, gameDir) {
   // --- extract ------------------------------------------------------------------------
   let entries, skipped, filtered = 0;
   if (engine.kind === "MV") {
+    // Snapshot the original before reading anything, so the source is never the live data and the
+    // Japanese text survives the first translation. Packed games already get this from
+    // ensureArchiveBackup() above; loose MV/MZ games previously had no protection at all.
+    ensureDataBackup(engine, GAME_DIR);
+
     const backup = path.join(GAME_DIR, BACKUP_DIRNAME);
     const hasBackup = fs.existsSync(backup) && fs.readdirSync(backup).some((f) => /\.json$/i.test(f));
     const sourceDir = hasBackup ? backup : engine.live;
@@ -146,6 +200,24 @@ function ensureArchiveBackup(engine, gameDir) {
     const r = vxAce.extract(dataDir, ROOT, WORK_DIR, EXTRACT + ".vxsrc.json");
     entries = r.entries; skipped = r.skipped; filtered = r.filtered;
     console.log("VX_RAW", r.total, "FILTERED", filtered);
+  }
+
+  // Localization resource files hold the dialogue of games built with a text plugin; the event
+  // data only carries a resource label. Merged here so the same translation pass covers both.
+  if (engine.kind === "MV") {
+    const bakData = path.join(GAME_DIR, BACKUP_DIRNAME);
+    const pristineData = fs.existsSync(bakData) ? bakData : engine.live;
+    const r = resources.extract(pristineData, engine.live);
+    if (r.files) {
+      console.log("RESOURCES", r.entries.length, "entries from", r.files, "file(s)",
+        r.skipped ? "SKIPPED_ALREADY_TRANSLATED " + r.skipped : "");
+      const have = new Set(entries.map((e) => e.text));
+      for (const e of r.entries) {
+        if (have.has(e.text)) continue;
+        have.add(e.text);
+        entries.push(e);
+      }
+    }
   }
   fs.writeFileSync(EXTRACT, JSON.stringify(entries, null, 0), "utf8");
   console.log("EXTRACTED", entries.length, skipped ? "SKIPPED_ALREADY_TRANSLATED " + skipped : "");
@@ -184,6 +256,13 @@ function ensureArchiveBackup(engine, gameDir) {
     const report = mvPatch.patch(engine.live, cache, PATCH_REPORT);
     console.log("PATCHED", report.replaced, "MISSING", report.missing, "FILES", report.files,
       report.errors.length ? "ERRORS " + report.errors.length : "");
+    // The dialogue of a plugin-based game lives in resources/<locale>/*.json, not in the data
+    // files, so it is written separately. Both steps are reported, because "patched 800 entries"
+    // on a game with 5800 dialogue lines is exactly the confusion this fixes.
+    const rr = resources.patch(engine.live, cache, PATCH_REPORT.replace(/\.json$/, "-resources.json"));
+    if (rr.files) {
+      console.log("PATCHED_RESOURCES", rr.replaced, "MISSING", rr.missing, "FILES", rr.files);
+    }
   } else {
     // VX Ace / VX: Ruby writes the translations back into the .rvdata2 files of the
     // unpacked folder, then the archive is rebuilt from that folder.
