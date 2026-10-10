@@ -97,9 +97,15 @@ function detectEngine(dir) {
     }
   }
 
+  let failCount = 0;
   const { cache, stats, fails } = await translate({
     entries, cacheFile: TRANS, port: PORT, template,
-    onProgress: () => {},
+    // The UI reads PROGRESS to drive its progress bar and status line, exactly as it
+    // did with the v2 pipeline, so the line format is kept identical.
+    onProgress: (s) => {
+      console.log("PROGRESS", s.cached, "/", entries.length,
+        "REQUESTS", s.requests, "FAILURES", failCount);
+    },
   });
 
   // A save can be refused to protect an existing cache; report rather than hide it.

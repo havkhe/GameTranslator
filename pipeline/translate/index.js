@@ -229,7 +229,8 @@ async function translate(o) {
     await run(groups[i], 0);
     cache.save();
     stats.cached = entries.filter((e) => cache.has(e.text)).length;
-    console.log("PROGRESS", stats.cached, "/", entries.length);
+    // Progress is reported through the callback only; the caller owns the line format
+    // (the UI parses it), so printing here as well produced the line twice.
     if (typeof o.onProgress === "function") o.onProgress(stats);
   }
   stats.cached = entries.filter((e) => cache.has(e.text)).length;

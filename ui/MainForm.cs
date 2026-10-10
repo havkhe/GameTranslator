@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -43,7 +43,7 @@ namespace GameTranslatorV3
         private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop;
         private Button _btnCheck, _btnUninstall, _btnRestore, _btnOpenLog;
         private Button _btnLlamaStart, _btnLlamaStop, _btnClearLog;
-        private TextBox _txtModelDir, _txtPort, _txtPrompt, _txtAttempts, _txtBudget, _txtStall;
+        private TextBox _txtModelDir, _txtPort, _txtPrompt, _txtAttempts, _txtBudget, _txtStall, _txtPipeline;
         private CancellationTokenSource _cts;
         private bool _paused;
         private bool _running;
@@ -61,6 +61,10 @@ namespace GameTranslatorV3
                 GameBudget = TimeSpan.FromMinutes(_settings.GameBudgetMinutes),
                 StalledAfter = TimeSpan.FromMinutes(_settings.StalledAfterMinutes)
             };
+            // Respect the configured script when it exists; the runner's own default is
+            // only a fallback.
+            if (!string.IsNullOrEmpty(_settings.PipelineJs) && File.Exists(_settings.PipelineJs))
+                _runner.PipelineJs = _settings.PipelineJs;
             _runner.Output += OnPipelineLine;
             _runner.AttemptFailed += (game, why) => AppendLog("⚠ " + game + "：" + why);
 
@@ -213,6 +217,14 @@ namespace GameTranslatorV3
             table.Controls.Add(Label("提示词文件"), 0, 2);
             _txtPrompt = new TextBox { Width = 420, Text = _settings.PromptFile };
             table.Controls.Add(_txtPrompt, 1, 2);
+
+            table.Controls.Add(Label("管线脚本"), 0, 6);
+            _txtPipeline = new TextBox { Width = 420, Text = _settings.PipelineJs };
+            var pipeRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            pipeRow.Controls.Add(_txtPipeline);
+            var btnPickPipeline = TbButton("选择…", (s, e) => PickPipeline());
+            pipeRow.Controls.Add(btnPickPipeline);
+            table.Controls.Add(pipeRow, 1, 6);
 
             table.Controls.Add(Label("失败重试次数"), 0, 3);
             _txtAttempts = new TextBox { Width = 80, Text = _settings.MaxAttempts.ToString() };
@@ -798,6 +810,21 @@ namespace GameTranslatorV3
             AppendLog("已停止 " + killed + " 个模型服务进程。");
         }
 
+        private void PickPipeline()
+        {
+            using (var dlg = new OpenFileDialog
+            {
+                Title = "选择管线脚本",
+                Filter = "JavaScript|*.js|所有文件|*.*",
+                InitialDirectory = Directory.Exists(Path.GetDirectoryName(_txtPipeline.Text))
+                    ? Path.GetDirectoryName(_txtPipeline.Text) : _root
+            })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                _txtPipeline.Text = dlg.FileName;
+            }
+        }
+
         private void PickModelDir()
         {
             using (var dlg = new FolderBrowserDialog { Description = "选择存放 .gguf 模型的目录" })
@@ -818,6 +845,9 @@ namespace GameTranslatorV3
             _settings.ModelDir = _txtModelDir.Text.Trim();
             _settings.Port = port;
             _settings.PromptFile = _txtPrompt.Text.Trim();
+            string pipe = _txtPipeline.Text.Trim();
+            if (pipe.Length > 0 && !File.Exists(pipe)) { MessageBox.Show(this, "管线脚本不存在：\n" + pipe); return; }
+            _settings.PipelineJs = pipe;
             _settings.MaxAttempts = attempts;
             _settings.GameBudgetMinutes = budget;
             _settings.StalledAfterMinutes = stall;
@@ -827,6 +857,7 @@ namespace GameTranslatorV3
             _runner.MaxAttempts = attempts;
             _runner.GameBudget = TimeSpan.FromMinutes(budget);
             _runner.StalledAfter = TimeSpan.FromMinutes(stall);
+            if (pipe.Length > 0) _runner.PipelineJs = pipe;
             AppendLog("设置已保存。");
         }
 

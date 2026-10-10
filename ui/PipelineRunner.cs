@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -60,7 +60,7 @@ namespace GameTranslatorV3.Core
     public sealed class PipelineRunner
     {
         public string NodeExe = @"D:\GameTranslator\node\node.exe";
-        public string PipelineJs = @"D:\GameTranslator\game-pipeline.js";
+        public string PipelineJs = @"D:\GameTranslator\game-pipeline.js";   // v3: pipeline/index.js
         public string WorkDir = @"D:\GameTranslator\work";
         public int Port = 18080;
         public string Model = "Galtransl-v4-4B-2601.gguf";

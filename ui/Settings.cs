@@ -1,4 +1,4 @@
-// Persisted UI settings. Kept as a tiny line-based file rather than JSON so it is
+﻿// Persisted UI settings. Kept as a tiny line-based file rather than JSON so it is
 // readable and editable by hand, and so a corrupt file can never stop the app from
 // starting (a damaged v2 settings.json was one cause of confusing failures).
 using System;
@@ -26,11 +26,29 @@ namespace GameTranslatorV3.Core
         /// <summary>No pipeline output for this long means it is stuck: kill and retry.</summary>
         public int StalledAfterMinutes = 10;
 
+        /// <summary>
+        /// The pipeline script to run. v3 lives in pipeline\index.js; the v2 script
+        /// (game-pipeline.js) is still accepted so an existing install keeps working,
+        /// and the runner falls back to whichever exists.
+        /// </summary>
+        public string PipelineJs = "";
+
         private static string FilePath(string root) { return Path.Combine(root, "ui-settings.ini"); }
+
+        /// <summary>Best guess for the pipeline script under a given install root.</summary>
+        public static string DefaultPipeline(string root)
+        {
+            string v3 = Path.Combine(root, "pipeline", "index.js");
+            if (File.Exists(v3)) return v3;
+            string v2 = Path.Combine(root, "game-pipeline.js");
+            if (File.Exists(v2)) return v2;
+            return v3;
+        }
 
         public static Settings Load(string root)
         {
             var s = new Settings();
+            s.PipelineJs = DefaultPipeline(root);
             if (!string.IsNullOrEmpty(root))
             {
                 string work = Path.Combine(root, "work");
@@ -58,6 +76,7 @@ namespace GameTranslatorV3.Core
                         case "WorkDir": s.WorkDir = val; break;
                         case "PromptFile": s.PromptFile = val; break;
                         case "Port": if (int.TryParse(val, out n) && n > 0 && n < 65536) s.Port = n; break;
+                        case "PipelineJs": if (val.Length > 0) s.PipelineJs = val; break;
                         case "MaxAttempts": if (int.TryParse(val, out n) && n >= 1 && n <= 10) s.MaxAttempts = n; break;
                         case "GameBudgetMinutes": if (int.TryParse(val, out n) && n >= 5) s.GameBudgetMinutes = n; break;
                         case "StalledAfterMinutes": if (int.TryParse(val, out n) && n >= 1) s.StalledAfterMinutes = n; break;
@@ -78,6 +97,7 @@ namespace GameTranslatorV3.Core
                 sb.AppendLine("Model=" + Model);
                 sb.AppendLine("WorkDir=" + WorkDir);
                 sb.AppendLine("PromptFile=" + PromptFile);
+                sb.AppendLine("PipelineJs=" + PipelineJs);
                 sb.AppendLine("Port=" + Port.ToString(CultureInfo.InvariantCulture));
                 sb.AppendLine("MaxAttempts=" + MaxAttempts.ToString(CultureInfo.InvariantCulture));
                 sb.AppendLine("GameBudgetMinutes=" + GameBudgetMinutes.ToString(CultureInfo.InvariantCulture));
