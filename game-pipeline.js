@@ -46,11 +46,39 @@ fs.mkdirSync(WORK, { recursive: true });
 
 const BAK_DIR = path.join(GAME_DIR, "data_原版备份");
 const hasJp = (s) => /[\u3040-\u30ff\u4e00-\u9fff]/.test(s);
+
+// Asset/identifier names, e.g. "ダイスケ立ち(全裸)1_floor1901",
+// "ルーティ_立ち絵_kao_mini", "ダイゴマン@一生やんちゃ".
+//
+// The model correctly refuses to translate these, and refusing means the answer
+// comes back identical, which the quality gate rejects. That rejection used to be
+// a BATCH failure: one such entry discarded up to 15 good translations and made
+// the caller split the request in half, again and again — measured on a real game:
+// 4467 splits for 1621 requests, and the entries never landed.
+//
+// The rule is deliberately narrow because it runs at extraction time: skipping
+// something is later indistinguishable from "the game had nothing there". It needs
+// an `_` or `@` glued to an identifier AND no sentence punctuation AND no newline.
+// Validated against 77,997 real translated strings: it would have skipped 0.10% of
+// them, all of the same asset-label shape ("戦闘中_3P", "探偵事務所_1"), and none
+// of the dialogue. Set GT_NO_ASSET_FILTER=1 to switch it off.
+const ASSET_NAME = /[\u3040-\u30ff\u4e00-\u9fff][_@][A-Za-z0-9]|[A-Za-z0-9][_@][\u3040-\u30ff\u4e00-\u9fff]/;
+const looksLikeAssetName = (s) => {
+  if (process.env.GT_NO_ASSET_FILTER === "1") return false;
+  const t = String(s).trim();
+  if (!t) return false;
+  if (/[。、！？…「」『』]/.test(t)) return false;   // prose punctuation
+  if (/[\r\n]/.test(t)) return false;                // wrapped dialogue
+  if (!/[_@]/.test(t)) return false;
+  return ASSET_NAME.test(t);
+};
+
 const looksTranslatable = (s) => {
   if (!s || typeof s !== "string") return false;
   if (!hasJp(s)) return false;
   if (/\.(png|jpg|jpeg|gif|bmp|webp|rpgmvp|ogg|m4a|rpgmvo|mp3|rvdata2)$/i.test(s.trim())) return false;
   if (/^[A-Za-z0-9_\-./\\]+$/.test(s.trim())) return false;
+  if (looksLikeAssetName(s)) return false;
   return true;
 };
 
