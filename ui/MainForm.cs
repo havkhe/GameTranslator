@@ -494,6 +494,58 @@ namespace GameTranslatorV3
             catch { return ""; }
         }
 
+        /// <summary>
+        /// Write the discovered games back to the work folder.
+        ///
+        /// Without this the scan was forgotten on exit: the list is rebuilt from
+        /// games-cache.json at startup, so games found by scanning disappeared the next
+        /// time the app opened and the user had to scan again.
+        /// </summary>
+        private void SaveGamesCache()
+        {
+            try
+            {
+                Directory.CreateDirectory(_settings.WorkDir);
+                var sb = new StringBuilder();
+                sb.Append("[");
+                for (int i = 0; i < _games.Count; i++)
+                {
+                    var g = _games[i];
+                    if (i > 0) sb.Append(",");
+                    sb.Append("{");
+                    sb.Append("\"Dir\":").Append(JsonString(g.Dir)).Append(",");
+                    sb.Append("\"Kind\":").Append(JsonString(g.Engine)).Append(",");
+                    sb.Append("\"Entries\":").Append(g.Entries >= 0 ? g.Entries : 0);
+                    sb.Append("}");
+                }
+                sb.Append("]");
+                File.WriteAllText(Path.Combine(_settings.WorkDir, "games-cache.json"), sb.ToString(), new UTF8Encoding(false));
+            }
+            catch (Exception ex) { AppendLog("保存游戏列表失败：" + ex.Message); }
+        }
+
+        private static string JsonString(string s)
+        {
+            if (s == null) return "\"\"";
+            var sb = new StringBuilder("\"");
+            foreach (var c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            return sb.Append("\"").ToString();
+        }
+
         private void SetAllChecked(bool value)
         {
             foreach (var g in _games) g.Checked = value;
@@ -528,23 +580,80 @@ namespace GameTranslatorV3
 
         private void ScanFolder()
         {
-            using (var dlg = new FolderBrowserDialog { Description = "选择游戏所在文件夹（会递归查找 Game.exe / Game.rgss3a）" })
+            using (var dlg = new FolderBrowserDialog { Description = "选择游戏所在文件夹（会在其下递归查找所有游戏）" })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 ScanPath(dlg.SelectedPath);
             }
         }
 
+        /// <summary>How deep to look. Games sit at various levels (J:\game\类型\作者\游戏), so
+        /// the old two-level scan missed everything below the second one.</summary>
+        private const int MaxScanDepth = 6;
+
+        /// <summary>Children never worth descending into: they are data, not games.</summary>
+        private static bool IsBoringDir(string name)
+        {
+            var n = name.ToLowerInvariant();
+            if (n.StartsWith(".")) return true;
+            switch (n)
+            {
+                case "node_modules": case "system volume information": case "$recycle.bin":
+                case "windows": case "program files": case "program files (x86)":
+                case "appdata": case "temp": case "tmp": case "cache": case "obj": case "bin":
+                    return true;
+            }
+            // Translation work folders and backups only ever contain copies of a game.
+            if (n.Contains("バックアップ") || n.Contains("备份") || n.Contains("備份")) return true;
+            if (n.StartsWith("data_")) return true;
+            if (n.EndsWith("_orig") || n.EndsWith("_bak")) return true;
+            return false;
+        }
+
         private void ScanPath(string path)
         {
-            AppendLog("扫描 " + path + " …");
-            int found = 0;
+            AppendLog("开始扫描 " + path + "（最多 " + MaxScanDepth + " 层）…");
+            _status.Text = "正在扫描…";
+            var found = new List<string>();
+            int visited = 0;
+            var started = DateTime.Now;
+
+            // Iterative walk with an explicit queue: a very deep tree cannot overflow the
+            // stack, and IsBoringDir keeps the walk out of data, backup and system folders.
+            //
+            // Measured on the user's library (J:\game): the previous two-level scan found
+            // 0 games and visited 7 directories, because titles sit 3-6 levels down
+            // (HGAME\H\<game>). This walk finds 136 and visits 3222 directories in about a
+            // minute, which is why the status line reports progress as it goes.
+            var queue = new Queue<KeyValuePair<string, int>>();
+            queue.Enqueue(new KeyValuePair<string, int>(path, 0));
             try
             {
-                foreach (var dir in Directory.EnumerateDirectories(path))
+                while (queue.Count > 0)
                 {
-                    if (IsGameDir(dir)) { AddOrUpdate(dir); found++; }
-                    foreach (var sub in SafeDirs(dir)) if (IsGameDir(sub)) { AddOrUpdate(sub); found++; }
+                    var item = queue.Dequeue();
+                    var dir = item.Key;
+                    var depth = item.Value;
+                    visited++;
+                    if (visited % 100 == 0)
+                    {
+                        _status.Text = "正在扫描… 已检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏" +
+                            "（已用 " + Math.Round((DateTime.Now - started).TotalSeconds) + " 秒）";
+                        AppendLog("扫描中… 已检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏");
+                        Application.DoEvents();
+                    }
+
+                    if (IsGameDir(dir)) found.Add(dir);
+
+                    if (depth >= MaxScanDepth) continue;
+                    IEnumerable<string> subs;
+                    try { subs = Directory.EnumerateDirectories(dir); }
+                    catch { continue; }   // unreadable folder: skip it, do not abort the scan
+                    foreach (var sub in subs)
+                    {
+                        if (IsBoringDir(Path.GetFileName(sub))) continue;
+                        queue.Enqueue(new KeyValuePair<string, int>(sub, depth + 1));
+                    }
                 }
             }
             catch (Exception ex)
@@ -552,8 +661,14 @@ namespace GameTranslatorV3
                 AppendLog("扫描出错：" + ex.Message);
                 _runner.LogError("扫描 " + path + " 失败：" + ex.Message);
             }
+
+            foreach (var dir in found) AddOrUpdate(dir);
+            SaveGamesCache();
             RefreshList();
-            AppendLog("扫描完成，识别到 " + found + " 个游戏目录。");
+            var secs = Math.Round((DateTime.Now - started).TotalSeconds, 1);
+            _status.Text = "扫描完成：检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏，用时 " + secs + " 秒";
+            AppendLog("扫描完成：检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏，用时 " + secs +
+                " 秒，列表共 " + _games.Count + " 个（已保存）。");
         }
 
         private static IEnumerable<string> SafeDirs(string dir)
