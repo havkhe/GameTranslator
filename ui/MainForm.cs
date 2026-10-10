@@ -13,18 +13,19 @@ using GameTranslatorV3.Core;
 namespace GameTranslatorV3
 {
     /// <summary>
-    /// Main window. Deliberately organised as pages rather than one wall of buttons,
-    /// because the v2 window mixed scanning, models, translation and backup into a
-    /// single panel of 30+ controls and it was impossible to tell which were safe to
-    /// press at any moment.
+    /// Main window — one page, no tabs.
     ///
-    /// Layout rules applied throughout:
-    ///   * one page per job (游戏 / 翻译 / 模型 / 备份 / 日志);
-    ///   * the toolbar holds only actions that are always safe (扫描、添加、刷新);
-    ///   * actions that conflict are never both enabled: 开始 and 终止 share a page and
-    ///     are mutually exclusive, as are 暂停 and 继续;
-    ///   * anything long-running reports into the 日志 page, so the窗口 never looks
-    ///     frozen and a failure is always visible with its reason.
+    /// The layout is a left/right split rather than a set of pages, because every control
+    /// in this tool is either "what to translate" or "what is happening now", and those two
+    /// need to be visible together while a batch runs. Tabs hid the progress behind a click
+    /// and made it easy to lose sight of a running task.
+    ///
+    ///   left   the game list, with the file management actions above it
+    ///   right  model selection, the detailed progress panel, the task controls, the log
+    ///
+    /// Conflicting actions still cannot both be enabled: 开始 and 终止 are mutually
+    /// exclusive, as are 暂停 and 继续, list editing is disabled during a run, and
+    /// 卸载/恢复 require exactly one game selected because they rewrite game files.
     /// </summary>
     public sealed class MainForm : Form
     {
@@ -33,20 +34,29 @@ namespace GameTranslatorV3
         private readonly PipelineRunner _runner;
         private readonly List<GameItem> _games = new List<GameItem>();
 
-        private TabControl _tabs;
         private ListView _list;
         private TextBox _log;
         private Label _status;
-        private ProgressBar _progressBar;
+        private ComboBox _cmbModel;
+        private Button _btnModelRefresh, _btnModelStart, _btnModelStop;
+        private Label _lblModelState;
+
+        // detailed progress panel
+        private Label _lblBatch, _lblCurrent, _lblCounts, _lblRate, _lblElapsed, _lblModelNow;
+        private ProgressBar _barGame, _barBatch;
+        private System.Windows.Forms.Timer _ticker;
+        private DateTime _runStarted;
+        private long _reqCount, _failCount, _skipCount;
+        private int _batchTotal, _batchDone;
+        private string _currentGame = "";
+        private DateTime _lastProgressAt = DateTime.MinValue;
+        private int _lastProgressCount, _gameTotal;
 
         private Button _btnScan, _btnAdd, _btnRefresh, _btnSelectAll, _btnClearSel;
-        private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop;
-        private Button _btnCheck, _btnUninstall, _btnRestore, _btnOpenLog;
-        private Button _btnLlamaStart, _btnLlamaStop, _btnClearLog;
-        private TextBox _txtModelDir, _txtPort, _txtPrompt, _txtAttempts, _txtBudget, _txtStall, _txtPipeline;
+        private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck;
+        private Button _btnUninstall, _btnRestore, _btnOpenLog, _btnClearLog, _btnSettings;
         private CancellationTokenSource _cts;
-        private bool _paused;
-        private bool _running;
+        private bool _paused, _running;
 
         public MainForm(string root)
         {
@@ -61,20 +71,19 @@ namespace GameTranslatorV3
                 GameBudget = TimeSpan.FromMinutes(_settings.GameBudgetMinutes),
                 StalledAfter = TimeSpan.FromMinutes(_settings.StalledAfterMinutes)
             };
-            // Respect the configured script when it exists; the runner's own default is
-            // only a fallback.
             if (!string.IsNullOrEmpty(_settings.PipelineJs) && File.Exists(_settings.PipelineJs))
                 _runner.PipelineJs = _settings.PipelineJs;
             _runner.Output += OnPipelineLine;
-            _runner.AttemptFailed += (game, why) => AppendLog("⚠ " + game + "：" + why);
+            _runner.AttemptFailed += (game, why) => { _failCount++; AppendLog("⚠ " + game + "：" + why); };
 
             BuildUi();
+            RefreshModels();
             LoadGames();
 
-            // Closing the window must end everything this window started. The pipeline is
-            // a separate Node process and the model server is another, so neither dies
-            // with the form; without this the user is left with a running translation task
-            // and no control to stop it, which is exactly what happened once.
+            _ticker = new System.Windows.Forms.Timer { Interval = 1000 };
+            _ticker.Tick += (s, e) => UpdateProgressPanel();
+            _ticker.Start();
+
             FormClosing += OnFormClosing;
         }
 
@@ -90,273 +99,309 @@ namespace GameTranslatorV3
                     "退出前确认", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
 
                 if (answer == DialogResult.Cancel) { e.Cancel = true; return; }
-                if (answer == DialogResult.No)
-                {
-                    // The user asked for it to keep going, so nothing is killed. The model
-                    // server is left alone too, since it is what the task depends on.
-                    AppendLog("窗口关闭，翻译任务继续在后台运行。");
-                    return;
-                }
+                if (answer == DialogResult.No) { AppendLog("窗口关闭，翻译任务继续在后台运行。"); return; }
                 AppendLog("正在停止翻译任务…");
                 if (_cts != null) _cts.Cancel();
             }
-
             _runner.Dispose();
         }
 
-        // ---------------------------------------------------------------- UI --------
+        // ------------------------------------------------------------------ layout ---
 
         private void BuildUi()
         {
             Text = "RPG Maker 汉化管理器 v3";
-            Size = new Size(1040, 720);
-            MinimumSize = new Size(880, 600);
+            Size = new Size(1220, 780);
+            MinimumSize = new Size(1000, 640);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Microsoft YaHei UI", 9f);
 
-            // top toolbar: only always-safe actions
-            var toolbar = new FlowLayoutPanel
+            var split = new SplitContainer
             {
-                Dock = DockStyle.Top, Height = 42, Padding = new Padding(8, 6, 8, 0),
-                WrapContents = false, AutoScroll = true
+                Dock = DockStyle.Fill,
+                Orientation = Orientation.Vertical,
+                SplitterDistance = 640,
+                SplitterWidth = 6
             };
-            _btnScan = TbButton("扫描文件夹", (s, e) => ScanFolder());
-            _btnAdd = TbButton("添加游戏", (s, e) => AddGame());
-            _btnRefresh = TbButton("刷新列表", (s, e) => LoadGames());
-            _btnSelectAll = TbButton("全选", (s, e) => SetAllChecked(true));
-            _btnClearSel = TbButton("取消全选", (s, e) => SetAllChecked(false));
-            toolbar.Controls.AddRange(new Control[] { _btnScan, _btnAdd, _btnRefresh, _btnSelectAll, _btnClearSel });
 
-            // status strip
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 30 };
-            _status = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(10, 0, 0, 0), Text = "就绪" };
-            _progressBar = new ProgressBar { Dock = DockStyle.Right, Width = 240, Style = ProgressBarStyle.Continuous };
+            split.Panel1.Controls.Add(BuildGamePane());
+            split.Panel2.Controls.Add(BuildControlPane());
+
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 28 };
+            _status = new Label
+            {
+                Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 0, 0), Text = "就绪"
+            };
             bottom.Controls.Add(_status);
-            bottom.Controls.Add(_progressBar);
 
-            _tabs = new TabControl { Dock = DockStyle.Fill };
-            _tabs.TabPages.Add(BuildTranslatePage());
-            _tabs.TabPages.Add(BuildModelPage());
-            _tabs.TabPages.Add(BuildBackupPage());
-            _tabs.TabPages.Add(BuildLogPage());
-            _tabs.SelectedIndexChanged += (s, e) => UpdateButtons();
-
-            Controls.Add(_tabs);
-            Controls.Add(toolbar);
+            Controls.Add(split);
             Controls.Add(bottom);
             UpdateButtons();
         }
 
-        private Button TbButton(string text, EventHandler onClick)
+        /// <summary>Left: what to translate.</summary>
+        private Control BuildGamePane()
         {
-            var b = new Button { Text = text, AutoSize = true, Height = 28, Margin = new Padding(0, 0, 6, 0) };
+            // toolbar of file-management actions (always safe)
+            var bar = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top, Height = 40, Padding = new Padding(6, 6, 6, 0),
+                WrapContents = false, AutoScroll = true
+            };
+            _btnScan = MakeButton("扫描文件夹", (s, e) => ScanFolder());
+            _btnAdd = MakeButton("添加游戏", (s, e) => AddGame());
+            _btnRefresh = MakeButton("刷新", (s, e) => { LoadGames(); RefreshModels(); });
+            _btnSelectAll = MakeButton("全选", (s, e) => SetAllChecked(true));
+            _btnClearSel = MakeButton("取消全选", (s, e) => SetAllChecked(false));
+            bar.Controls.AddRange(new Control[] { _btnScan, _btnAdd, _btnRefresh, _btnSelectAll, _btnClearSel });
+
+            _list = new ListView
+            {
+                Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true,
+                FullRowSelect = true, GridLines = true, HideSelection = false
+            };
+            _list.Columns.Add("", 26);
+            _list.Columns.Add("游戏", 300);
+            _list.Columns.Add("引擎", 60);
+            _list.Columns.Add("条目", 60);
+            _list.Columns.Add("进度", 120);
+            _list.Columns.Add("状态", 160);
+            _list.ItemChecked += (s, e) =>
+            {
+                var g = e.Item.Tag as GameItem;
+                if (g != null) g.Checked = e.Item.Checked;
+                UpdateButtons();
+            };
+            _list.SelectedIndexChanged += (s, e) => UpdateButtons();
+            AttachGameContextMenu();
+
+            var pane = new Panel { Dock = DockStyle.Fill };
+            pane.Controls.Add(_list);
+            pane.Controls.Add(bar);
+            return pane;
+        }
+
+        /// <summary>Right: the model, the progress, the controls, the log.</summary>
+        private Control BuildControlPane()
+        {
+            var host = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6, 0, 0, 0) };
+
+            // ---- model row -------------------------------------------------------
+            var modelBox = new GroupBox { Dock = DockStyle.Top, Height = 64, Text = "翻译模型" };
+            var modelRow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(6, 4, 6, 0), WrapContents = false };
+            _cmbModel = new ComboBox { Width = 300, DropDownStyle = ComboBoxStyle.DropDownList };
+            _btnModelRefresh = MakeButton("刷新列表", (s, e) => RefreshModels());
+            _btnModelStart = MakeButton("启动模型", (s, e) => StartLlama());
+            _btnModelStop = MakeButton("停止模型", (s, e) => StopLlama());
+            _lblModelState = new Label { Width = 150, TextAlign = ContentAlignment.MiddleLeft, Text = "状态：未知", ForeColor = Color.DimGray };
+            modelRow.Controls.AddRange(new Control[] { _cmbModel, _btnModelRefresh, _btnModelStart, _btnModelStop, _lblModelState });
+            modelBox.Controls.Add(modelRow);
+
+            // ---- detailed progress ----------------------------------------------
+            var progBox = new GroupBox { Dock = DockStyle.Top, Height = 190, Text = "任务进度" };
+            var grid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9,
+                Padding = new Padding(8, 4, 8, 4)
+            };
+            _lblBatch = MakeStatLabel("批次：空闲");
+            _barBatch = new ProgressBar { Dock = DockStyle.Top, Height = 16, Maximum = 1000 };
+            _lblCurrent = MakeStatLabel("当前：—");
+            _barGame = new ProgressBar { Dock = DockStyle.Top, Height = 16, Maximum = 1000 };
+            _lblCounts = MakeStatLabel("条目：—    请求：0    失败：0    跳过：0");
+            _lblRate = MakeStatLabel("速度：—");
+            _lblElapsed = MakeStatLabel("用时：—");
+            _lblModelNow = MakeStatLabel("模型：—");
+            grid.Controls.Add(_lblBatch, 0, 0);
+            grid.Controls.Add(_barBatch, 0, 1);
+            grid.Controls.Add(_lblCurrent, 0, 2);
+            grid.Controls.Add(_barGame, 0, 3);
+            grid.Controls.Add(_lblCounts, 0, 4);
+            grid.Controls.Add(_lblRate, 0, 5);
+            grid.Controls.Add(_lblElapsed, 0, 6);
+            grid.Controls.Add(_lblModelNow, 0, 7);
+            progBox.Controls.Add(grid);
+
+            // ---- task controls ---------------------------------------------------
+            var actBox = new GroupBox { Dock = DockStyle.Top, Height = 104, Text = "任务控制" };
+            var act1 = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 4, 0, 0), WrapContents = false };
+            _btnStartSel = MakeButton("开始汉化选中", (s, e) => StartTranslation(false));
+            _btnStartAll = MakeButton("全部汉化", (s, e) => StartTranslation(true));
+            _btnPause = MakeButton("暂停", (s, e) => Pause());
+            _btnResume = MakeButton("继续", (s, e) => Resume());
+            _btnStop = MakeButton("终止", (s, e) => Stop());
+            act1.Controls.AddRange(new Control[] { _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop });
+
+            var act2 = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 0, 0, 0), WrapContents = false };
+            _btnCheck = MakeButton("检查翻译", (s, e) => StartCheck());
+            _btnUninstall = MakeButton("卸载汉化", (s, e) => Uninstall());
+            _btnRestore = MakeButton("恢复汉化", (s, e) => Restore());
+            _btnSettings = MakeButton("设置…", (s, e) => OpenSettings());
+            _btnOpenLog = MakeButton("打开日志文件", (s, e) => OpenLogFiles());
+            act2.Controls.AddRange(new Control[] { _btnCheck, _btnUninstall, _btnRestore, _btnSettings, _btnOpenLog });
+            actBox.Controls.Add(act2);
+            actBox.Controls.Add(act1);
+
+            // ---- log -------------------------------------------------------------
+            var logBox = new GroupBox { Dock = DockStyle.Fill, Text = "日志 / 错误" };
+            _log = new TextBox
+            {
+                Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
+                ScrollBars = ScrollBars.Both, WordWrap = false,
+                Font = new Font("Consolas", 8.5f), BackColor = Color.FromArgb(250, 250, 250)
+            };
+            var logBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 30, WrapContents = false };
+            _btnClearLog = MakeButton("清空显示", (s, e) => _log.Clear());
+            logBar.Controls.Add(_btnClearLog);
+            logBox.Controls.Add(_log);
+            logBox.Controls.Add(logBar);
+
+            // Docked controls stack in reverse order of addition, so the log (fill) is
+            // added first and the top rows last.
+            host.Controls.Add(logBox);
+            host.Controls.Add(actBox);
+            host.Controls.Add(progBox);
+            host.Controls.Add(modelBox);
+            return host;
+        }
+
+        private static Button MakeButton(string text, EventHandler onClick)
+        {
+            var b = new Button { Text = text, AutoSize = true, Height = 28, Margin = new Padding(0, 0, 6, 4) };
             b.Click += onClick;
             return b;
         }
 
-        private TabPage BuildTranslatePage()
+        private static Label MakeStatLabel(string text)
         {
-            var page = new TabPage("翻译") { Padding = new Padding(8) };
+            return new Label { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoSize = false, Height = 18 };
+        }
 
-            // game list
-            _list = new ListView
+        // -------------------------------------------------------------- model list ---
+
+        /// <summary>
+        /// Fill the model dropdown from the configured model directory.
+        ///
+        /// The selected model is what llama-server is launched with (-m), so this is the
+        /// control that actually decides which model translates. The pipeline's own model
+        /// argument is only a label — neither the v2 nor the v3 script loads a model, the
+        /// server does.
+        /// </summary>
+        private void RefreshModels()
+        {
+            var previous = _settings.Model;
+            _cmbModel.Items.Clear();
+            var dir = _settings.ModelDir;
+            if (Directory.Exists(dir))
             {
-                Dock = DockStyle.Fill,
-                View = View.Details,
-                CheckBoxes = true,
-                FullRowSelect = true,
-                GridLines = true
-            };
-            _list.Columns.Add("", 26);
-            _list.Columns.Add("游戏", 380);
-            _list.Columns.Add("引擎", 70);
-            _list.Columns.Add("条目", 70);
-            _list.Columns.Add("进度", 90);
-            _list.Columns.Add("状态", 220);
-
-            // Right-click menu: start the game, or open its folder. Both are safe at any
-            // time, so they are never disabled — not even while a batch runs.
-            var menu = new ContextMenuStrip();
-            var miLaunch = new ToolStripMenuItem("启动游戏");
-            miLaunch.Click += (s, e) => Launch(CurrentGame());
-            var miOpen = new ToolStripMenuItem("打开所在目录");
-            miOpen.Click += (s, e) => OpenFolder(CurrentGame());
-            var miOpenData = new ToolStripMenuItem("打开数据目录 (data)");
-            miOpenData.Click += (s, e) => OpenDataDir(CurrentGame());
-            var miCopy = new ToolStripMenuItem("复制游戏路径");
-            miCopy.Click += (s, e) => CopyPath(CurrentGame());
-            menu.Items.Add(miLaunch);
-            menu.Items.Add(miOpen);
-            menu.Items.Add(miOpenData);
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(miCopy);
-            menu.Opening += (s, e) =>
+                foreach (var f in Directory.GetFiles(dir, "*.gguf").OrderBy(x => x))
+                {
+                    var name = Path.GetFileName(f);
+                    if (IsNotATranslationModel(name)) continue;
+                    _cmbModel.Items.Add(name);
+                }
+            }
+            if (_cmbModel.Items.Count == 0)
             {
-                var g = CurrentGame();
-                bool has = g != null;
-                bool canLaunch = has && !string.IsNullOrEmpty(g.Exe) && File.Exists(g.Exe);
-                miLaunch.Enabled = canLaunch;
-                miLaunch.Text = canLaunch ? "启动游戏" : "启动游戏（找不到 exe）";
-                miOpen.Enabled = has;
-                miOpenData.Enabled = has && GetDataDir(g) != null;
-                miCopy.Enabled = has;
-            };
-            _list.ContextMenuStrip = menu;
-            // Right-click selects the row under the cursor first, so the menu always acts
-            // on the game the user pointed at rather than a stale selection.
-            _list.MouseDown += (s, e) =>
+                _cmbModel.Items.Add("（模型目录里没有 .gguf 文件）");
+                _cmbModel.SelectedIndex = 0;
+                _cmbModel.Enabled = false;
+            }
+            else
             {
-                if (e.Button != MouseButtons.Right) return;
-                var hit = _list.GetItemAt(e.X, e.Y);
-                if (hit != null) { hit.Selected = true; hit.Focused = true; }
-            };
-
-            // actions: start and stop are mutually exclusive, so they live together
-            var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
-            _btnStartSel = TbButton("开始汉化选中", (s, e) => StartTranslation(false));
-            _btnStartAll = TbButton("全部汉化", (s, e) => StartTranslation(true));
-            _btnPause = TbButton("暂停", (s, e) => Pause());
-            _btnResume = TbButton("继续", (s, e) => Resume());
-            _btnStop = TbButton("终止", (s, e) => Stop());
-            _btnCheck = TbButton("检查翻译", (s, e) => StartCheck());
-            actions.Controls.AddRange(new Control[] { _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck });
-
-            page.Controls.Add(_list);
-            page.Controls.Add(actions);
-            return page;
+                _cmbModel.Enabled = true;
+                int idx = _cmbModel.Items.IndexOf(previous);
+                _cmbModel.SelectedIndex = idx >= 0 ? idx : 0;
+                _settings.Model = Convert.ToString(_cmbModel.SelectedItem);
+                _runner.Model = _settings.Model;
+            }
+            UpdateModelState();
         }
 
-        private TabPage BuildModelPage()
+        /// <summary>
+        /// Files in a model folder that must not appear in the translation model list.
+        ///
+        /// Both kinds fail in a way that wastes the user's time rather than saying what is
+        /// wrong: a vision projector (mmproj-*) is not a model at all and cannot be served
+        /// on its own, and a vision-language model such as Qwen2.5-VL translates text into
+        /// nonsense because it expects an image. A 0.5B model is kept — the user may want
+        /// it for a quick pass — but the list only offers things that can actually translate.
+        /// </summary>
+        private static bool IsNotATranslationModel(string fileName)
         {
-            var page = new TabPage("模型") { Padding = new Padding(12) };
-            var table = new TableLayoutPanel { Dock = DockStyle.Top, Height = 260, ColumnCount = 2, AutoSize = true };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-
-            table.Controls.Add(Label("模型目录"), 0, 0);
-            _txtModelDir = new TextBox { Dock = DockStyle.Fill, Text = _settings.ModelDir };
-            var dirRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            dirRow.Controls.Add(_txtModelDir);
-            _txtModelDir.Width = 420;
-            var btnPick = TbButton("选择…", (s, e) => PickModelDir());
-            dirRow.Controls.Add(btnPick);
-            table.Controls.Add(dirRow, 1, 0);
-
-            table.Controls.Add(Label("端口"), 0, 1);
-            _txtPort = new TextBox { Width = 80, Text = _settings.Port.ToString() };
-            table.Controls.Add(_txtPort, 1, 1);
-
-            table.Controls.Add(Label("提示词文件"), 0, 2);
-            _txtPrompt = new TextBox { Width = 420, Text = _settings.PromptFile };
-            table.Controls.Add(_txtPrompt, 1, 2);
-
-            table.Controls.Add(Label("管线脚本"), 0, 6);
-            _txtPipeline = new TextBox { Width = 420, Text = _settings.PipelineJs };
-            var pipeRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            pipeRow.Controls.Add(_txtPipeline);
-            var btnPickPipeline = TbButton("选择…", (s, e) => PickPipeline());
-            pipeRow.Controls.Add(btnPickPipeline);
-            table.Controls.Add(pipeRow, 1, 6);
-
-            table.Controls.Add(Label("失败重试次数"), 0, 3);
-            _txtAttempts = new TextBox { Width = 80, Text = _settings.MaxAttempts.ToString() };
-            table.Controls.Add(_txtAttempts, 1, 3);
-
-            table.Controls.Add(Label("单游戏时间上限(分)"), 0, 4);
-            _txtBudget = new TextBox { Width = 80, Text = _settings.GameBudgetMinutes.ToString() };
-            table.Controls.Add(_txtBudget, 1, 4);
-
-            table.Controls.Add(Label("无输出判定卡死(分)"), 0, 5);
-            _txtStall = new TextBox { Width = 80, Text = _settings.StalledAfterMinutes.ToString() };
-            table.Controls.Add(_txtStall, 1, 5);
-
-            var btns = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(0, 10, 0, 0), WrapContents = false };
-            _btnLlamaStart = TbButton("启动模型服务", (s, e) => StartLlama());
-            _btnLlamaStop = TbButton("停止模型服务", (s, e) => StopLlama());
-            var btnSave = TbButton("保存设置", (s, e) => SaveSettings());
-            btns.Controls.AddRange(new Control[] { _btnLlamaStart, _btnLlamaStop, btnSave });
-
-            page.Controls.Add(btns);
-            page.Controls.Add(table);
-            return page;
+            var n = fileName.ToLowerInvariant();
+            if (n.StartsWith("mmproj")) return true;
+            if (n.Contains("-vl-") || n.Contains("-vl.") || n.Contains("vision")) return true;
+            if (n.Contains("clip") || n.Contains("llava")) return true;
+            return false;
         }
 
-        private TabPage BuildBackupPage()
+        private void UpdateModelState()
         {
-            var page = new TabPage("备份 / 还原") { Padding = new Padding(12) };
-            var note = new Label
+            bool up = false;
+            try
             {
-                Dock = DockStyle.Top,
-                Height = 90,
-                Text = "第一次汉化前会自动把原版数据复制到 data_原版备份，并生成一键还原脚本。\n" +
-                       "卸载汉化 = 用备份覆盖现况（还原成日文原版）。\n" +
-                       "恢复汉化 = 把汉化版数据放回去。\n\n" +
-                       "这两个操作会改写游戏文件，因此只在选中一个游戏时可用，并且会先确认。"
-            };
-            var btns = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, WrapContents = false };
-            _btnUninstall = TbButton("卸载汉化（还原原版）", (s, e) => Uninstall());
-            _btnRestore = TbButton("恢复汉化（切回汉化版）", (s, e) => Restore());
-            btns.Controls.AddRange(new Control[] { _btnUninstall, _btnRestore });
-            page.Controls.Add(btns);
-            page.Controls.Add(note);
-            return page;
+                using (var c = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = c.BeginConnect("127.0.0.1", _settings.Port, null, null);
+                    up = ar.AsyncWaitHandle.WaitOne(300) && c.Connected;
+                }
+            }
+            catch { up = false; }
+            _lblModelState.Text = up ? "状态：已就绪" : "状态：未启动";
+            _lblModelState.ForeColor = up ? Color.SeaGreen : Color.DimGray;
+            _btnModelStart.Enabled = !_running;
+            _btnModelStop.Enabled = !_running && up;
         }
 
-        private TabPage BuildLogPage()
+        // -------------------------------------------------------------- progress -----
+
+        /// <summary>Redraw the progress panel. Driven by a timer so 用时 keeps counting.</summary>
+        private void UpdateProgressPanel()
         {
-            var page = new TabPage("日志 / 错误记录") { Padding = new Padding(8) };
-            _log = new TextBox
+            if (_running)
             {
-                Dock = DockStyle.Fill,
-                Multiline = true,
-                ReadOnly = true,
-                ScrollBars = ScrollBars.Both,
-                WordWrap = false,
-                Font = new Font("Consolas", 9f),
-                BackColor = Color.FromArgb(250, 250, 250)
-            };
-            var btns = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, WrapContents = false };
-            _btnClearLog = TbButton("清空显示", (s, e) => { _log.Clear(); });
-            _btnOpenLog = TbButton("打开错误记录文件", (s, e) => OpenLogFiles());
-            btns.Controls.AddRange(new Control[] { _btnClearLog, _btnOpenLog });
-            page.Controls.Add(_log);
-            page.Controls.Add(btns);
-            return page;
+                var el = DateTime.Now - _runStarted;
+                _lblElapsed.Text = "用时：" + (el.TotalHours >= 1
+                    ? (int)el.TotalHours + " 小时 " + el.Minutes + " 分"
+                    : Math.Round(el.TotalMinutes, 1) + " 分");
+
+                // rate from the last progress report, not from the batch start: a batch is
+                // overwhelmingly dominated by whichever game is running now.
+                if (_lastProgressAt != DateTime.MinValue && _lastProgressCount > 0)
+                {
+                    var span = (DateTime.Now - _lastProgressAt).TotalMinutes;
+                    if (span > 0.05 && _gameTotal > 0)
+                    {
+                        var pct = 100.0 * _lastProgressCount / _gameTotal;
+                        _lblRate.Text = "速度：本游戏 " + pct.ToString("0.0") + "%   " +
+                            (_lastProgressCount / 1.0).ToString("0") + " / " + _gameTotal + " 条";
+                    }
+                }
+            }
+
+            _lblCounts.Text = "请求：" + _reqCount + "    失败：" + _failCount + "    跳过：" + _skipCount;
+            _lblModelNow.Text = "模型：" + (_settings.Model ?? "—") + "    端口：" + _settings.Port;
+            UpdateModelState();
         }
 
-        private static Label Label(string text)
+        private void ResetProgress()
         {
-            return new Label { Text = text, TextAlign = ContentAlignment.MiddleLeft, AutoSize = false, Height = 26, Dock = DockStyle.Fill };
+            _runStarted = DateTime.Now;
+            _reqCount = _failCount = _skipCount = 0;
+            _batchTotal = _batchDone = 0;
+            _currentGame = "";
+            _lastProgressAt = DateTime.MinValue;
+            _lastProgressCount = 0;
+            _gameTotal = 0;
+            _barBatch.Value = 0;
+            _barGame.Value = 0;
+            _lblBatch.Text = "批次：准备中…";
+            _lblCurrent.Text = "当前：—";
         }
 
-        /// <summary>Enable only the actions that make sense right now.</summary>
-        private void UpdateButtons()
-        {
-            bool running = _running;
-            int checkedGames = _games.Count(g => g.Checked);
-
-            _btnStartSel.Enabled = !running && checkedGames > 0;
-            _btnStartAll.Enabled = !running && _games.Count > 0;
-            _btnStop.Enabled = running;
-            _btnPause.Enabled = running && !_paused;
-            _btnResume.Enabled = running && _paused;
-            _btnCheck.Enabled = !running && checkedGames > 0;
-
-            _btnScan.Enabled = !running;
-            _btnAdd.Enabled = !running;
-            _btnRefresh.Enabled = !running;
-            _btnSelectAll.Enabled = !running;
-            _btnClearSel.Enabled = !running;
-
-            _btnLlamaStart.Enabled = !running;
-            _btnLlamaStop.Enabled = !running;
-
-            _btnUninstall.Enabled = !running && checkedGames == 1;
-            _btnRestore.Enabled = !running && checkedGames == 1;
-            _list.Enabled = !running;
-        }
-
-        // -------------------------------------------------------------- games ------
+        // ---------------------------------------------------------------- games ------
 
         private sealed class GameItem
         {
@@ -366,11 +411,8 @@ namespace GameTranslatorV3
             public int Entries = -1;
             public bool Checked;
             public string Status = "";
-            /// <summary>Executable to launch, or null when none was found.</summary>
             public string Exe;
-            /// <summary>Folder worth opening in Explorer.</summary>
             public string OpenDir;
-            /// <summary>Why launching is not possible, shown to the user instead of failing silently.</summary>
             public string LaunchProblem;
         }
 
@@ -408,11 +450,7 @@ namespace GameTranslatorV3
             _list.Items.Clear();
             foreach (var g in _games)
             {
-                // Resolve lazily here rather than only when a folder is scanned: games
-                // restored from games-cache.json have never been through AddOrUpdate, and
-                // without this the 启动游戏 context item would stay greyed out for them.
                 if (g.Exe == null && g.LaunchProblem == null) ResolveLaunchTarget(g);
-
                 var it = new ListViewItem("");
                 it.SubItems.Add(g.Name);
                 it.SubItems.Add(g.Engine);
@@ -428,7 +466,7 @@ namespace GameTranslatorV3
             UpdateButtons();
         }
 
-        /// <summary>Progress from the pipeline's own report file, so the list never lies.</summary>
+        /// <summary>Read the pipeline's own report so the list never overstates progress.</summary>
         private string ReadProgress(GameItem g)
         {
             try
@@ -440,8 +478,7 @@ namespace GameTranslatorV3
                 int entries = SimpleJson.GetInt(txt, "entries");
                 int done = SimpleJson.GetInt(txt, "translated");
                 if (entries <= 0) return "";
-                double pct = 100.0 * done / entries;
-                return done + "/" + entries + " (" + Math.Round(pct) + "%)";
+                return done + "/" + entries + "  (" + Math.Round(100.0 * done / entries) + "%)";
             }
             catch { return ""; }
         }
@@ -453,9 +490,34 @@ namespace GameTranslatorV3
             UpdateButtons();
         }
 
+        private void UpdateButtons()
+        {
+            int checkedGames = _games.Count(g => g.Checked);
+            _btnStartSel.Enabled = !_running && checkedGames > 0;
+            _btnStartAll.Enabled = !_running && _games.Count > 0;
+            _btnStop.Enabled = _running;
+            _btnPause.Enabled = _running && !_paused;
+            _btnResume.Enabled = _running && _paused;
+            _btnCheck.Enabled = !_running && checkedGames > 0;
+            _btnScan.Enabled = !_running;
+            _btnAdd.Enabled = !_running;
+            _btnRefresh.Enabled = !_running;
+            _btnSelectAll.Enabled = !_running;
+            _btnClearSel.Enabled = !_running;
+            _btnUninstall.Enabled = !_running && checkedGames == 1;
+            _btnRestore.Enabled = !_running && checkedGames == 1;
+            _btnSettings.Enabled = !_running;
+            _cmbModel.Enabled = !_running && _cmbModel.Items.Count > 0 && !Convert.ToString(_cmbModel.SelectedItem).StartsWith("（");
+            _btnModelRefresh.Enabled = !_running;
+            _list.Enabled = !_running;
+            UpdateModelState();
+        }
+
+        // ------------------------------------------------------------ scan / add -----
+
         private void ScanFolder()
         {
-            using (var dlg = new FolderBrowserDialog { Description = "选择游戏所在文件夹（会递归查找 Game.exe / Game.rssg3a）" })
+            using (var dlg = new FolderBrowserDialog { Description = "选择游戏所在文件夹（会递归查找 Game.exe / Game.rgss3a）" })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 ScanPath(dlg.SelectedPath);
@@ -471,13 +533,14 @@ namespace GameTranslatorV3
                 foreach (var dir in Directory.EnumerateDirectories(path))
                 {
                     if (IsGameDir(dir)) { AddOrUpdate(dir); found++; }
-                    foreach (var sub in SafeDirs(dir))
-                    {
-                        if (IsGameDir(sub)) { AddOrUpdate(sub); found++; }
-                    }
+                    foreach (var sub in SafeDirs(dir)) if (IsGameDir(sub)) { AddOrUpdate(sub); found++; }
                 }
             }
-            catch (Exception ex) { AppendLog("扫描出错：" + ex.Message); _runner.LogError("扫描 " + path + " 失败：" + ex.Message); }
+            catch (Exception ex)
+            {
+                AppendLog("扫描出错：" + ex.Message);
+                _runner.LogError("扫描 " + path + " 失败：" + ex.Message);
+            }
             RefreshList();
             AppendLog("扫描完成，识别到 " + found + " 个游戏目录。");
         }
@@ -501,8 +564,7 @@ namespace GameTranslatorV3
 
         private void AddOrUpdate(string dir)
         {
-            var existing = _games.FirstOrDefault(g => string.Equals(g.Dir, dir, StringComparison.OrdinalIgnoreCase));
-            if (existing != null) return;
+            if (_games.Any(g => string.Equals(g.Dir, dir, StringComparison.OrdinalIgnoreCase))) return;
             var item = new GameItem
             {
                 Dir = dir,
@@ -515,45 +577,25 @@ namespace GameTranslatorV3
             _games.Add(item);
         }
 
-        /// <summary>
-        /// Work out how to start the game, and record why not when that is impossible.
-        ///
-        /// Games arrive in two shapes here: an exploded folder with Game.exe, and a bare
-        /// archive (Game.rgss3a) whose containing folder may hold no executable at all.
-        /// The second case is common in translated releases, so the launch item explains
-        /// the situation instead of silently doing nothing.
-        /// </summary>
         private static void ResolveLaunchTarget(GameItem g)
         {
             g.OpenDir = g.Dir;
             try
             {
-                // Prefer an executable that belongs to the game itself.
                 string preferred = Path.Combine(g.Dir, "Game.exe");
                 if (File.Exists(preferred)) { g.Exe = preferred; return; }
-
-                var exes = Directory.GetFiles(g.Dir, "*.exe")
-                    .Where(f => !IsToolExe(Path.GetFileName(f)))
-                    .ToList();
+                var exes = Directory.GetFiles(g.Dir, "*.exe").Where(f => !IsToolExe(Path.GetFileName(f))).ToList();
                 if (exes.Count > 0)
                 {
-                    // A translated release often renames the launcher, e.g. "Game_Chinese.exe".
-                    g.Exe = exes.FirstOrDefault(f => Path.GetFileName(f).IndexOf("game", StringComparison.OrdinalIgnoreCase) >= 0)
-                            ?? exes[0];
+                    g.Exe = exes.FirstOrDefault(f => Path.GetFileName(f).IndexOf("game", StringComparison.OrdinalIgnoreCase) >= 0) ?? exes[0];
                     return;
                 }
-
                 g.LaunchProblem = "这个目录里没有可执行文件（.exe），无法从这里启动。\n" +
-                                  "它看起来是解包后的数据目录，游戏本体在上一层。\n\n" +
-                                  "提示：用「打开所在目录」看一下上层文件夹。";
+                                  "它看起来是解包后的数据目录，游戏本体在上一层。";
             }
-            catch (Exception ex)
-            {
-                g.LaunchProblem = "检查可执行文件时出错：" + ex.Message;
-            }
+            catch (Exception ex) { g.LaunchProblem = "检查可执行文件时出错：" + ex.Message; }
         }
 
-        /// <summary>Tool executables that live inside a game folder but are not the game.</summary>
         private static bool IsToolExe(string name)
         {
             var n = name.ToLowerInvariant();
@@ -564,101 +606,12 @@ namespace GameTranslatorV3
                    n.StartsWith("一键") || n.StartsWith("启动器");
         }
 
-        private void Launch(GameItem g)
-        {
-            if (g == null) return;
-            if (string.IsNullOrEmpty(g.Exe) || !File.Exists(g.Exe))
-            {
-                MessageBox.Show(this,
-                    g.LaunchProblem ?? ("找不到可执行文件：\n" + g.Dir),
-                    "无法启动游戏", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-            try
-            {
-                var psi = new ProcessStartInfo(g.Exe)
-                {
-                    // The working directory must be the game root: RPG Maker resolves
-                    // its data, audio and plugin paths relative to it.
-                    WorkingDirectory = g.Dir,
-                    UseShellExecute = true
-                };
-                Process.Start(psi);
-                AppendLog("已启动游戏：" + Path.GetFileName(g.Exe) + "   (" + g.Name + ")");
-            }
-            catch (Exception ex)
-            {
-                AppendLog("启动游戏失败：" + ex.Message);
-                _runner.LogError("启动游戏 " + g.Name + " 失败：" + ex.Message);
-                MessageBox.Show(this, "启动失败：\n" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void OpenFolder(GameItem g)
-        {
-            if (g == null) return;
-            string dir = !string.IsNullOrEmpty(g.OpenDir) && Directory.Exists(g.OpenDir) ? g.OpenDir : g.Dir;
-            try
-            {
-                if (Directory.Exists(dir)) Process.Start("explorer.exe", "/select,\"" + dir + "\"");
-                else if (File.Exists(dir)) Process.Start("explorer.exe", "/select,\"" + dir + "\"");
-                else MessageBox.Show(this, "目录不存在：\n" + dir, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                AppendLog("打开目录失败：" + ex.Message);
-                _runner.LogError("打开目录 " + dir + " 失败：" + ex.Message);
-            }
-        }
-
-        /// <summary>The folder holding the engine's data, for either MV/MZ or the VX family.</summary>
-        private static string GetDataDir(GameItem g)
-        {
-            if (g == null) return null;
-            string mv = Path.Combine(g.Dir, "www", "data");
-            if (Directory.Exists(mv)) return mv;
-            string data = Path.Combine(g.Dir, "data");
-            if (Directory.Exists(data)) return data;
-            return null;
-        }
-
-        private void OpenDataDir(GameItem g)
-        {
-            string dir = GetDataDir(g);
-            if (dir == null)
-            {
-                MessageBox.Show(this, "这个游戏目录里没有 data 文件夹。\n\n" +
-                    "如果游戏是打包的（Game.rgss3a / Game.rgss2a），数据在归档内部，需要先解包。",
-                    "没有数据目录", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-            try { Process.Start("explorer.exe", "/select,\"" + dir + "\""); }
-            catch (Exception ex) { AppendLog("打开数据目录失败：" + ex.Message); }
-        }
-
-        private void CopyPath(GameItem g)
-        {
-            if (g == null) return;
-            try
-            {
-                Clipboard.SetText(g.Dir);
-                AppendLog("已复制路径：" + g.Dir);
-            }
-            catch (Exception ex) { AppendLog("复制失败：" + ex.Message); }
-        }
-
-        /// <summary>The game the context menu or a single-game action applies to.</summary>
-        private GameItem CurrentGame()
-        {
-            var it = _list != null && _list.SelectedItems.Count > 0 ? _list.SelectedItems[0] : null;
-            return it == null ? null : it.Tag as GameItem;
-        }
-
         private static string DetectEngine(string dir)
         {
             try
             {
-                string data = Directory.Exists(Path.Combine(dir, "www", "data")) ? Path.Combine(dir, "www", "data") : Path.Combine(dir, "data");
+                string data = Directory.Exists(Path.Combine(dir, "www", "data"))
+                    ? Path.Combine(dir, "www", "data") : Path.Combine(dir, "data");
                 if (!Directory.Exists(data)) return "?";
                 var files = Directory.GetFiles(data).Select(Path.GetFileName).ToList();
                 if (files.Any(f => f.EndsWith(".rvdata2", StringComparison.OrdinalIgnoreCase))) return "VX Ace";
@@ -674,8 +627,7 @@ namespace GameTranslatorV3
             using (var dlg = new OpenFileDialog { Filter = "RPG Maker 游戏|Game.exe;Game.rgss3a;Game.rgss2a|所有文件|*.*" })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                var dir = Path.GetDirectoryName(dlg.FileName);
-                AddOrUpdate(dir);
+                AddOrUpdate(Path.GetDirectoryName(dlg.FileName));
                 RefreshList();
             }
         }
@@ -685,7 +637,111 @@ namespace GameTranslatorV3
             return all ? _games.ToList() : _games.Where(g => g.Checked).ToList();
         }
 
-        // ---------------------------------------------------------- translation -----
+        // ------------------------------------------------------------- context menu --
+
+        private void AttachGameContextMenu()
+        {
+            var menu = new ContextMenuStrip();
+            var miLaunch = new ToolStripMenuItem("启动游戏");
+            miLaunch.Click += (s, e) => Launch(CurrentGame());
+            var miOpen = new ToolStripMenuItem("打开所在目录");
+            miOpen.Click += (s, e) => OpenFolder(CurrentGame());
+            var miOpenData = new ToolStripMenuItem("打开数据目录 (data)");
+            miOpenData.Click += (s, e) => OpenDataDir(CurrentGame());
+            var miCopy = new ToolStripMenuItem("复制游戏路径");
+            miCopy.Click += (s, e) => CopyPath(CurrentGame());
+            menu.Items.Add(miLaunch);
+            menu.Items.Add(miOpen);
+            menu.Items.Add(miOpenData);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(miCopy);
+            menu.Opening += (s, e) =>
+            {
+                var g = CurrentGame();
+                bool has = g != null;
+                bool can = has && !string.IsNullOrEmpty(g.Exe) && File.Exists(g.Exe);
+                miLaunch.Enabled = can;
+                miLaunch.Text = can ? "启动游戏" : "启动游戏（找不到 exe）";
+                miOpen.Enabled = has;
+                miOpenData.Enabled = has && GetDataDir(g) != null;
+                miCopy.Enabled = has;
+            };
+            _list.ContextMenuStrip = menu;
+            _list.MouseDown += (s, e) =>
+            {
+                if (e.Button != MouseButtons.Right) return;
+                var hit = _list.GetItemAt(e.X, e.Y);
+                if (hit != null) { hit.Selected = true; hit.Focused = true; }
+            };
+        }
+
+        private GameItem CurrentGame()
+        {
+            var it = _list != null && _list.SelectedItems.Count > 0 ? _list.SelectedItems[0] : null;
+            return it == null ? null : it.Tag as GameItem;
+        }
+
+        private void Launch(GameItem g)
+        {
+            if (g == null) return;
+            if (string.IsNullOrEmpty(g.Exe) || !File.Exists(g.Exe))
+            {
+                MessageBox.Show(this, g.LaunchProblem ?? ("找不到可执行文件：\n" + g.Dir),
+                    "无法启动游戏", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo(g.Exe) { WorkingDirectory = g.Dir, UseShellExecute = true });
+                AppendLog("已启动游戏：" + Path.GetFileName(g.Exe) + "   (" + g.Name + ")");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("启动游戏失败：" + ex.Message);
+                _runner.LogError("启动游戏 " + g.Name + " 失败：" + ex.Message);
+                MessageBox.Show(this, "启动失败：\n" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void OpenFolder(GameItem g)
+        {
+            if (g == null) return;
+            string dir = !string.IsNullOrEmpty(g.OpenDir) && Directory.Exists(g.OpenDir) ? g.OpenDir : g.Dir;
+            try { Process.Start("explorer.exe", "/select,\"" + dir + "\""); }
+            catch (Exception ex) { AppendLog("打开目录失败：" + ex.Message); }
+        }
+
+        private static string GetDataDir(GameItem g)
+        {
+            if (g == null) return null;
+            string mv = Path.Combine(g.Dir, "www", "data");
+            if (Directory.Exists(mv)) return mv;
+            string data = Path.Combine(g.Dir, "data");
+            return Directory.Exists(data) ? data : null;
+        }
+
+        private void OpenDataDir(GameItem g)
+        {
+            string dir = GetDataDir(g);
+            if (dir == null)
+            {
+                MessageBox.Show(this, "这个游戏目录里没有 data 文件夹。\n\n" +
+                    "如果是打包的（Game.rgss3a / Game.rgss2a），数据在归档内部。",
+                    "没有数据目录", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try { Process.Start("explorer.exe", "/select,\"" + dir + "\""); }
+            catch (Exception ex) { AppendLog("打开数据目录失败：" + ex.Message); }
+        }
+
+        private void CopyPath(GameItem g)
+        {
+            if (g == null) return;
+            try { Clipboard.SetText(g.Dir); AppendLog("已复制路径：" + g.Dir); }
+            catch (Exception ex) { AppendLog("复制失败：" + ex.Message); }
+        }
+
+        // ----------------------------------------------------------- translation -----
 
         private async void StartTranslation(bool all)
         {
@@ -695,54 +751,77 @@ namespace GameTranslatorV3
                 MessageBox.Show(this, "请先勾选要汉化的游戏。", "没有选中游戏", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            if (all)
+
+            // The model has to be running; offer to start it rather than failing later.
+            if (!IsPortOpen())
             {
-                var skip = list.Count(g => g.Status.Contains("跳过"));
-                string msg = "将汉化 " + list.Count + " 个游戏。" + (skip > 0 ? "\n其中 " + skip + " 个已标记为中文，会被自动跳过。" : "");
-                if (MessageBox.Show(this, msg + "\n\n开始后可以暂停或终止。", "确认", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
-                    return;
+                var answer = MessageBox.Show(this,
+                    "翻译模型服务还没有启动。\n\n是否现在启动「" + _settings.Model + "」？\n\n" +
+                    "模型加载需要 30-45 秒，管线会自动等待。",
+                    "需要启动模型", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (answer == DialogResult.Cancel) return;
+                if (answer == DialogResult.Yes)
+                {
+                    StartLlama();
+                    for (int i = 0; i < 60 && !IsPortOpen(); i++) await Task.Delay(1000);
+                    if (!IsPortOpen())
+                    {
+                        MessageBox.Show(this, "模型服务启动失败或超时，请查看日志。", "启动失败");
+                        return;
+                    }
+                }
             }
 
             _running = true; _paused = false;
             _cts = new CancellationTokenSource();
+            ResetProgress();
+            _barGame.Maximum = 1000;
+            _batchTotal = list.Count;
             UpdateButtons();
-            _tabs.SelectedIndex = 0;
 
             var skipped = new List<string>();
             var failed = new List<string>();
-            int done = 0;
 
-            foreach (var g in list)
+            for (int i = 0; i < list.Count; i++)
             {
+                var g = list[i];
                 if (_cts.IsCancellationRequested) break;
+                _batchDone = i;
+                _lblBatch.Text = "批次：" + (i + 1) + " / " + list.Count + " 个游戏";
+                _barBatch.Value = Math.Min(1000, (int)(1000.0 * i / list.Count));
+
                 if (g.Status.Contains("跳过"))
                 {
                     skipped.Add(g.Name + "（已是中文）");
+                    _skipCount++;
                     _runner.LogSkip(g.Name + "  已跳过：检测为已是中文");
                     continue;
                 }
-                // pause gate: the loop checks here, so a pause never interrupts a
-                // request mid-flight (which would waste the work already done).
                 while (_paused && !_cts.IsCancellationRequested) await Task.Delay(500);
                 if (_cts.IsCancellationRequested) break;
 
-                _status.Text = "正在汉化：" + g.Name;
+                _currentGame = g.Name;
+                _lblCurrent.Text = "当前：" + g.Name;
+                _barGame.Value = 0;
+                _lastProgressAt = DateTime.MinValue;
+                _lastProgressCount = 0;
                 AppendLog("═══ 开始 " + g.Name + " ═══");
+
                 var outcome = await _runner.RunAsync(g.Dir, _settings.PromptFile, _cts.Token);
                 if (outcome.Succeeded) { g.Status = "已完成"; AppendLog("✔ " + g.Name + " 完成（尝试 " + outcome.AttemptsUsed + " 次）"); }
                 else if (outcome.SkipReason == "用户终止") { AppendLog("■ 已终止"); break; }
                 else { g.Status = "失败已跳过"; failed.Add(g.Name + "：" + outcome.SkipReason); AppendLog("✖ " + g.Name + " 已跳过 —— " + outcome.SkipReason); }
-                done++;
-                _progressBar.Value = Math.Min(100, (int)(100.0 * done / list.Count));
                 RefreshList();
             }
 
             _running = false;
             _cts = null;
+            _barBatch.Value = 1000;
+            _lblBatch.Text = "批次：已完成 " + _batchDone + " / " + _batchTotal;
+            _lblCurrent.Text = "当前：空闲";
             UpdateButtons();
-            _status.Text = "批次结束";
 
-            var sb = new StringBuilder("批次结束。\n完成 " + done + " 个");
+            var sb = new StringBuilder("批次结束。\n完成 " + _batchDone + " 个");
             if (skipped.Count > 0) sb.Append("，跳过 " + skipped.Count + " 个已是中文");
             if (failed.Count > 0)
             {
@@ -752,6 +831,19 @@ namespace GameTranslatorV3
             }
             MessageBox.Show(this, sb.ToString(), "翻译批次结果", MessageBoxButtons.OK,
                 failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        }
+
+        private bool IsPortOpen()
+        {
+            try
+            {
+                using (var c = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = c.BeginConnect("127.0.0.1", _settings.Port, null, null);
+                    return ar.AsyncWaitHandle.WaitOne(400) && c.Connected;
+                }
+            }
+            catch { return false; }
         }
 
         private void StartCheck()
@@ -783,7 +875,11 @@ namespace GameTranslatorV3
                         foreach (var line in o.Split('\n')) if (line.Trim().Length > 0) AppendLog(line.TrimEnd());
                     }
                 }
-                catch (Exception ex) { AppendLog("质检失败：" + ex.Message); _runner.LogError("质检 " + g.Name + " 失败：" + ex.Message); }
+                catch (Exception ex)
+                {
+                    AppendLog("质检失败：" + ex.Message);
+                    _runner.LogError("质检 " + g.Name + " 失败：" + ex.Message);
+                }
             }
             _running = false; UpdateButtons();
         }
@@ -801,7 +897,7 @@ namespace GameTranslatorV3
             _runner.StopCurrent();
         }
 
-        // -------------------------------------------------------------- llama ------
+        // --------------------------------------------------------------- llama -------
 
         private void StartLlama()
         {
@@ -809,8 +905,19 @@ namespace GameTranslatorV3
             {
                 string exe = Path.Combine(_root, "llama", "llama-server.exe");
                 if (!File.Exists(exe)) { MessageBox.Show(this, "未找到 " + exe); return; }
-                string modelPath = Path.Combine(_settings.ModelDir, _settings.Model);
+                string model = Convert.ToString(_cmbModel.SelectedItem);
+                if (string.IsNullOrEmpty(model) || model.StartsWith("（"))
+                {
+                    MessageBox.Show(this, "请先在「翻译模型」里选择一个模型。", "未选择模型");
+                    return;
+                }
+                string modelPath = Path.Combine(_settings.ModelDir, model);
                 if (!File.Exists(modelPath)) { MessageBox.Show(this, "未找到模型文件：\n" + modelPath); return; }
+
+                // Replace any server this app previously started, so switching models takes
+                // effect. A server started elsewhere is left alone.
+                StopLlama(quiet: true);
+
                 var psi = new ProcessStartInfo(exe)
                 {
                     Arguments = PipelineRunner.Join(new[]
@@ -824,78 +931,141 @@ namespace GameTranslatorV3
                     CreateNoWindow = true
                 };
                 var proc = Process.Start(psi);
-                // Remember the PID so closing the window can stop exactly this server.
                 if (proc != null) _runner.RememberLlamaProcess(proc.Id);
-                AppendLog("已启动模型服务（端口 " + _settings.Port + "）。模型加载需要 30-45 秒，管线会等待。");
-                _status.Text = "模型服务启动中…";
+
+                _settings.Model = model;
+                _runner.Model = model;
+                _settings.Save(_root);
+                AppendLog("已启动模型服务：" + model + "（端口 " + _settings.Port + "）。加载需要 30-45 秒，管线会等待。");
+                _lblModelState.Text = "状态：加载中…";
+                _lblModelState.ForeColor = Color.DarkOrange;
             }
-            catch (Exception ex) { AppendLog("启动模型服务失败：" + ex.Message); _runner.LogError("启动模型服务失败：" + ex.Message); }
+            catch (Exception ex)
+            {
+                AppendLog("启动模型服务失败：" + ex.Message);
+                _runner.LogError("启动模型服务失败：" + ex.Message);
+            }
         }
 
-        private void StopLlama()
+        private void StopLlama() { StopLlama(false); }
+
+        private void StopLlama(bool quiet)
         {
-            // Kill by PID from the executable path, never by bare name: other tools
-            // (including the old version) may own a server too.
-            int killed = 0;
-            foreach (var p in Process.GetProcessesByName("llama-server"))
-            {
-                try { PipelineRunner.KillTree(p); killed++; } catch { }
-            }
-            AppendLog("已停止 " + killed + " 个模型服务进程。");
+            // Only a server this app started is stopped, identified by PID. Killing by the
+            // name llama-server would also take down one the user started on purpose.
+            int killed = _runner.StopOwnLlama();
+            if (!quiet) AppendLog(killed > 0 ? "已停止本程序启动的模型服务。" : "没有本程序启动的模型服务在运行。");
+            UpdateModelState();
         }
 
-        private void PickPipeline()
+        // -------------------------------------------------------------- settings -----
+
+        /// <summary>
+        /// Settings live in a dialog rather than on the page: they are edited rarely and
+        /// would crowd out the list and the progress, which are what the page is for.
+        /// </summary>
+        private void OpenSettings()
         {
-            using (var dlg = new OpenFileDialog
+            using (var dlg = new Form())
             {
-                Title = "选择管线脚本",
-                Filter = "JavaScript|*.js|所有文件|*.*",
-                InitialDirectory = Directory.Exists(Path.GetDirectoryName(_txtPipeline.Text))
-                    ? Path.GetDirectoryName(_txtPipeline.Text) : _root
-            })
-            {
+                dlg.Text = "设置";
+                dlg.Size = new Size(620, 400);
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.MaximizeBox = false; dlg.MinimizeBox = false;
+                dlg.Font = Font;
+
+                var t = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12) };
+                t.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+                t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+                var txtDir = new TextBox { Width = 380, Text = _settings.ModelDir };
+                var txtPort = new TextBox { Width = 80, Text = _settings.Port.ToString() };
+                var txtPrompt = new TextBox { Width = 380, Text = _settings.PromptFile };
+                var txtPipe = new TextBox { Width = 380, Text = _settings.PipelineJs };
+                var txtAttempts = new TextBox { Width = 80, Text = _settings.MaxAttempts.ToString() };
+                var txtBudget = new TextBox { Width = 80, Text = _settings.GameBudgetMinutes.ToString() };
+                var txtStall = new TextBox { Width = 80, Text = _settings.StalledAfterMinutes.ToString() };
+
+                int r = 0;
+                t.Controls.Add(new Label { Text = "模型目录", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                var dirRow = new FlowLayoutPanel { WrapContents = false, Height = 30 };
+                dirRow.Controls.Add(txtDir);
+                var bPick = new Button { Text = "…", Width = 30, Height = 24 };
+                bPick.Click += (s, e) => { using (var f = new FolderBrowserDialog()) if (f.ShowDialog(dlg) == DialogResult.OK) txtDir.Text = f.SelectedPath; };
+                dirRow.Controls.Add(bPick);
+                t.Controls.Add(dirRow, 1, r++);
+
+                t.Controls.Add(new Label { Text = "端口", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtPort, 1, r++);
+                t.Controls.Add(new Label { Text = "提示词文件", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtPrompt, 1, r++);
+                t.Controls.Add(new Label { Text = "管线脚本", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                var pipeRow = new FlowLayoutPanel { WrapContents = false, Height = 30 };
+                pipeRow.Controls.Add(txtPipe);
+                var bPipe = new Button { Text = "…", Width = 30, Height = 24 };
+                bPipe.Click += (s, e) =>
+                {
+                    using (var f = new OpenFileDialog { Filter = "JavaScript|*.js|所有文件|*.*" })
+                        if (f.ShowDialog(dlg) == DialogResult.OK) txtPipe.Text = f.FileName;
+                };
+                pipeRow.Controls.Add(bPipe);
+                t.Controls.Add(pipeRow, 1, r++);
+
+                t.Controls.Add(new Label { Text = "失败重试次数", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtAttempts, 1, r++);
+                t.Controls.Add(new Label { Text = "单游戏时间上限(分)", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtBudget, 1, r++);
+                t.Controls.Add(new Label { Text = "无输出判定卡死(分)", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtStall, 1, r++);
+
+                var note = new Label
+                {
+                    Dock = DockStyle.Bottom, Height = 56, ForeColor = Color.DimGray,
+                    Text = "失败重试次数：一个游戏失败几次后跳过它、继续后面的游戏。\n" +
+                           "单游戏时间上限 / 无输出判定卡死：超过就结束该游戏并重试，避免整个批次被一个游戏卡住。"
+                };
+
+                var ok = new Button { Text = "保存", DialogResult = DialogResult.OK, Width = 80, Height = 28 };
+                var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Width = 80, Height = 28 };
+                var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 6, 12, 0) };
+                buttons.Controls.Add(cancel);
+                buttons.Controls.Add(ok);
+
+                dlg.Controls.Add(t);
+                dlg.Controls.Add(note);
+                dlg.Controls.Add(buttons);
+                dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                _txtPipeline.Text = dlg.FileName;
+
+                int port, attempts, budget, stall;
+                if (!int.TryParse(txtPort.Text.Trim(), out port) || port < 1 || port > 65535) { MessageBox.Show(this, "端口无效。"); return; }
+                if (!int.TryParse(txtAttempts.Text.Trim(), out attempts) || attempts < 1 || attempts > 10) { MessageBox.Show(this, "重试次数需在 1-10 之间。"); return; }
+                if (!int.TryParse(txtBudget.Text.Trim(), out budget) || budget < 5) { MessageBox.Show(this, "时间上限至少 5 分钟。"); return; }
+                if (!int.TryParse(txtStall.Text.Trim(), out stall) || stall < 1) { MessageBox.Show(this, "卡死判定至少 1 分钟。"); return; }
+                if (txtPipe.Text.Trim().Length > 0 && !File.Exists(txtPipe.Text.Trim())) { MessageBox.Show(this, "管线脚本不存在。"); return; }
+
+                _settings.ModelDir = txtDir.Text.Trim();
+                _settings.Port = port;
+                _settings.PromptFile = txtPrompt.Text.Trim();
+                _settings.PipelineJs = txtPipe.Text.Trim();
+                _settings.MaxAttempts = attempts;
+                _settings.GameBudgetMinutes = budget;
+                _settings.StalledAfterMinutes = stall;
+                _settings.Save(_root);
+
+                _runner.Port = port;
+                _runner.MaxAttempts = attempts;
+                _runner.GameBudget = TimeSpan.FromMinutes(budget);
+                _runner.StalledAfter = TimeSpan.FromMinutes(stall);
+                if (_settings.PipelineJs.Length > 0) _runner.PipelineJs = _settings.PipelineJs;
+                RefreshModels();
+                AppendLog("设置已保存。");
             }
         }
 
-        private void PickModelDir()
-        {
-            using (var dlg = new FolderBrowserDialog { Description = "选择存放 .gguf 模型的目录" })
-            {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                _txtModelDir.Text = dlg.SelectedPath;
-            }
-        }
-
-        private void SaveSettings()
-        {
-            int port, attempts, budget, stall;
-            if (!int.TryParse(_txtPort.Text.Trim(), out port) || port < 1 || port > 65535) { MessageBox.Show(this, "端口无效。"); return; }
-            if (!int.TryParse(_txtAttempts.Text.Trim(), out attempts) || attempts < 1 || attempts > 10) { MessageBox.Show(this, "重试次数需在 1-10 之间。"); return; }
-            if (!int.TryParse(_txtBudget.Text.Trim(), out budget) || budget < 5) { MessageBox.Show(this, "时间上限至少 5 分钟。"); return; }
-            if (!int.TryParse(_txtStall.Text.Trim(), out stall) || stall < 1) { MessageBox.Show(this, "卡死判定至少 1 分钟。"); return; }
-
-            _settings.ModelDir = _txtModelDir.Text.Trim();
-            _settings.Port = port;
-            _settings.PromptFile = _txtPrompt.Text.Trim();
-            string pipe = _txtPipeline.Text.Trim();
-            if (pipe.Length > 0 && !File.Exists(pipe)) { MessageBox.Show(this, "管线脚本不存在：\n" + pipe); return; }
-            _settings.PipelineJs = pipe;
-            _settings.MaxAttempts = attempts;
-            _settings.GameBudgetMinutes = budget;
-            _settings.StalledAfterMinutes = stall;
-            _settings.Save(_root);
-
-            _runner.Port = port;
-            _runner.MaxAttempts = attempts;
-            _runner.GameBudget = TimeSpan.FromMinutes(budget);
-            _runner.StalledAfter = TimeSpan.FromMinutes(stall);
-            if (pipe.Length > 0) _runner.PipelineJs = pipe;
-            AppendLog("设置已保存。");
-        }
-
-        // ------------------------------------------------------------- backup ------
+        // --------------------------------------------------------------- backup ------
 
         private void Uninstall() { RunBat("一键还原汉化前.bat", "卸载汉化（还原成日文原版）"); }
         private void Restore() { RunBat("一键恢复汉化.bat", "恢复汉化（切回汉化版）"); }
@@ -907,33 +1077,56 @@ namespace GameTranslatorV3
             string bat = Path.Combine(g.Dir, batName);
             if (!File.Exists(bat))
             {
-                MessageBox.Show(this, "该游戏目录没有 " + batName + "。\n\n" +
-                    "这个脚本由汉化过程生成；如果还没汉化过，就没有可还原的内容。", "无法执行",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "该游戏目录没有 " + batName + "。\n\n这个脚本由汉化过程生成；还没汉化过就没有可还原的内容。",
+                    "无法执行", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             if (MessageBox.Show(this, what + "\n\n游戏：" + g.Name + "\n将运行：" + batName + "\n\n确定继续？",
                     "确认", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
             try
             {
-                var psi = new ProcessStartInfo("cmd.exe")
+                Process.Start(new ProcessStartInfo("cmd.exe")
                 {
                     Arguments = "/c " + PipelineRunner.Quote(bat),
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     WorkingDirectory = g.Dir
-                };
-                Process.Start(psi);
+                });
                 AppendLog("已启动 " + batName);
             }
             catch (Exception ex) { AppendLog("执行失败：" + ex.Message); _runner.LogError("执行 " + batName + " 失败：" + ex.Message); }
         }
 
-        // ---------------------------------------------------------------- log ------
+        // ------------------------------------------------------------------ log ------
 
+        /// <summary>Parse the pipeline's own lines so the panel can show real numbers.</summary>
         private void OnPipelineLine(string line)
         {
             if (InvokeRequired) { BeginInvoke(new Action<string>(OnPipelineLine), line); return; }
+
+            if (line.StartsWith("PROGRESS"))
+            {
+                // "PROGRESS <done> / <total> REQUESTS <n> FAILURES <m>"
+                var m = System.Text.RegularExpressions.Regex.Match(line,
+                    @"PROGRESS\s+(\d+)\s*/\s*(\d+)\s+REQUESTS\s+(\d+)\s+FAILURES\s+(\d+)");
+                if (m.Success)
+                {
+                    int done = int.Parse(m.Groups[1].Value);
+                    _gameTotal = int.Parse(m.Groups[2].Value);
+                    _reqCount = long.Parse(m.Groups[3].Value);
+                    _failCount = long.Parse(m.Groups[4].Value);
+                    _lastProgressCount = done;
+                    _lastProgressAt = DateTime.Now;
+                    if (_gameTotal > 0) _barGame.Value = Math.Min(1000, (int)(1000.0 * done / _gameTotal));
+                }
+                return;   // the panel shows this; echoing every line would bury the log
+            }
+
+            if (line.StartsWith("FAILED_ENTRY")) { _failCount++; AppendLog(line); return; }
+            if (line.StartsWith("ATTEMPTS_EXHAUSTED")) { _skipCount++; AppendLog(line); return; }
+            if (line.StartsWith("LLAMA_TIMINGS")) return;   // one per request: too noisy
+            if (line.StartsWith("SKIPPED_ALREADY_TRANSLATED")) { AppendLog(line); return; }
+
             AppendLog(line);
             if (line.StartsWith("TOTAL")) _status.Text = line;
         }
@@ -942,11 +1135,8 @@ namespace GameTranslatorV3
         {
             if (_log == null) return;
             if (InvokeRequired) { BeginInvoke(new Action<string>(AppendLog), line); return; }
-            if (_log.Lines.Length > 4000)
-            {
-                var keep = _log.Lines.Skip(_log.Lines.Length - 2000).ToArray();
-                _log.Lines = keep;
-            }
+            if (_log.Lines.Length > 5000)
+                _log.Lines = _log.Lines.Skip(_log.Lines.Length - 2500).ToArray();
             _log.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + line + Environment.NewLine);
         }
 

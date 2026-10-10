@@ -378,6 +378,43 @@ namespace GameTranslatorV3.Core
         /// <summary>Remember the model server this runner launched, so Dispose can stop it.</summary>
         public void RememberLlamaProcess(int pid) { _llamaPid = pid; }
 
+        /// <summary>
+        /// Stop the model server this runner started, and only that one.
+        ///
+        /// Identified by PID on purpose: killing every process named llama-server would
+        /// also take down a server the user started on purpose, or one the old v2 GUI
+        /// owns. Returns how many processes were asked to stop (0 or 1).
+        /// </summary>
+        public int StopOwnLlama()
+        {
+            if (_llamaPid <= 0) return 0;
+            int pid = _llamaPid;
+            _llamaPid = 0;
+            try
+            {
+                var killer = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill",
+                    Arguments = "/PID " + pid + " /T /F",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                });
+                if (killer != null)
+                {
+                    killer.WaitForExit(8000);
+                    try { killer.StandardOutput.ReadToEnd(); killer.StandardError.ReadToEnd(); } catch { }
+                    try { killer.Dispose(); } catch { }
+                }
+                return 1;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>Whether a model server this runner started is still tracked.</summary>
+        public bool OwnsLlama { get { return _llamaPid > 0; } }
+
         public bool IsRunning { get { return _current != null; } }
 
         /// <summary>
