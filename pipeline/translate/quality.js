@@ -130,6 +130,24 @@ function qualityCheck(src, dst) {
   const srcNl = countMatches(s, /\n/g), dstNl = countMatches(d, /\n/g);
   if (srcNl !== dstNl) warn.push("newlines:" + srcNl + "->" + dstNl);
 
+  // 6b) control codes must not be INVENTED.
+  //
+  // The prompt used to name example codes ("\N[1]", "\V[1]"), and the model copied them into
+  // short entries: "スマホ" -> "\N[1]智能手机", "司祭3" -> "\N[1]祭司3", and malformed forms such
+  // as "\[1\]恶魔之王首领卡提斯" in event names. The engine then renders an actor name where
+  // none belongs, or shows the escape literally. Rule 1 already catches codes that were lost;
+  // this catches codes that were added, by comparing the counts of each backslash sequence.
+  const codeCount = (x) => {
+    const m = String(x).match(/\\[A-Za-z]?[\[<][^\]>]{0,16}[\]>]|\\./g);
+    const out = Object.create(null);
+    for (const c of m || []) out[c] = (out[c] || 0) + 1;
+    return out;
+  };
+  const srcCodes = codeCount(s), dstCodes = codeCount(d);
+  for (const c of Object.keys(dstCodes)) {
+    if ((srcCodes[c] || 0) < dstCodes[c]) { fatal.push("code-invented:" + c); break; }
+  }
+
   // 7) untranslated / near-identical
   const norm = (x) => String(x).replace(/\s+/g, "");
   const foldPunct = (x) => String(x).replace(/\s+/g, "")

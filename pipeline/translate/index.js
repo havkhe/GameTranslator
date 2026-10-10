@@ -22,7 +22,16 @@ const { makeCache, normText } = require("./cache.js");
 
 const DEFAULT_TEMPLATE =
   "将下列每行日文翻译成简体中文。禁止翻译成英文，只输出简体中文。\r\n" +
-  "必须原样保留 \\N[1]、\\V[1]、\\N<角色名> 等控制代码；行数必须与输入完全相同。\r\n" +
+  // The instruction must NOT contain literal control codes.
+  //
+  // It used to read 「必须原样保留 \N[1]、\V[1]、\N<角色名> 等控制代码」, and the model treated
+  // those examples as text to translate: short entries came back with the codes injected, e.g.
+  // "スマホ" -> "\N[1]智能手机" and "司祭3" -> "\N[1]祭司3", plus malformed ones like
+  // "\[1\]恶魔之王首领卡提斯" in event and common-event names. Measured: 19 of 9747 translated
+  // strings were polluted this way in one game. Naming the codes in words avoids giving the
+  // model anything to copy.
+  "如果原文含有反斜杠开头的控制代码（如变量、角色名、颜色、图标等），必须原样保留，不要增加也不要删除；" +
+  "原文没有控制代码时，译文中也不要出现。行数必须与输入完全相同。\r\n" +
   "每行输出一条译文，不要编号、不要JSON、不要解释。\r\n{lines}";
 
 /** Is this source text already Chinese (kanji-dominant, no kana)? */
