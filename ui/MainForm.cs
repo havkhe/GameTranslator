@@ -1161,7 +1161,7 @@ namespace GameTranslatorV3
                         "未找到 llama-server.exe。\n\n" +
                         "查找位置：\n" + exe + "\n\n" +
                         "请在「设置…」里把「llama 目录」指向包含 llama-server.exe 的文件夹。\n\n" +
-                        "旧版（v2）通常在：\nD:\\GameTranslator\\llama",
+                        "本程序自带的运行目录：\n" + Path.Combine(_root, "llama"),
                         "未找到模型运行程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }

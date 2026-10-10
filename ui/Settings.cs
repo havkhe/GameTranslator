@@ -14,8 +14,8 @@ namespace GameTranslatorV3.Core
     {
         public string ModelDir = @"H:\model";
         public string Model = "Galtransl-v4-4B-2601.gguf";
-        public string WorkDir = @"D:\GameTranslator\work";
-        public string PromptFile = @"D:\GameTranslator\work\prompt.txt";
+        public string WorkDir = "";
+        public string PromptFile = "";
         public int Port = 18080;
 
         /// <summary>Attempts per game before it is skipped and the batch continues.</summary>
@@ -44,14 +44,16 @@ namespace GameTranslatorV3.Core
         /// </summary>
         public string LlamaDir = "";
 
-        /// <summary>Best guess for the llama folder: ours if present, else the v2 one.</summary>
+        /// <summary>The llama folder beside this install. Nothing points at another install.</summary>
         public static string DefaultLlamaDir(string root)
         {
-            string mine = Path.Combine(root, "llama");
-            if (File.Exists(Path.Combine(mine, "llama-server.exe"))) return mine;
-            string v2 = @"D:\GameTranslator\llama";
-            if (File.Exists(Path.Combine(v2, "llama-server.exe"))) return v2;
-            return mine;
+            return Path.Combine(root, "llama");
+        }
+
+        /// <summary>The work folder beside this install.</summary>
+        public static string DefaultWorkDir(string root)
+        {
+            return Path.Combine(root, "work");
         }
 
         /// <summary>
@@ -123,10 +125,8 @@ namespace GameTranslatorV3.Core
             s.LlamaDir = DefaultLlamaDir(root);
             if (!string.IsNullOrEmpty(root))
             {
-                string work = Path.Combine(root, "work");
-                if (Directory.Exists(work)) s.WorkDir = work;
-                string prompt = Path.Combine(work, "prompt.txt");
-                s.PromptFile = prompt;
+                s.WorkDir = DefaultWorkDir(root);
+                s.PromptFile = Path.Combine(s.WorkDir, "prompt.txt");
             }
             try
             {

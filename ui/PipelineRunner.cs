@@ -59,9 +59,14 @@ namespace GameTranslatorV3.Core
     /// </summary>
     public sealed class PipelineRunner
     {
-        public string NodeExe = @"D:\GameTranslator\node\node.exe";
-        public string PipelineJs = @"D:\GameTranslator\game-pipeline.js";   // v3: pipeline/index.js
-        public string WorkDir = @"D:\GameTranslator\work";
+        // Defaults are empty and resolved from the install root in the constructor.
+        //
+        // They used to be absolute paths into the v2 install (D:\GameTranslator\...), which
+        // meant deleting v2 would break v3. The runtimes now live beside the UI, so nothing
+        // points across installations any more.
+        public string NodeExe = "";
+        public string PipelineJs = "";
+        public string WorkDir = "";
         public int Port = 18080;
         public string Model = "Galtransl-v4-4B-2601.gguf";
         public int MaxAttempts = 3;
@@ -74,16 +79,20 @@ namespace GameTranslatorV3.Core
         private readonly object _logLock = new object();
         private Process _current;
 
+        /// <summary>Resolve every path from the install root; all of them live beside it.</summary>
         public PipelineRunner(string root)
         {
-            if (!string.IsNullOrEmpty(root))
-            {
-                string node = Path.Combine(root, "node", "node.exe");
-                if (File.Exists(node)) NodeExe = node;
-                string js = Path.Combine(root, "game-pipeline.js");
-                if (File.Exists(js)) PipelineJs = js;
-            }
+            root = (root ?? "").TrimEnd('\\');
+            NodeExe = Path.Combine(root, "node", "node.exe");
+            WorkDir = Path.Combine(root, "work");
+            // v3's entry point, with the v2 script accepted for an install that still has it.
+            string v3 = Path.Combine(root, "pipeline", "index.js");
+            string v2 = Path.Combine(root, "game-pipeline.js");
+            PipelineJs = File.Exists(v3) ? v3 : v2;
         }
+
+        /// <summary>Is the Node runtime present?</summary>
+        public bool NodeAvailable { get { return File.Exists(NodeExe); } }
 
         private void Log(string file, string text)
         {
