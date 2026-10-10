@@ -1,4 +1,4 @@
-// Structural verification of the single-page UI.
+﻿// Structural verification of the single-page UI.
 //
 // Instantiates MainForm, walks its control tree and asserts the things the user asked
 // for: a model selector, a detailed progress panel, no tabs, and the expected buttons.
@@ -76,7 +76,8 @@ namespace GameTranslatorV3.UiCheck
             var buttons = all.OfType<Button>().Select(b => b.Text ?? "").ToList();
             Console.WriteLine("        按钮: " + string.Join(" | ", buttons));
             foreach (var want in new[] { "开始汉化选中", "全部汉化", "暂停", "继续", "终止",
-                                         "检查翻译", "卸载汉化", "恢复汉化", "启动模型", "停止模型", "设置…" })
+                                         "检查翻译", "卸载汉化", "恢复汉化", "启动模型", "停止模型", "设置…",
+                                         "扫描文件夹", "扫描全部路径", "重新扫描全部", "添加游戏" })
                 Assert(buttons.Any(t => t.Contains(want)), "按钮存在：" + want);
 
             Console.WriteLine("");

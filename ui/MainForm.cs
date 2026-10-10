@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -52,7 +52,7 @@ namespace GameTranslatorV3
         private DateTime _lastProgressAt = DateTime.MinValue;
         private int _lastProgressCount, _gameTotal;
 
-        private Button _btnScan, _btnAdd, _btnRefresh, _btnSelectAll, _btnClearSel;
+        private Button _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnSelectAll, _btnClearSel;
         private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck;
         private Button _btnUninstall, _btnRestore, _btnOpenLog, _btnClearLog, _btnSettings;
         private CancellationTokenSource _cts;
@@ -162,10 +162,11 @@ namespace GameTranslatorV3
             };
             _btnScan = MakeButton("扫描文件夹", (s, e) => ScanFolder());
             _btnAdd = MakeButton("添加游戏", (s, e) => AddGame());
-            _btnRefresh = MakeButton("刷新", (s, e) => { LoadGames(); RefreshModels(); });
+            _btnRefresh = MakeButton("扫描全部路径", (s, e) => ScanAllRoots(false));
+            _btnRescanAll = MakeButton("重新扫描全部", (s, e) => RescanAllRoots());
             _btnSelectAll = MakeButton("全选", (s, e) => SetAllChecked(true));
             _btnClearSel = MakeButton("取消全选", (s, e) => SetAllChecked(false));
-            bar.Controls.AddRange(new Control[] { _btnScan, _btnAdd, _btnRefresh, _btnSelectAll, _btnClearSel });
+            bar.Controls.AddRange(new Control[] { _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnSelectAll, _btnClearSel });
 
             _list = new ListView
             {
@@ -565,6 +566,7 @@ namespace GameTranslatorV3
             _btnScan.Enabled = !_running;
             _btnAdd.Enabled = !_running;
             _btnRefresh.Enabled = !_running;
+            _btnRescanAll.Enabled = !_running;
             _btnSelectAll.Enabled = !_running;
             _btnClearSel.Enabled = !_running;
             _btnUninstall.Enabled = !_running && checkedGames == 1;
@@ -580,16 +582,83 @@ namespace GameTranslatorV3
 
         private void ScanFolder()
         {
-            using (var dlg = new FolderBrowserDialog { Description = "选择游戏所在文件夹（会在其下递归查找所有游戏）" })
+            using (var dlg = new FolderBrowserDialog { Description = "选择游戏所在文件夹（会加进扫描路径列表）" })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                _settings.AddScanRoot(dlg.SelectedPath);
+                _settings.Save(_root);
                 ScanPath(dlg.SelectedPath);
             }
         }
 
-        /// <summary>How deep to look. Games sit at various levels (J:\game\类型\作者\游戏), so
-        /// the old two-level scan missed everything below the second one.</summary>
-        private const int MaxScanDepth = 6;
+        /// <summary>
+        /// Scan every remembered root and merge the results into the one list.
+        ///
+        /// This is the button to use normally: the roots are remembered in settings, the
+        /// games are written to games-cache.json, and roots whose games are already known
+        /// are skipped so pressing it again does not repeat a minute of walking.
+        /// </summary>
+        private void ScanAllRoots(bool force)
+        {
+            var roots = _settings.ScanRoots;
+            if (roots.Count == 0)
+            {
+                MessageBox.Show(this, "还没有设置扫描路径。\n\n点「扫描文件夹」选择一个，之后它会一直被记住。",
+                    "没有扫描路径", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var known = new HashSet<string>(_games.Select(g => g.Dir), StringComparer.OrdinalIgnoreCase);
+            int before = _games.Count;
+            int scanned = 0, skipped = 0;
+
+            foreach (var root in roots)
+            {
+                if (!Directory.Exists(root))
+                {
+                    AppendLog("跳过不存在的扫描路径：" + root);
+                    continue;
+                }
+                // A root already covered by the remembered games needs no rescan unless
+                // asked. "Covered" means its record exists and nothing there is new, which
+                // is checked cheaply by counting the games we already hold under it.
+                var under = _games.Count(g => g.Dir.StartsWith(root.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
+                if (!force && under > 0)
+                {
+                    skipped++;
+                    AppendLog("已扫描过，跳过：" + root + "（" + under + " 个游戏）");
+                    continue;
+                }
+                scanned++;
+                ScanPath(root, quiet: roots.Count > 1);
+            }
+
+            SaveGamesCache();
+            RefreshList();
+            var added = _games.Count - before;
+            _status.Text = "扫描完成：扫描 " + scanned + " 个路径，跳过 " + skipped + " 个已扫描路径，新增 " + added +
+                " 个游戏，列表共 " + _games.Count + " 个";
+            AppendLog(_status.Text);
+            if (added == 0 && !force)
+                AppendLog("提示：没有新增游戏。如果游戏位置有变动，可用「重新扫描全部」强制重扫。");
+        }
+
+        /// <summary>Ask for the depth, then scan every root from scratch.</summary>
+        private void RescanAllRoots()
+        {
+            var roots = _settings.ScanRoots;
+            if (roots.Count == 0) { ScanAllRoots(true); return; }
+            if (MessageBox.Show(this,
+                    "重新扫描全部路径会清空当前列表并从头查找 " + roots.Count + " 个路径。\n\n" +
+                    "当前扫描深度：" + _settings.ScanDepth + " 层\n" +
+                    "（可在「设置…」里调整深度）\n\n继续？",
+                    "重新扫描", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            _games.Clear();
+            ScanAllRoots(true);
+        }
+
+        /// <summary>How deep to look, from settings. 1 means the root's children only.</summary>
+        private int MaxScanDepth { get { return Math.Max(1, _settings.ScanDepth); } }
 
         /// <summary>Children never worth descending into: they are data, not games.</summary>
         private static bool IsBoringDir(string name)
@@ -600,7 +669,7 @@ namespace GameTranslatorV3
             {
                 case "node_modules": case "system volume information": case "$recycle.bin":
                 case "windows": case "program files": case "program files (x86)":
-                case "appdata": case "temp": case "tmp": case "cache": case "obj": case "bin":
+                case "appdata": case "temp": case "tmp": case "cache": case "obj":
                     return true;
             }
             // Translation work folders and backups only ever contain copies of a game.
@@ -610,21 +679,24 @@ namespace GameTranslatorV3
             return false;
         }
 
-        private void ScanPath(string path)
+        /// <summary>
+        /// Walk one root and add every game found.
+        ///
+        /// Iterative with an explicit queue, so a deep tree cannot overflow the stack, and
+        /// bounded by MaxScanDepth so picking a drive root cannot become a full-disk crawl.
+        /// Unreadable directories are skipped rather than aborting the scan; libraries on a
+        /// network drive always contain some.
+        /// </summary>
+        private void ScanPath(string path) { ScanPath(path, false); }
+
+        private void ScanPath(string path, bool quiet)
         {
-            AppendLog("开始扫描 " + path + "（最多 " + MaxScanDepth + " 层）…");
-            _status.Text = "正在扫描…";
+            if (!quiet) AppendLog("开始扫描 " + path + "（最多 " + MaxScanDepth + " 层）…");
+            _status.Text = "正在扫描 " + path + " …";
             var found = new List<string>();
             int visited = 0;
             var started = DateTime.Now;
 
-            // Iterative walk with an explicit queue: a very deep tree cannot overflow the
-            // stack, and IsBoringDir keeps the walk out of data, backup and system folders.
-            //
-            // Measured on the user's library (J:\game): the previous two-level scan found
-            // 0 games and visited 7 directories, because titles sit 3-6 levels down
-            // (HGAME\H\<game>). This walk finds 136 and visits 3222 directories in about a
-            // minute, which is why the status line reports progress as it goes.
             var queue = new Queue<KeyValuePair<string, int>>();
             queue.Enqueue(new KeyValuePair<string, int>(path, 0));
             try
@@ -635,20 +707,19 @@ namespace GameTranslatorV3
                     var dir = item.Key;
                     var depth = item.Value;
                     visited++;
-                    if (visited % 100 == 0)
+                    if (visited % 200 == 0)
                     {
-                        _status.Text = "正在扫描… 已检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏" +
-                            "（已用 " + Math.Round((DateTime.Now - started).TotalSeconds) + " 秒）";
-                        AppendLog("扫描中… 已检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏");
+                        _status.Text = "正在扫描… 已检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏（" +
+                            Math.Round((DateTime.Now - started).TotalSeconds) + " 秒）";
                         Application.DoEvents();
                     }
 
                     if (IsGameDir(dir)) found.Add(dir);
-
                     if (depth >= MaxScanDepth) continue;
+
                     IEnumerable<string> subs;
                     try { subs = Directory.EnumerateDirectories(dir); }
-                    catch { continue; }   // unreadable folder: skip it, do not abort the scan
+                    catch { continue; }
                     foreach (var sub in subs)
                     {
                         if (IsBoringDir(Path.GetFileName(sub))) continue;
@@ -663,12 +734,8 @@ namespace GameTranslatorV3
             }
 
             foreach (var dir in found) AddOrUpdate(dir);
-            SaveGamesCache();
-            RefreshList();
             var secs = Math.Round((DateTime.Now - started).TotalSeconds, 1);
-            _status.Text = "扫描完成：检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏，用时 " + secs + " 秒";
-            AppendLog("扫描完成：检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏，用时 " + secs +
-                " 秒，列表共 " + _games.Count + " 个（已保存）。");
+            AppendLog("  " + path + " → 检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏，用时 " + secs + " 秒");
         }
 
         private static IEnumerable<string> SafeDirs(string dir)
@@ -1095,7 +1162,7 @@ namespace GameTranslatorV3
             using (var dlg = new Form())
             {
                 dlg.Text = "设置";
-                dlg.Size = new Size(620, 400);
+                dlg.Size = new Size(660, 560);
                 dlg.StartPosition = FormStartPosition.CenterParent;
                 dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
                 dlg.MaximizeBox = false; dlg.MinimizeBox = false;
@@ -1112,6 +1179,28 @@ namespace GameTranslatorV3
                 var txtAttempts = new TextBox { Width = 80, Text = _settings.MaxAttempts.ToString() };
                 var txtBudget = new TextBox { Width = 80, Text = _settings.GameBudgetMinutes.ToString() };
                 var txtStall = new TextBox { Width = 80, Text = _settings.StalledAfterMinutes.ToString() };
+                var txtDepth = new TextBox { Width = 60, Text = _settings.ScanDepth.ToString() };
+
+                // Scan-root editor: a list plus add/remove, so several folders can feed the
+                // same game list.
+                var rootList = new ListBox { Width = 380, Height = 78 };
+                var roots = _settings.ScanRoots;
+                foreach (var x in roots) rootList.Items.Add(x);
+                var rootPanel = new FlowLayoutPanel { WrapContents = false, Height = 82, AutoSize = false };
+                var rootButtons = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, Width = 74, Height = 80 };
+                var bAddRoot = new Button { Text = "添加…", Width = 70, Height = 24 };
+                var bDelRoot = new Button { Text = "移除", Width = 70, Height = 24 };
+                bAddRoot.Click += (s, e) =>
+                {
+                    using (var f = new FolderBrowserDialog { Description = "选择要扫描的游戏文件夹" })
+                        if (f.ShowDialog(dlg) == DialogResult.OK && !rootList.Items.Contains(f.SelectedPath))
+                            rootList.Items.Add(f.SelectedPath);
+                };
+                bDelRoot.Click += (s, e) => { if (rootList.SelectedIndex >= 0) rootList.Items.RemoveAt(rootList.SelectedIndex); };
+                rootButtons.Controls.Add(bAddRoot);
+                rootButtons.Controls.Add(bDelRoot);
+                rootPanel.Controls.Add(rootList);
+                rootPanel.Controls.Add(rootButtons);
 
                 int r = 0;
                 t.Controls.Add(new Label { Text = "模型目录", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
@@ -1145,11 +1234,27 @@ namespace GameTranslatorV3
                 t.Controls.Add(new Label { Text = "无输出判定卡死(分)", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
                 t.Controls.Add(txtStall, 1, r++);
 
+                // Scan roots and depth. Several roots are merged into the one list, and the
+                // roots are remembered so the library is not re-found on every launch.
+                t.Controls.Add(new Label { Text = "扫描深度(层)", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                var depthRow = new FlowLayoutPanel { WrapContents = false, Height = 30 };
+                depthRow.Controls.Add(txtDepth);
+                depthRow.Controls.Add(new Label
+                {
+                    Text = "  4 层约 1 分钟；调大可找到嵌套在游戏文件夹里的游戏，但更慢",
+                    AutoSize = true, ForeColor = Color.DimGray
+                });
+                t.Controls.Add(depthRow, 1, r++);
+
+                t.Controls.Add(new Label { Text = "扫描路径", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(rootPanel, 1, r++);
+
                 var note = new Label
                 {
                     Dock = DockStyle.Bottom, Height = 56, ForeColor = Color.DimGray,
                     Text = "失败重试次数：一个游戏失败几次后跳过它、继续后面的游戏。\n" +
-                           "单游戏时间上限 / 无输出判定卡死：超过就结束该游戏并重试，避免整个批次被一个游戏卡住。"
+                           "单游戏时间上限 / 无输出判定卡死：超过就结束该游戏并重试，避免整个批次被一个游戏卡住。\n" +
+                           "扫描路径：可添加多个文件夹，结果汇总在同一个列表里；路径会被记住，下次无需重新扫描。"
                 };
 
                 var ok = new Button { Text = "保存", DialogResult = DialogResult.OK, Width = 80, Height = 28 };
@@ -1179,6 +1284,16 @@ namespace GameTranslatorV3
                 _settings.MaxAttempts = attempts;
                 _settings.GameBudgetMinutes = budget;
                 _settings.StalledAfterMinutes = stall;
+
+                int depth;
+                if (!int.TryParse(txtDepth.Text.Trim(), out depth) || depth < 1 || depth > 12)
+                { MessageBox.Show(this, "扫描深度需在 1-12 之间。"); return; }
+                _settings.ScanDepth = depth;
+
+                var rootList2 = new List<string>();
+                foreach (var o in rootList.Items) rootList2.Add(Convert.ToString(o));
+                _settings.ScanRoots = rootList2;
+
                 _settings.Save(_root);
 
                 _runner.Port = port;
