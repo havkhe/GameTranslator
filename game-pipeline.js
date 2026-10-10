@@ -1,4 +1,4 @@
-﻿// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
+// Usage: node game-pipeline.js <gameDir> <model> <workDir> [port] [mode] [promptFile]
 //   mode: translate (default) | check (only scan for untranslated content)
 //   Requires a local llama-server (llama.cpp) already running on 127.0.0.1:<port>.
 // Extracts RPG Maker MV/MZ (data json, with or without a www/ wrapper) or
@@ -1582,6 +1582,14 @@ function buildPrompt(batch) {
 // answers "sorry, I can't translate" does so deterministically).
 async function translateGroup(group) {
   if (runState.degraded) return null;
+  // A group whose entries have all used up their attempts in this run is not sent:
+  // it would just be refused again. This is what terminates the split recursion,
+  // which otherwise re-sent the same refused head of the queue forever.
+  //
+  // Note this only stops requests, it does not consume budget: attempts are charged
+  // when an answer actually comes back (below), so the stall/degradation detection
+  // still sees every request it needs to.
+  if (group.every((g) => attemptsExhausted((g.parent || g).text))) return null;
   const prompt = buildPrompt(group);
   // Cap generation at roughly twice the source size (GalTransl's rule). This is
   // the cheapest guard against a repetition loop: the model physically cannot
@@ -1607,6 +1615,8 @@ async function translateGroup(group) {
     const parsed = parseResult(resp);
     const lines = normalizeResult(parsed, group.length);
     if (!lines) continue;
+    // An answer arrived, so this group costs one attempt from each of its entries.
+    for (const g of group) noteAttempt((g.parent || g).text);
     const out = [];
     let ok = true;
     for (let j = 0; j < group.length; j++) {
@@ -1622,8 +1632,51 @@ async function translateGroup(group) {
   return null;
 }
 
+// How much real text does a line carry? Used by the "translation far too short"
+// gate, which must not treat layout padding or meaningless symbol runs as content.
+//
+// RPG Maker pads text with full-width spaces for centring, so
+// "　　　　　みんなごめ\nん" is 34 characters holding 5 of dialogue. Sexual-content
+// lines are largely onomatopoeia ("ふッ、む゛っ……♥　ちゅぽっ♥") whose っ ゛ … ♥
+// markers need no translation at all. Counting those toward the source length made
+// the 25% gate demand an answer longer than the sentence really is, so a correct
+// short answer was rejected on every run: a game sat at 6548/9365 entries while the
+// GPU stayed at 100% retrying the same heads of the queue.
+// Only marks that carry no translatable meaning are removed: layout padding, the
+// iteration/voicing marks written after a syllable (っ ッ ゛ ゜), the prolonged
+// sound mark, decorative hearts and stars, and sentence punctuation. Syllables
+// themselves (あ, ア, ん, ン, ー-length runs of kana) MUST stay counted — an earlier
+// version of this regex removed the whole kana block and measured "おはよう、ミアです。"
+// as zero content, which would have disabled the length gate for all Japanese text.
+const MEANINGLESS_IN_LENGTH = /[\s\u3000\u3063\u30c3\u3099\u309a\u309b\u309c\u30fc\u30fb\u3001\u3002\u2026\u2025!?！！？？♥♡♪☆★◆◇●○◎※〜~ー―‐]/g;
 function contentLength(s) {
-  return String(s).replace(/[\s\u3000]/g, "").length;
+  return String(s).replace(MEANINGLESS_IN_LENGTH, "").length;
+}
+
+// Below this there is too little content for a ratio test to mean anything
+// ("んッ", "ああっ", "……"): any answer is the right length, so the check is skipped
+// rather than failing the entry forever.
+const MIN_RATIO_CHECK = 3;
+
+// How many times one entry may be sent to the model inside a single run.
+//
+// Some lines are simply beyond the model: an onomatopoeia run the quality gate keeps
+// rejecting, an asset name it refuses to translate. Retrying those forever is not
+// progress — a real game sat at 6548/9365 entries while the GPU stayed at 100%,
+// re-sending the same head of the queue hundreds of times (measured: 71 rejections
+// of one line in 210 seconds). After this many attempts the entry is recorded in
+// failures.json and left for the next run, so the rest of the game can proceed.
+const MAX_ATTEMPTS_PER_ENTRY = 3;
+const attemptsLeft = new Map();   // normalised source text -> attempts remaining
+
+function noteAttempt(text) {
+  const k = normText(text);
+  const left = attemptsLeft.has(k) ? attemptsLeft.get(k) : MAX_ATTEMPTS_PER_ENTRY;
+  attemptsLeft.set(k, left - 1);
+  return left - 1;
+}
+function attemptsExhausted(text) {
+  return (attemptsLeft.get(normText(text)) || 0) <= 0;
 }
 
 // Translation results for the individual lines of one multi-line (or long) entry,
@@ -1646,15 +1699,20 @@ async function translateGroupRecursive(group, cache, fails, stats, depth = 0) {
         console.log("GLOSSARY_APPLY", JSON.stringify(String(res[i]).slice(0, 20)), "->", JSON.stringify(String(applyGlossary(res[i])).slice(0, 20)), "size=" + glossary.length);
       }
       res[i] = applyGlossary(res[i]);
-      // A translation far shorter than its source means the model truncated or
-      // gave up. The comparison must use the ORIGINAL entry, not the chunk this
-      // request happened to carry, and must ignore layout whitespace: RPG Maker
-      // text is padded with full-width spaces for centring, so
-      // "　　　　　みんなごめ\nん" is 34 characters but holds 5 of dialogue.
-      // Measuring the raw length demanded a 9-character answer for a 5-character
-      // line, so a correct short translation was rejected on every single run and
-      // the game never progressed while the GPU stayed busy.
-      if (target.text.length > 12 && contentLength(res[i]) < contentLength(target.text) * 0.25) {
+      // Recorded, then judged: an entry that used its last attempt in this group is
+      // still evaluated here (a good answer is kept), but it will not be re-sent.
+      if (attemptsExhausted(target.text)) {
+        skip.add(i);
+        fails.push({ hash: textHash(target.text), err: "attempts-exhausted", text: target.text.slice(0, 40) });
+        console.log("ATTEMPTS_EXHAUSTED", JSON.stringify(target.text.slice(0, 40)));
+        continue;
+      }
+      // A translation far shorter than its source means the model truncated or gave
+      // up. Both sides are measured with contentLength() (no padding, no symbol runs)
+      // and the check only applies when the source carries enough real text for a
+      // ratio to be meaningful. See contentLength() for why.
+      if (contentLength(target.text) >= MIN_RATIO_CHECK &&
+          contentLength(res[i]) < contentLength(target.text) * 0.25) {
         skip.add(i);
         fails.push({ hash: textHash(target.text), err: "too-short", text: target.text.slice(0, 40) });
         console.log("SUSPECT_SHORT", JSON.stringify(target.text.slice(0, 40)));
