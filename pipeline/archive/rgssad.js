@@ -15,15 +15,23 @@ const fs = require("fs");
 const path = require("path");
 const codec = require("./codec.js");
 
-const RGSSAD_MAGIC = 0x52475753;   // "RGSS"
+const RGSSAD_MAGIC = 0x53534752;   // "RGSS" as a LITTLE-ENDIAN uint32
+const RGSSAD_TAG = "RGSSAD";       // the first six bytes, which is what actually identifies it
 
-/** Archive version from the header byte: 1, 2 or 3 (0 = not an archive). */
+/**
+ * Archive version from the header: 1, 2 or 3 (0 = not an archive).
+ *
+ * The magic number is compared as text. An earlier version compared
+ * readUInt32LE(0) against 0x52475753, which is "RGSS" in BIG-endian order, so the check
+ * never matched, archiveVersion() always returned 0, and every packed game was reported as
+ * VX rather than VX Ace — the version byte is what distinguishes them.
+ */
 function archiveVersion(file) {
   const fd = fs.openSync(file, "r");
   try {
     const head = Buffer.alloc(8);
     fs.readSync(fd, head, 0, 8, 0);
-    if (head.readUInt32LE(0) !== RGSSAD_MAGIC) return 0;
+    if (head.toString("latin1", 0, 6) !== RGSSAD_TAG) return 0;
     return head.readUInt8(7);
   } finally {
     fs.closeSync(fd);
