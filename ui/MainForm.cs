@@ -364,6 +364,13 @@ namespace GameTranslatorV3
 
             var pane = new Panel { Dock = DockStyle.Fill };
             pane.Controls.Add(_list);
+            // The task controls and the log live here rather than in the right column: on the right
+            // every pixel they took came out of the 翻译对照 panel, which is the one area that has to
+            // be big (it is the only place the running translation can be read). Docking is resolved
+            // backwards through the collection, so adding them after the list puts them below it:
+            // 任务队列 / 工具栏 / 游戏列表 / 任务控制 / 日志.
+            pane.Controls.Add(BuildTaskControlBox());
+            pane.Controls.Add(BuildLogBox());
             pane.Controls.Add(bar);
             // Added last, and docking is resolved from the end of the collection backwards, so this
             // reserves the top strip above the toolbar: 任务队列 / 工具栏 / 游戏列表.
@@ -799,7 +806,9 @@ namespace GameTranslatorV3
             modelBox.Controls.Add(modelRow);
 
             // ---- detailed progress ----------------------------------------------
-            var progBox = new GroupBox { Dock = DockStyle.Top, Height = 210, Text = "任务进度" };
+            // 180 px rather than 210: nine short rows plus two bars need about that, and every pixel
+            // not used here becomes a row of history in the 翻译对照 panel below.
+            var progBox = new GroupBox { Dock = DockStyle.Top, Height = 180, Text = "任务进度" };
             var grid = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9,
@@ -826,47 +835,21 @@ namespace GameTranslatorV3
             progBox.Controls.Add(grid);
 
             // ---- task controls ---------------------------------------------------
-            // Three equal columns, as many rows as the buttons need. Every button is always on
-            // screen: nothing can be pushed off the right edge, whatever the window width or the
-            // display scaling.
-            var actBox = new GroupBox { Dock = DockStyle.Top, Text = "任务控制", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(0, 104) };
-            var act1 = MakeButtonGrid(3);
-            _btnStartSel = MakeButton("开始汉化选中", (s, e) => StartTranslation(false));
-            _btnStartAll = MakeButton("全部汉化", (s, e) => StartTranslation(true));
-            _btnPause = MakeButton("暂停", (s, e) => Pause());
-            _btnResume = MakeButton("继续", (s, e) => Resume());
-            _btnStop = MakeButton("终止", (s, e) => Stop());
-            AddToGrid(act1, _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop);
-
-            var act2 = MakeButtonGrid(3);
-            _btnCheck = MakeButton("检查翻译", (s, e) => StartCheck());
-            _btnUninstall = MakeButton("卸载汉化", (s, e) => Uninstall());
-            _btnRestore = MakeButton("恢复汉化", (s, e) => Restore());
-            _btnSettings = MakeButton("设置…", (s, e) => OpenSettings());
-            _btnOpenLog = MakeButton("打开日志文件", (s, e) => OpenLogFiles());
-            AddToGrid(act2, _btnCheck, _btnUninstall, _btnRestore, _btnSettings, _btnOpenLog);
-            actBox.Controls.Add(act2);
-            actBox.Controls.Add(act1);
+            // Moved to the left pane (BuildTaskControlBox) so this column can give its height to the
+            // 翻译对照 panel below.
 
             // ---- log -------------------------------------------------------------
-            var logBox = new GroupBox { Dock = DockStyle.Fill, Text = "日志 / 错误", MinimumSize = new Size(0, 120) };
-            _log = new TextBox
-            {
-                Name = "log",
-                Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
-                ScrollBars = ScrollBars.Both, WordWrap = false,
-                Font = new Font("Consolas", 8.5f), BackColor = Color.FromArgb(250, 250, 250)
-            };
-            var logBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 30, WrapContents = false };
-            _btnClearLog = MakeButton("清空显示", (s, e) => _log.Clear());
-            logBar.Controls.Add(_btnClearLog);
-            logBox.Controls.Add(_log);
-            logBox.Controls.Add(logBar);
+            // Built in the left pane now (BuildLogBox): what is left on this side is the model row,
+            // the progress panel and the pair panel, and the pair panel takes everything that is
+            // left over.
 
             // ---- 翻译对照 --------------------------------------------------------
             // The pair the run just produced. Two read-only boxes for the current pair — a column would
             // cut a sentence off — plus the recent pairs below for scrolling back.
-            var pairBox = new GroupBox { Dock = DockStyle.Top, Height = 200, Text = "翻译对照（实时）", MinimumSize = new Size(0, 120) };
+            //
+            // This panel takes every pixel the fixed rows above and below do not need: it is where a
+            // long sentence can actually be read, so it is the one area worth being generous with.
+            var pairBox = new GroupBox { Dock = DockStyle.Fill, Text = "翻译对照（实时）", MinimumSize = new Size(0, 160) };
 
             var pairTop = new TableLayoutPanel
             {
@@ -878,12 +861,12 @@ namespace GameTranslatorV3
             _pairSrc = new TextBox
             {
                 Name = "pairSrc", Dock = DockStyle.Fill, ReadOnly = true, Multiline = true,
-                Height = 36, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(252, 252, 252)
+                Height = 48, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(252, 252, 252)
             };
             _pairDst = new TextBox
             {
                 Name = "pairDst", Dock = DockStyle.Fill, ReadOnly = true, Multiline = true,
-                Height = 36, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(247, 252, 247)
+                Height = 48, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(247, 252, 247)
             };
             pairTop.Controls.Add(new Label { Text = "原文", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
             pairTop.Controls.Add(_pairSrc, 1, 0);
@@ -920,14 +903,73 @@ namespace GameTranslatorV3
             Tip(_pairSrc, "本次运行刚翻译的原文。只显示本次新产生的对照；全部命中缓存的一轮不会显示任何内容，说明没有新翻译。");
             Tip(_pairList, "最近 " + PairHistoryMax + " 条：上面一行是最新的一条。勾上「自动滚动」会始终停在最新一条。");
 
-            // Docked controls stack in reverse order of addition, so the log (fill) is
-            // added first and the top rows last.
-            host.Controls.Add(logBox);
-            host.Controls.Add(actBox);
+            // Docked controls stack in reverse order of addition, so the fill control is added first
+            // and the top row last. What is left in this column is the pair panel (fill, everything
+            // the fixed rows do not need), the progress panel and the model row — the task controls
+            // and the log moved to the left pane (BuildTaskControlBox / BuildLogBox).
             host.Controls.Add(pairBox);
             host.Controls.Add(progBox);
             host.Controls.Add(modelBox);
             return host;
+        }
+
+        /// <summary>
+        /// The task controls, as one strip at the bottom of the left pane.
+        ///
+        /// They used to be a row in the right column. There, the height they took came straight out
+        /// of the 翻译对照 panel, which is the area that has to be big: it is the only place the
+        /// actual translation can be read. On the left the width is never in short supply (the pane
+        /// is wider than the right column), and the strip sits under the game list.
+        ///
+        /// Three equal columns, as many rows as the buttons need. Every button is always on screen:
+        /// nothing can be pushed off the right edge, whatever the window width or display scaling.
+        /// </summary>
+        private Control BuildTaskControlBox()
+        {
+            var actBox = new GroupBox { Dock = DockStyle.Bottom, Text = "任务控制", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(0, 104) };
+            var act1 = MakeButtonGrid(3);
+            _btnStartSel = MakeButton("开始汉化选中", (s, e) => StartTranslation(false));
+            _btnStartAll = MakeButton("全部汉化", (s, e) => StartTranslation(true));
+            _btnPause = MakeButton("暂停", (s, e) => Pause());
+            _btnResume = MakeButton("继续", (s, e) => Resume());
+            _btnStop = MakeButton("终止", (s, e) => Stop());
+            AddToGrid(act1, _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop);
+
+            var act2 = MakeButtonGrid(3);
+            _btnCheck = MakeButton("检查翻译", (s, e) => StartCheck());
+            _btnUninstall = MakeButton("卸载汉化", (s, e) => Uninstall());
+            _btnRestore = MakeButton("恢复汉化", (s, e) => Restore());
+            _btnSettings = MakeButton("设置…", (s, e) => OpenSettings());
+            _btnOpenLog = MakeButton("打开日志文件", (s, e) => OpenLogFiles());
+            AddToGrid(act2, _btnCheck, _btnUninstall, _btnRestore, _btnSettings, _btnOpenLog);
+            actBox.Controls.Add(act2);
+            actBox.Controls.Add(act1);
+            return actBox;
+        }
+
+        /// <summary>
+        /// The log, as a fixed strip at the bottom of the left pane.
+        ///
+        /// It shows the last few lines and nothing else, so it is the cheapest place to take height
+        /// from; on the right it was costing the 翻译对照 panel the space it needs. Here it sits under
+        /// the task controls, so "what I did" and "what came back" are in one column.
+        /// </summary>
+        private Control BuildLogBox()
+        {
+            var logBox = new GroupBox { Dock = DockStyle.Bottom, Height = 130, Text = "日志 / 错误", MinimumSize = new Size(0, 110) };
+            _log = new TextBox
+            {
+                Name = "log",
+                Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
+                ScrollBars = ScrollBars.Both, WordWrap = false,
+                Font = new Font("Consolas", 8.5f), BackColor = Color.FromArgb(250, 250, 250)
+            };
+            var logBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 30, WrapContents = false };
+            _btnClearLog = MakeButton("清空显示", (s, e) => _log.Clear());
+            logBar.Controls.Add(_btnClearLog);
+            logBox.Controls.Add(_log);
+            logBox.Controls.Add(logBar);
+            return logBox;
         }
 
         /// <summary>

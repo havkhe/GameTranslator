@@ -362,6 +362,55 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 布局：任务控制在左，翻译对照占满剩余高度 ===");
+            {
+                // The task controls used to be a row in the right column, where the height they took
+                // came straight out of the 翻译对照 panel — the one area that has to be big, since it
+                // is the only place the running translation can be read. They now share the left pane
+                // with the game list, and the pair panel takes every pixel the fixed rows do not need.
+                var lvGame = Flatten(form).OfType<ListView>().FirstOrDefault(l => l.VirtualMode);
+                var lvPair = FindControl(form, "pairList") as ListView;
+                var boxPair = lvPair == null ? null : lvPair.Parent;
+                var txtLog = FindControl(form, "log") as TextBox;
+                var boxLog = txtLog == null ? null : txtLog.Parent;
+                var btnStartSel = Flatten(form).OfType<Button>().FirstOrDefault(b => b.Text == "开始汉化选中");
+                var btnStartAll = Flatten(form).OfType<Button>().FirstOrDefault(b => b.Text == "全部汉化");
+
+                // The pane a control belongs to is the SplitContainer's panel, not the split: walking
+                // up to the control whose parent is a SplitterPanel is what tells left from right.
+                Func<Control, Control> paneOf = c =>
+                {
+                    var p = c;
+                    while (p != null && p.Parent != null && !(p.Parent is SplitterPanel)) p = p.Parent;
+                    return p;
+                };
+                Assert(btnStartSel != null && btnStartAll != null, "找到任务控制按钮（开始汉化选中 / 全部汉化）");
+                Assert(btnStartSel != null && lvGame != null && paneOf(btnStartSel) != null && paneOf(btnStartSel) == paneOf(lvGame),
+                    "任务控制与游戏列表在同一个（左侧）面板里");
+                Assert(txtLog != null && lvGame != null && paneOf(txtLog) != null && paneOf(txtLog) == paneOf(lvGame),
+                    "日志也在左侧面板里（右边整列留给翻译对照）");
+                Assert(lvPair != null && lvGame != null && paneOf(lvPair) != null && paneOf(lvPair) != paneOf(lvGame),
+                    "翻译对照在另一个（右侧）面板里");
+                Assert(boxPair != null && boxLog != null, "找到翻译对照容器与日志容器");
+                if (boxPair != null && boxLog != null)
+                {
+                    Console.WriteLine("        翻译对照容器高 " + boxPair.Height + " px，日志容器高 " + boxLog.Height + " px");
+                    Assert(boxPair.Dock == DockStyle.Fill, "翻译对照容器 Dock=Fill（吃下全部剩余高度）");
+                    Assert(boxLog.Dock == DockStyle.Bottom, "日志容器 Dock=Bottom（固定高度）");
+                    Assert(boxPair.Height > boxLog.Height,
+                        "翻译对照比日志高：" + boxPair.Height + " > " + boxLog.Height);
+                }
+                var txtPairSrc = FindControl(form, "pairSrc") as TextBox;
+                Assert(txtPairSrc != null && txtPairSrc.Height >= 44,
+                    "原文/译文框已加高：" + (txtPairSrc == null ? "-" : txtPairSrc.Height + " px"));
+                // The history list is what "see a bigger range" means: it must be the bulk of the
+                // panel, not a two-row footnote.
+                Console.WriteLine("        对照历史列表高 " + (lvPair == null ? 0 : lvPair.Height) + " px（约 " +
+                    (lvPair == null ? 0 : Math.Max(0, (lvPair.Height - 8) / 24)) + " 行）");
+                Assert(lvPair != null && lvPair.Height >= 200, "对照历史列表至少 200 px 高（约 8 行）");
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 模型状态必须反映服务器实际加载的模型 ===");
             // The label used to show whatever the dropdown said. Measured on this machine: two llama-server
             // processes can hold the same port (llama.cpp sets SO_REUSEADDR and Windows allows the second
