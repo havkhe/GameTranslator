@@ -248,9 +248,17 @@ namespace GameTranslatorV3
             _btnClearSel = MakeButton("取消全选", (s, e) => SetAllChecked(false));
             bar.Controls.AddRange(new Control[] { _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnState, _btnSelectAll, _btnClearSel });
 
-            _list = new ListView
+            _list = new GameListView
             {
-                Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true,
+                Dock = DockStyle.Fill, View = View.Details,
+                // CheckBoxes is off and the check is drawn as a character in the first column.
+                //
+                // The native box is a themed glyph the control draws from its own state image, and on
+                // this machine at 200 % display scaling it renders as nothing at all: the control still
+                // reports LVS_EX_CHECKBOXES and a 26 px first column, but the user sees no box and has
+                // nothing to aim at. A character cannot fail to draw, and clicking anywhere on the row
+                // toggles it, so there is no 16 px target to hit either.
+                CheckBoxes = false,
                 FullRowSelect = true, GridLines = true, HideSelection = false,
                 // Virtual mode: rows are produced on demand instead of being pushed into the native
                 // control. Adding a row to a real ListView costs about 300 ms on the machine this was
@@ -267,7 +275,7 @@ namespace GameTranslatorV3
             {
                 if (e.ItemIndex >= 0 && e.ItemIndex < _games.Count) e.Item = MakeRow(_games[e.ItemIndex]);
             };
-            _list.Columns.Add("", 26);              // 0  checkbox
+            _list.Columns.Add("选", 34);             // 0  the check character
             _list.Columns.Add("游戏", 300);          // 1  game name (absorbs the slack)
             _list.Columns.Add("引擎", 60);           // 2  engine
             _list.Columns.Add("进度", 150);          // 3  progress
@@ -277,23 +285,69 @@ namespace GameTranslatorV3
             // ("未汉化（已还原）（有原…"). The name column absorbs whatever is left, and 条目 moved
             // into 进度 so there is room for the state.
             _list.Resize += (s, e) => ApplyColumnWidths();
-            // ItemCheck rather than ItemChecked: in virtual mode the event must carry the index and
-            // the new state, which is exactly what ItemCheck supplies. The model, not the control,
-            // holds the checked set, so the assignment here is the source of truth.
-            _list.ItemCheck += (s, e) =>
+            // One click anywhere on a row toggles whether that game runs. Two paths are wired to the
+            // same action on purpose: the native WM_LBUTTONUP (see GameListView) and WinForms' own
+            // MouseUp. Whichever the platform delivers, the row toggles — and no path depends on
+            // hitting the 16 px box, which is what made this feel unresponsive before.
+            ((GameListView)_list).RowClicked += ToggleRow;
+            _list.MouseUp += (s, e) =>
             {
-                if (e.Index >= 0 && e.Index < _games.Count)
-                    _games[e.Index].Checked = e.NewValue == CheckState.Checked;
-                UpdateButtons();
+                if (e.Button != MouseButtons.Left) return;
+                var hit = _list.HitTest(e.Location);
+                if (hit != null && hit.Item != null) ToggleRow(hit.Item.Index);
+            };
+            _list.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Space) { ToggleRows(_list.SelectedIndices); e.Handled = true; }
             };
             _list.SelectedIndexChanged += (s, e) => UpdateButtons();
             AttachGameContextMenu();
-            Tip(_list, "右键可选：启动游戏 / 打开目录 / 打开数据目录 / 复制路径。\n翻译进行中仍可滚动查看、勾选与取消勾选。");
+            Tip(_list, "单击一行即可勾选/取消勾选（空格键同效）。\n右键：启动游戏 / 打开目录 / 打开数据目录 / 复制路径。\n翻译进行中也能这样操作：取消勾选的游戏不会被开始。");
 
             var pane = new Panel { Dock = DockStyle.Fill };
             pane.Controls.Add(_list);
             pane.Controls.Add(bar);
             return pane;
+        }
+
+        /// <summary>Toggle one row's check by index, and repaint just that row.</summary>
+        private int _lastToggleRow = -1;
+        private DateTime _lastToggleAt = DateTime.MinValue;
+
+        /// <summary>
+        /// Toggle one row's check by index, and repaint just that row.
+        ///
+        /// Both the native click and WinForms' MouseUp call this, and on a platform that delivers both
+        /// for one click that would toggle twice — i.e. not at all. A repeat for the same row inside
+        /// 200 ms is therefore ignored; the cost is that a deliberate double-click counts once, which
+        /// for a check box is what a double-click usually means anyway.
+        /// </summary>
+        private void ToggleRow(int idx)
+        {
+            if (idx < 0 || idx >= _games.Count) return;
+            if (idx == _lastToggleRow && (DateTime.Now - _lastToggleAt).TotalMilliseconds < 200) return;
+            _lastToggleRow = idx;
+            _lastToggleAt = DateTime.Now;
+            _games[idx].Checked = !_games[idx].Checked;
+            Startup.Trace("勾选切换 行 " + idx + " → " + (_games[idx].Checked ? "已勾选" : "未勾选") +
+                "，合计 " + _games.Count(x => x.Checked));
+            _list.RedrawItems(idx, idx, false);
+            UpdateButtons();
+        }
+
+        /// <summary>Toggle a set of rows by index (used by the space key).</summary>
+        private void ToggleRows(ListView.SelectedIndexCollection indices)
+        {
+            if (indices == null || indices.Count == 0) return;
+            bool anyUnchecked = false;
+            foreach (int i in indices) if (i >= 0 && i < _games.Count && !_games[i].Checked) { anyUnchecked = true; break; }
+            foreach (int i in indices)
+            {
+                if (i < 0 || i >= _games.Count) continue;
+                _games[i].Checked = anyUnchecked;      // a mixed selection becomes all-checked
+            }
+            _list.RedrawItems(0, Math.Max(0, _games.Count - 1), false);
+            UpdateButtons();
         }
 
         /// <summary>
@@ -522,22 +576,60 @@ namespace GameTranslatorV3
             return false;
         }
 
+        // Last known state of the model server, and when it was measured.
+        //
+        // The probe is a TCP connect with a 300 ms budget. It used to run inline here, and this method
+        // is called from UpdateButtons — i.e. on every click on the list, every checkbox toggle, every
+        // selection change — so the UI thread sat in a socket wait for up to 300 ms each time. That was
+        // the unresponsive clicking. Now the probe runs on a background thread, at most once every few
+        // seconds, and the label shows the last result in between.
+        private bool _modelUp;
+        private DateTime _modelProbeAt = DateTime.MinValue;
+        private bool _modelProbeBusy;
+
         private void UpdateModelState()
         {
-            bool up = false;
-            try
+            // Refresh the reading in the background; never on this thread.
+            if (!_modelProbeBusy && (DateTime.Now - _modelProbeAt).TotalSeconds > 3)
             {
-                using (var c = new System.Net.Sockets.TcpClient())
+                _modelProbeBusy = true;
+                int port = _settings.Port;
+                System.Threading.Tasks.Task.Run(() =>
                 {
-                    var ar = c.BeginConnect("127.0.0.1", _settings.Port, null, null);
-                    up = ar.AsyncWaitHandle.WaitOne(300) && c.Connected;
-                }
+                    bool up = false;
+                    try
+                    {
+                        using (var c = new System.Net.Sockets.TcpClient())
+                        {
+                            var ar = c.BeginConnect("127.0.0.1", port, null, null);
+                            up = ar.AsyncWaitHandle.WaitOne(300) && c.Connected;
+                        }
+                    }
+                    catch { up = false; }
+                    try
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            _modelUp = up;
+                            _modelProbeAt = DateTime.Now;
+                            _modelProbeBusy = false;
+                            ApplyModelState();
+                        }));
+                    }
+                    catch { _modelProbeBusy = false; }
+                });
             }
-            catch { up = false; }
-            _lblModelState.Text = up ? "状态：已就绪" : "状态：未启动";
-            _lblModelState.ForeColor = up ? Color.SeaGreen : Color.DimGray;
+            ApplyModelState();
+        }
+
+        /// <summary>Paint the model state from the cached reading. No I/O, safe to call anywhere.</summary>
+        private void ApplyModelState()
+        {
+            if (_lblModelState == null) return;
+            _lblModelState.Text = _modelUp ? "状态：已就绪" : "状态：未启动";
+            _lblModelState.ForeColor = _modelUp ? Color.SeaGreen : Color.DimGray;
             _btnModelStart.Enabled = !_running;
-            _btnModelStop.Enabled = !_running && up;
+            _btnModelStop.Enabled = !_running && _modelUp;
         }
 
         // -------------------------------------------------------------- progress -----
@@ -590,6 +682,71 @@ namespace GameTranslatorV3
 
         // ---------------------------------------------------------------- games ------
 
+        /// <summary>
+        /// The game list, with the row click handled from the native message rather than from a
+        /// MouseClick event.
+        ///
+        /// WinForms does not raise mouse events for a posted WM_LBUTTONDOWN on a native ListView, so a
+        /// synthetic click cannot be used to verify the behaviour, and the handler's reachability is
+        /// left to trust. Reading the hit test out of WM_LBUTTONUP makes the click path explicit, and
+        /// it is what a real click sends too.
+        /// </summary>
+        private sealed class GameListView : ListView
+        {
+            public event Action<int> RowClicked;
+
+            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+            private struct LVHITTESTINFO { public int x, y, flags, iItem, iSubItem; }
+            [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+            private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVHITTESTINFO lParam);
+            private const int LVM_HITTEST = 0x1000 + 18;
+            private const int WM_LBUTTONUP = 0x0202;
+            private const int WM_PROBE = 0x0400 + 500;      // WM_USER + 500
+
+            /// <summary>
+            /// The row under the pointer, from the control's own hit test.
+            ///
+            /// WinForms' HitTest gives an item only after mapping the index back through Items[], which
+            /// in virtual mode is not the object the control is showing — the click then looked like a
+            /// miss. LVM_HITTEST answers with the index directly.
+            /// </summary>
+            private int RowAt(int x, int y)
+            {
+                var info = new LVHITTESTINFO { x = x, y = y, iItem = -1 };
+                SendMessage(Handle, LVM_HITTEST, IntPtr.Zero, ref info);
+                return info.iItem;
+            }
+
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == WM_LBUTTONUP)
+                {
+                    // Traced before the handler check on purpose: last time the trace sat behind
+                    // `RowClicked != null`, so a message that arrived with no subscriber looked exactly
+                    // like a message that never arrived.
+                    try
+                    {
+                        int x = m.LParam.ToInt32() & 0xFFFF;
+                        int y = (m.LParam.ToInt32() >> 16) & 0xFFFF;
+                        int idx = RowAt(x, y);
+                        Startup.Trace("列表点击 (" + x + "," + y + ") → 行 " + idx +
+                            (RowClicked == null ? "  (无订阅者)" : ""));
+                        if (idx >= 0 && RowClicked != null) RowClicked(idx);
+                    }
+                    catch (Exception ex) { Startup.Trace("列表点击出错：" + ex.Message); }
+                }
+                // A probe message: if this shows up in the trace, posted messages do reach this WndProc
+                // and only the mouse ones are being swallowed; if it does not, the control never sees
+                // posted input here and a synthetic click cannot verify the handler at all.
+                if (m.Msg == WM_PROBE)
+                {
+                    Startup.Trace("收到探测消息 WM_PROBE");
+                    return;
+                }
+                base.WndProc(ref m);
+            }
+        }
+
         private sealed class GameItem
         {
             public string Dir;
@@ -600,6 +757,10 @@ namespace GameTranslatorV3
             public string Status = "";      // short text shown in the 状态 column, e.g. 已汉化（本项目）97%
             public string StateNote = "";   // the long explanation, shown as a row tooltip
             public bool Skip;               // already Chinese: nothing to translate
+            // Progress is read from the pipeline's report file once per game, not per repaint.
+            public bool ProgressLoaded;
+            public string ProgressText = "";
+            public string ProgressDetail = "";
             public string Exe;
             public string OpenDir;
             public string LaunchProblem;
@@ -701,7 +862,7 @@ namespace GameTranslatorV3
         private ListViewItem MakeRow(GameItem g)
         {
             if (g.Exe == null && g.LaunchProblem == null) ResolveLaunchTarget(g);
-            var it = new ListViewItem("");
+            var it = new ListViewItem(g.Checked ? "☑" : "☐");     // the check is a character, see BuildGamePane
             it.SubItems.Add(g.Name);
             it.SubItems.Add(g.Engine);
             it.SubItems.Add(ReadProgress(g));
@@ -725,18 +886,26 @@ namespace GameTranslatorV3
         /// <summary>Read the pipeline's own report so the list never overstates progress.</summary>
         private string ReadProgress(GameItem g)
         {
-            int entries, done;
-            if (!TryReadProgress(g, out entries, out done) || entries <= 0) return "";
-            int pct = (int)Math.Round(100.0 * done / entries);
-            return pct >= 100 ? "已译完" : pct + "%";
+            // Cached on the item: a row is rebuilt every time the control repaints, and reading the
+            // report file per repaint made scrolling and clicking feel heavy.
+            if (!g.ProgressLoaded)
+            {
+                int entries, done;
+                g.ProgressLoaded = true;
+                if (TryReadProgress(g, out entries, out done) && entries > 0)
+                {
+                    g.ProgressText = ((int)Math.Round(100.0 * done / entries)) >= 100 ? "已译完" : (int)Math.Round(100.0 * done / entries) + "%";
+                    g.ProgressDetail = done + " / " + entries + " 条（" + Math.Round(100.0 * done / entries) + "%）";
+                }
+            }
+            return g.ProgressText;
         }
 
         /// <summary>The same figures written out, for the row tooltip.</summary>
         private string ReadProgressDetail(GameItem g)
         {
-            int entries, done;
-            if (!TryReadProgress(g, out entries, out done) || entries <= 0) return "";
-            return done + " / " + entries + " 条（" + Math.Round(100.0 * done / entries) + "%）";
+            ReadProgress(g);                    // fills the cache
+            return g.ProgressDetail;
         }
 
         private bool TryReadProgress(GameItem g, out int entries, out int done)
@@ -819,6 +988,11 @@ namespace GameTranslatorV3
         private void UpdateButtons()
         {
             int checkedGames = _games.Count(g => g.Checked);
+            // The count line belongs here, not only in RefreshList: it used to be written when the list
+            // was rebuilt, so ticking rows left it saying 「已勾选 0 个」 and the checks looked broken.
+            if (_status != null)
+                _status.Text = "共 " + _games.Count + " 个游戏，已勾选 " + checkedGames + " 个" +
+                    (_running ? "（翻译进行中：取消勾选的游戏不会被开始）" : "");
             _btnStartSel.Enabled = !_running && checkedGames > 0;
             _btnStartAll.Enabled = !_running && _games.Count > 0;
             _btnStop.Enabled = _running;

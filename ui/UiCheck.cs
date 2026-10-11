@@ -81,7 +81,10 @@ namespace GameTranslatorV3.UiCheck
             {
                 var lv = lists[0];
                 Assert(lv.VirtualMode, "列表处于虚拟模式 (VirtualMode=true)");
-                Assert(lv.CheckBoxes, "列表带勾选框");
+                // The check is drawn as a character in the first column, not as the native themed box:
+                // at 200 % display scaling the native glyph rendered as nothing on the machine this was
+                // built for, so it could be seen but not aimed at.
+                Assert(!lv.CheckBoxes, "勾选不再依赖原生复选框（改用首列字符 ☑/☐）");
                 Assert(lv.ShowItemToolTips, "列表启用悬停提示（列宽装不下的全文靠它读）");
                 Assert(lv.Columns.Count >= 5, "列表列数=" + lv.Columns.Count);
                 Console.WriteLine("        列: " + string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)));
@@ -101,6 +104,8 @@ namespace GameTranslatorV3.UiCheck
                     {
                         Console.WriteLine("        第 1 行: " + it.SubItems[1].Text + "  [" + it.SubItems[4].Text + "]");
                         Assert(it.ToolTipText != null && it.ToolTipText.Length > 0, "第 1 行带悬停全文");
+                        Assert(it.SubItems[0].Text == "☑" || it.SubItems[0].Text == "☐",
+                            "首列是勾选字符：" + it.SubItems[0].Text);
                     }
                 }
             }
@@ -123,6 +128,28 @@ namespace GameTranslatorV3.UiCheck
             Assert(byText["开始汉化选中"].Enabled == false, "未勾选游戏时「开始汉化选中」为禁用");
             Assert(byText.ContainsKey("全部汉化") && byText["全部汉化"].Enabled, "有游戏时「全部汉化」为可用");
 
+            Console.WriteLine("");
+            Console.WriteLine("=== 勾选交互（不依赖原生复选框）===");
+            {
+                var lv = lists[0];
+                // Toggling must change the model and be reflected in the count line — the two things the
+                // row click does. Exercised through the same private method the click handlers call, so
+                // this covers the action itself even though a click cannot be synthesised here.
+                var toggle = typeof(MainForm).GetMethod("ToggleRow", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(toggle != null, "找到 ToggleRow（点击处理所调用的方法）");
+                if (toggle != null)
+                {
+                    string before = lv.Items[0].SubItems[0].Text;
+                    toggle.Invoke(form, new object[] { 0 });
+                    string after = lv.Items[0].SubItems[0].Text;
+                    Assert(before != after && (after == "☑" || after == "☐"),
+                        "勾选一行后首列字符改变：" + before + " → " + after);
+                    Assert(GetStatusText(form).Contains("已勾选 1 个"), "状态栏计数随之更新：" + GetStatusText(form));
+                    toggle.Invoke(form, new object[] { 5 });        // a different row
+                    toggle.Invoke(form, new object[] { 0 });        // and back
+                    Assert(GetStatusText(form).Contains("已勾选 1 个"), "再点另一行后计数为 2 或回退：" + GetStatusText(form));
+                }
+            }
             Console.WriteLine("");
             Console.WriteLine("=== 运行中左侧仍可操作（模拟 _running=true 后重算按钮）===");
             // The window used to grey out the whole game list and every selection button for the
@@ -162,6 +189,14 @@ namespace GameTranslatorV3.UiCheck
             foreach (Control child in c.Controls)
                 foreach (var x in Flatten(child))
                     yield return x;
+        }
+
+        /// <summary>The status line's text ("共 110 个游戏，已勾选 N 个").</summary>
+        private static string GetStatusText(Form form)
+        {
+            var labels = Flatten(form).OfType<Label>().Select(l => l.Text ?? "");
+            foreach (var t in labels) if (t.StartsWith("共 ")) return t;
+            return "(not found)";
         }
     }
 }
