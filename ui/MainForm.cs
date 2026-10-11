@@ -794,7 +794,11 @@ namespace GameTranslatorV3
                             Engine = SimpleJson.Get(g, "Kind") ?? "?",
                             Entries = SimpleJson.GetInt(g, "Entries"),
                             Checked = false,
-                            Status = st.Item1.Length > 0 ? st.Item1 : (SimpleJson.GetBool(g, "AlreadyCn") ? "已是中文" : ""),
+                            // Only the measured state is shown. This used to fall back to an AlreadyCn
+                            // flag from the scan cache, which an older build wrote: 24 entries carried
+                            // 「已汉化(跳过)」 and 20 of those games are actually Japanese, so the list
+                            // claimed work that had never been done. An unknown game says so instead.
+                            Status = st.Item1.Length > 0 ? st.Item1 : "未检查",
                             StateNote = st.Item2,
                             // Nothing to translate when the game ships its own Chinese: sending it
                             // through would replace official text with the model's.

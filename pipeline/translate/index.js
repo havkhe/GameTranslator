@@ -235,6 +235,10 @@ async function translate(o) {
 
   const pending = entries.filter((e) => !cache.has(e.text));
   const groups = B.packGroups(pending);
+  // How many entries this run actually had to translate. The caller uses it to tell "nothing was
+  // pending (a re-run over a full cache)" apart from "everything pending failed", which are the same
+  // output numbers but opposite outcomes.
+  stats.pending = pending.length;
   console.log("TOTAL", entries.length, "DONE", entries.length - pending.length, "PENDING", pending.length, "REQUESTS", groups.length);
 
   for (let i = 0; i < groups.length; i++) {

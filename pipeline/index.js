@@ -250,6 +250,24 @@ function ensureDataBackup(engine, gameDir) {
   fs.writeFileSync(FAILURES, JSON.stringify(fails, null, 0), "utf8");
   console.log("TRANSLATED", stats.cached, "FAILURES", fails.length, "REQUESTS", stats.requests);
 
+  // A run whose requests could not be delivered is not a success.
+  //
+  // With the model server down every request fails at once — measured on one game: 4773 request-failed
+  // records in 6.8 s — and the script still exited 0. The GUI's only success signal is the exit code,
+  // so that game was shown as 「已完成」 with its data untouched; 33 games in one library were in that
+  // state. exit 5 makes the run report itself as failed, and the GUI records it as 失败已跳过.
+  //
+  // Only TRANSPORT failures count, and only when nothing was produced: a run whose pending entries
+  // were all rejected for quality reasons (a proper noun the model returns unchanged) is a normal,
+  // documented outcome, and calling it a failure would be just as wrong as calling it a success.
+  const transportFailures = fails.filter((f) => String(f.err).startsWith("request-failed")).length;
+  if (stats.pending > 0 && stats.cached <= cache.loaded &&
+      transportFailures > 0 && transportFailures * 2 >= fails.length) {
+    console.log("ALL_FAILED", "请求未能送达，本次没有产生任何译文（", transportFailures, "条请求失败 /",
+      fails.length, "条失败，待译", stats.pending, "条）——模型服务未启动或不可用？已保持游戏不变。");
+    process.exit(5);
+  }
+
   if (MODE === "check") { console.log("CHECK_DONE"); process.exit(0); }
 
   if (engine.kind === "MV") {
