@@ -32,7 +32,19 @@ const DEFAULT_TEMPLATE =
   // model anything to copy.
   "如果原文含有反斜杠开头的控制代码（如变量、角色名、颜色、图标等），必须原样保留，不要增加也不要删除；" +
   "原文没有控制代码时，译文中也不要出现。行数必须与输入完全相同。\r\n" +
-  "每行输出一条译文，不要编号、不要JSON、不要解释。\r\n{lines}";
+  "保持每行开头的行号，逐行输出「行号. 译文」，不要JSON、不要解释。\r\n{lines}";
+
+/**
+ * Refuse a multi-line reply that dropped the line numbers.
+ *
+ * The request numbers its input lines (batcher.buildPrompt), so the numbers are the anchor that makes
+ * the pairing verifiable. An unnumbered reply for a multi-line group can be count-correct and still
+ * shifted, which is how one game ended up with 911 of its 4,634 translated strings in the wrong
+ * place - and, because the patch is keyed by the source text, that damage cannot be repaired later
+ * (the Japanese is already gone from the live data). GT_ALIGN_LOOSE=1 keeps the old positional
+ * acceptance for a model that will not comply.
+ */
+const STRICT_ALIGNMENT = process.env.GT_ALIGN_LOOSE !== "1";
 
 /** Is this source text already Chinese (kanji-dominant, no kana)? */
 function isChineseLike(s) {
@@ -184,6 +196,15 @@ async function translate(o) {
       return null;
     }
     stats.requests++;
+    // The request numbers its input lines; a reply that drops the numbering for a multi-line group
+    // gives the pairing nothing to stand on, and a shifted-but-count-correct reply is exactly how a
+    // game ended up with a third of its translations in the wrong place (docs/P24). Refusing it here
+    // makes the group split and retry, down to single-line requests where nothing can shift.
+    // GT_ALIGN_LOOSE=1 accepts unnumbered replies positionally, for a model that will not comply.
+    if (STRICT_ALIGNMENT && group.length >= 2 && !B.hasNumbering(resp)) {
+      stats.alignmentRejects = (stats.alignmentRejects || 0) + 1;
+      return null;
+    }
     const parsed = B.parseResult(resp);
     const lines = B.normalizeResult(parsed, group.length);
     if (!lines) return null;

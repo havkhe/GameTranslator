@@ -22,8 +22,10 @@ console.log("  " + fragments.join(" | "));
 
 console.log("");
 console.log("=== the fragments must identify the instruction ===");
-check("fragments include 每行输出一条译文", fragments.includes("每行输出一条译文"));
-check("fragments include 不要编号", fragments.includes("不要编号"));
+// The shipped template asks for numbered output now (that is what anchors the pairing), so the
+// fragments that identify the instruction come from those lines.
+check("fragments include 保持每行开头的行号", fragments.includes("保持每行开头的行号"));
+check("fragments include 不要解释", fragments.includes("不要解释"));
 check("fragments include 不要JSON", fragments.includes("不要JSON"), JSON.stringify(fragments.filter((f) => f.includes("JSON"))));
 check("fragments include 必须原样保留", fragments.includes("必须原样保留"));
 check("fragments include 行数必须与输入完全相同", fragments.includes("行数必须与输入完全相同"));

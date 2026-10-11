@@ -90,25 +90,42 @@ function packGroups(list) {
 
 /** Build the request prompt for one group. */
 //
-// Input lines are NUMBERED, and the prompt is told to keep the numbering.
+// Input lines are NUMBERED, and the prompt is told to keep the numbering - this is what the comment
+// here used to claim while the code did not do it. The comment was carried over from a v2 experiment
+// that measured only "did the reply have the same NUMBER of lines" and, finding numbering no better
+// at that, made it optional; but equal line counts are not equal pairing, and the difference is
+// destructive:
 //
-// Measured reason: with bare text lines, 3 of 19 batches (15.8%) came back one line
-// short. The model reads a run of short entries — character names, account handles —
-// as one list and merges them, so the reply no longer matches the input count and the
-// whole batch fails, splits, and reports each entry as FAILED_ENTRY. A numbered input
-// gives every line an anchor the model cannot merge, and the answer's numbers also
-// make the count verifiable instead of inferred.
+// Measured (v3, 4B, a real game): a batch of six 「…」 dialogue lines came back as ELEVEN lines with
+// no numbering, and 131 animation labels drifted by +2..+26 positions - the model shifted the
+// translations relative to the inputs while the count still matched, so the count check passed, the
+// shifted source->translation pairs were cached, and the patch wrote them into the game. Because the
+// patch is keyed by the SOURCE text, a later run cannot repair it: the Japanese is already gone from
+// the live data. That game ended up with 911 of its 4,634 translated strings in the wrong place
+// (docs/P24). Numbered input gives every line an anchor and makes the pairing verifiable.
 //
-// The instruction is added here rather than relying on the saved prompt file, so the
-// fix works with a user's existing template and with the GUI-supplied prompt.txt.
+// A template that forbids numbering ("不要编号") is rewritten to match, because a prompt that says
+// one thing here and another there is what makes the model drop the numbers and improvise.
 function buildPrompt(group, template) {
   const flat = (s) => String(s).replace(/\r\n|\n|\r/g, " ");
   const core = (s) => splitDecoration(flat(s)).core;
-  const body = group.map((e) => core(e.text)).join("\n");
-  let p = String(template);
-  p = p.replace(/\{lines\}/g, body);
-  if (!p.includes(body)) p = p + "\n\n" + body;
+  const body = group.map((e, i) => (i + 1) + ". " + core(e.text)).join("\n");
+  const instr = "输入的每一行以行号开头。请保留行号，逐行输出「行号. 译文」；行数与行号必须和输入完全一致，" +
+    "不要合并、不要拆分、不要添加任何一行。";
+  let tpl = String(template)
+    .replace(/不要编号/g, "逐行输出并保留行号")
+    .replace(/不编号/g, "输出时保留行号");
+  let p = tpl.replace(/\{lines\}/g, instr + "\n" + body);
+  if (!p.includes(body)) p = tpl + "\n" + instr + "\n" + body;
   return p;
+}
+
+/** Did the reply carry usable line numbering? (>= 2 numbered lines, which is when it is the model's own.) */
+function hasNumbering(text) {
+  const plain = String(text == null ? "" : text).split(/\r?\n/);
+  let n = 0;
+  for (const line of plain) if (/^\s*\d+\s*[.、:：)]\s*\S/.test(line)) n++;
+  return n >= 2;
 }
 
 /** Pull the answer lines out of a model reply. */
@@ -129,20 +146,18 @@ function parseResult(text) {
   // it is used for counting too: the numbers must run 1..n in order, and a gap means
   // the model skipped a line rather than that the batch should be accepted.
   //
-  // At least TWO numbered lines are required. The prompt forbids numbering the answer, and a batch
-  // of two or more is the only case where a full 1..n run can appear; a single numbered line is
-  // therefore not the model's numbering but part of the text. Measured: "12:10 [葛谷ダイスケ]
-  // 早くゴム買ってこいっつったろ。…" came back as "12:10 [葛谷ダイスケ] 我不是叫你赶紧去买避孕套
-  // 吗。…", the leading "12:" was read as line number 12, the reconstructed array had length 12
-  // instead of 1, normalizeResult rejected it, and the entry was recorded as request-failed with
-  // no model error at all — one of the 14 request-failed records in a run that produced none
-  // otherwise.
+  // At least TWO numbered lines are required for a multi-line reply. A single numbered line is only
+  // taken as numbering when its number is exactly 1 — which is what the request now asks for on a
+  // one-entry group. Requiring "1" keeps the measured false positive out: "12:10 [葛谷ダイスケ]
+  // 早くゴム買ってこいっつったろ。…" came back with its own "12:" leading, a naive single-line rule
+  // read that as line number 12, the reconstructed array had length 12 instead of 1, and the entry was
+  // recorded as request-failed with no model error at all.
   const numbered = [];
   for (const line of plain) {
     const m = line.match(/^\s*(\d+)\s*[.、:：)]\s*(\S.*)$/);
     if (m) numbered.push({ n: Number(m[1]), text: m[2] });
   }
-  if (numbered.length >= 2) {
+  if (numbered.length >= 2 || (numbered.length === 1 && numbered[0].n === 1)) {
     const sequential = numbered.every((x, i) => x.n === i + 1);
     if (sequential) return numbered.map((x) => x.text);
     // Gaps or repeats: fall back to positional use so a small numbering slip does not
@@ -172,6 +187,9 @@ function cleanOutput(s) {
 
 function normalizeResult(raw, count) {
   if (!Array.isArray(raw) || raw.length !== count) return null;
+  // A hole means the model numbered its lines but skipped one: the slot exists and would otherwise be
+  // turned into the string "undefined" and cached as a translation.
+  for (const x of raw) if (x === undefined || x === null || String(x).trim() === "") return null;
   return raw.map((x) => String(x));
 }
 
@@ -184,7 +202,7 @@ function joinParts(parts, got, srcText) {
 }
 
 module.exports = {
-  packGroups, buildPrompt, parseResult, cleanOutput, normalizeResult,
+  packGroups, buildPrompt, parseResult, cleanOutput, normalizeResult, hasNumbering,
   splitLongText, joinParts, normText, contentLength, qualityCheck, looksLikeEnglish,
   splitDecoration, restoreDecoration, MIN_RATIO_CHECK,
   promptFragments, promptEchoMatches, degenerationMatches,

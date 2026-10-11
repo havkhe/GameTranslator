@@ -304,6 +304,12 @@ function ensureDataBackup(engine, gameDir) {
       translated: stats.cached,
       pendingAtStart: stats.pending,
       requests: stats.requests,
+      splitRetries: stats.splits,
+      rejected: stats.rejected,
+      // A reply that dropped its line numbers for a multi-line group is refused (the pairing would be
+      // unverifiable). A large number here means the model is not complying and the run is splitting
+      // hard to stay correct - worth seeing in the report instead of guessing from a low rate.
+      alignmentRejects: stats.alignmentRejects || 0,
       failures: fails.length,
     }, null, 2), "utf8");
   } catch (e) { /* a missing progress file is cosmetic; never fail the run for it */ }
