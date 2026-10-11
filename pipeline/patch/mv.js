@@ -52,13 +52,15 @@ function patch(liveDir, cache, reportFile) {
     }
   };
 
-  const walk = (node) => {
+  // `inAudio` mirrors the extractor: inside an audio container `name` is a file reference and must not
+  // be swapped, even when the cache happens to hold a translation for that filename.
+  const walk = (node, inAudio) => {
     if (Array.isArray(node)) {
       if (node.length && node[0] && typeof node[0] === "object" && typeof node[0].code === "number") {
         patchEventList(node);
         return;
       }
-      node.forEach(walk);
+      node.forEach((v) => walk(v, inAudio));
       return;
     }
     if (node && typeof node === "object") {
@@ -69,8 +71,8 @@ function patch(liveDir, cache, reportFile) {
         if (R.META_KEYS.has(k)) continue;
         const v = node[k];
         if (typeof v === "string") {
-          if (R.TEXT_FIELDS.has(k)) node[k] = swap(v);
-        } else walk(v);
+          if (R.TEXT_FIELDS.has(k) && !(inAudio && k === "name")) node[k] = swap(v);
+        } else walk(v, inAudio || R.AUDIO_CONTAINER_KEYS.has(k));
       }
       return;
     }

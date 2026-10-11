@@ -120,14 +120,16 @@ function extract(pristineDir, liveDir) {
   };
 
   // --- generic walk ------------------------------------------------------------
-  const walk = (file, node, at, skipTranslated) => {
+  // `inAudio` marks being inside an audio container (bgm / bgs / me / se / sounds / titleBgm …), where
+  // `name` is the file the engine loads rather than display text. See rules.AUDIO_CONTAINER_KEYS.
+  const walk = (file, node, at, skipTranslated, inAudio) => {
     if (Array.isArray(node)) {
       // An array of command objects is an event command list.
       if (node.length && node[0] && typeof node[0] === "object" && typeof node[0].code === "number") {
         processEventList(file, node, at, skipTranslated);
         return;
       }
-      node.forEach((v, i) => walk(file, v, at + "[" + i + "]", skipTranslated));
+      node.forEach((v, i) => walk(file, v, at + "[" + i + "]", skipTranslated, inAudio));
       return;
     }
     if (node && typeof node === "object") {
@@ -139,9 +141,9 @@ function extract(pristineDir, liveDir) {
         const v = node[k];
         const here = at + "." + k;
         if (typeof v === "string") {
-          if (R.TEXT_FIELDS.has(k)) add(file, here, v, skipTranslated);
+          if (R.TEXT_FIELDS.has(k) && !(inAudio && k === "name")) add(file, here, v, skipTranslated);
         } else {
-          walk(file, v, here, skipTranslated);
+          walk(file, v, here, skipTranslated, inAudio || R.AUDIO_CONTAINER_KEYS.has(k));
         }
       }
       return;

@@ -87,6 +87,21 @@ const TEXT_FIELDS = new Set([
 /** System.json `terms` sub-objects that hold display text. */
 const TERMS_KEYS = ["basic", "commands", "params", "messages", "hint"];
 
+/**
+ * Objects whose `name` is a file reference, not display text.
+ *
+ * The audio containers hold `{name, volume, pitch, pan}`, and that `name` is the file the engine loads
+ * (`audio/bgm/<name>.ogg`). The field is called `name`, which TEXT_FIELDS matches, so without this the
+ * extractor queues audio filenames for translation and the patch step renames them — measured on one
+ * game: 44 map files had their BGM renamed ("夏の日差しに" → "夏日阳光") and those maps could no longer
+ * load their music. Resource fields are excluded by name (characterName, faceName, …); this covers the
+ * same class where the field is just `name`.
+ */
+const AUDIO_CONTAINER_KEYS = new Set([
+  "bgm", "bgs", "me", "se", "sounds", "sound",
+  "titleBgm", "battleBgm", "victoryMe", "defeatMe", "gameoverMe",
+]);
+
 /** Keys whose subtree is metadata and must stay untouched. */
 const META_KEYS = new Set(["metadata", "meta", "info", "__metadata", "note"]);
 
@@ -96,6 +111,7 @@ module.exports = {
   TEXT_FIELDS,
   TERMS_KEYS,
   META_KEYS,
+  AUDIO_CONTAINER_KEYS,
   EXT_RE,
   INTERNAL_RE,
   EVENT_ID_RE,
