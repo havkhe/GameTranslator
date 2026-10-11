@@ -121,6 +121,9 @@ function classify(game) {
   const installed = ["一键恢复汉化.bat", "一键还原汉化前.bat"].some((n) => {
     try { return fs.existsSync(child(game, n)); } catch (e) { return false; }
   });
+  // The folder name is a claim (whoever packaged the release wrote it); the data is evidence. When
+  // the two disagree the disagreement is shown rather than resolved silently.
+  const official = /官方中文|官方汉化|官中|official\s*chinese|中文版/i.test(game);
 
   const liveKanaPct = live && live.total ? 100 * live.kana / live.total : 0;
   const bakKanaPct = bakProfile && bakProfile.total ? 100 * bakProfile.kana / bakProfile.total : 0;
@@ -171,9 +174,19 @@ function classify(game) {
   if (coverage !== null && coverage >= 0.3) return { State: "部分汉化", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
   // Little or no Chinese found: with a pristine original present, a translation existed here and was
   // uninstalled — the backup and the pipeline's cache still hold the work.
-  if (backup) return { State: "未汉化（已还原）", Note: "有原版备份与缓存，可快速重译", Evidence: evidence };
-  if (coverage !== null && coverage > 0) return { State: "部分汉化", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
-  return { State: "未汉化", Note: "", Evidence: evidence };
+  //
+  // A folder that claims to be an official Chinese release while its data still measures Japanese is
+  // reported as such rather than silently believed or silently dismissed: the name is a claim, the
+  // data is evidence, and the two disagreeing is worth seeing.
+  const mismatch = official ? "（目录名标着官方中文，但数据仍是日文）" : "";
+  // Some work exists but it is not yet most of the text: call that 部分汉化 rather than "untouched",
+  // because the difference decides whether translating it again is a small job or a full one.
+  const pct = Math.round(coverage * 100);
+  if (dataDiff && dataDiff.translated >= 20) {
+    return { State: "部分汉化", Note: (pct >= 1 ? "已译 " + pct + "%" : "已译 " + dataDiff.translated + " 串") + mismatch, Evidence: evidence };
+  }
+  if (backup) return { State: "未汉化（已还原）", Note: "有原版备份与缓存，可快速重译" + mismatch, Evidence: evidence };
+  return { State: "未汉化", Note: mismatch, Evidence: evidence };
 }
 
 // --- which games -------------------------------------------------------------------------
