@@ -18,7 +18,7 @@
 //     the cache frozen and the GPU at 100%).
 "use strict";
 const { contentLength, qualityCheck, looksLikeEnglish, MIN_RATIO_CHECK,
-  promptFragments, promptEchoMatches } = require("./quality.js");
+  promptFragments, promptEchoMatches, degenerationMatches } = require("./quality.js");
 const { splitDecoration, restoreDecoration } = require("./decoration.js");
 
 const BATCH = parseInt(process.env.GT_BATCH || "8", 10);
@@ -128,12 +128,21 @@ function parseResult(text) {
   // Numbered lines. The answer's own numbering is the strongest signal available, so
   // it is used for counting too: the numbers must run 1..n in order, and a gap means
   // the model skipped a line rather than that the batch should be accepted.
+  //
+  // At least TWO numbered lines are required. The prompt forbids numbering the answer, and a batch
+  // of two or more is the only case where a full 1..n run can appear; a single numbered line is
+  // therefore not the model's numbering but part of the text. Measured: "12:10 [葛谷ダイスケ]
+  // 早くゴム買ってこいっつったろ。…" came back as "12:10 [葛谷ダイスケ] 我不是叫你赶紧去买避孕套
+  // 吗。…", the leading "12:" was read as line number 12, the reconstructed array had length 12
+  // instead of 1, normalizeResult rejected it, and the entry was recorded as request-failed with
+  // no model error at all — one of the 14 request-failed records in a run that produced none
+  // otherwise.
   const numbered = [];
   for (const line of plain) {
     const m = line.match(/^\s*(\d+)\s*[.、:：)]\s*(\S.*)$/);
     if (m) numbered.push({ n: Number(m[1]), text: m[2] });
   }
-  if (numbered.length) {
+  if (numbered.length >= 2) {
     const sequential = numbered.every((x, i) => x.n === i + 1);
     if (sequential) return numbered.map((x) => x.text);
     // Gaps or repeats: fall back to positional use so a small numbering slip does not
@@ -178,6 +187,6 @@ module.exports = {
   packGroups, buildPrompt, parseResult, cleanOutput, normalizeResult,
   splitLongText, joinParts, normText, contentLength, qualityCheck, looksLikeEnglish,
   splitDecoration, restoreDecoration, MIN_RATIO_CHECK,
-  promptFragments, promptEchoMatches,
+  promptFragments, promptEchoMatches, degenerationMatches,
   BATCH, BATCH_CHARS, SINGLE_CHARS, MAX_ATTEMPTS,
 };

@@ -20,7 +20,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { promptEchoMatches, promptFragments } = require("../pipeline/translate/quality.js");
+const { promptEchoMatches, promptFragments, degenerationMatches } = require("../pipeline/translate/quality.js");
 const { DEFAULT_TEMPLATE } = require("../pipeline/translate/index.js");
 // The audit and the pipeline must agree on where dialogue lives, so the pipeline's own locator is
 // used rather than a second implementation that can drift from it.
@@ -180,7 +180,7 @@ function audioRefs(tree) {
 
 /** Dialogue in resources/<locale>/, live and pristine, counted the way the pipeline locates it. */
 function auditDialogue(liveData, backupData, report, fragments) {
-  const out = { files: 0, total: 0, kanaLive: 0, kanaBackup: 0 };
+  const out = { files: 0, total: 0, kanaLive: 0, kanaBackup: 0, otherFiles: 0 };
   const liveVals = [], bakVals = [];
   for (const f of dialogueFiles(liveData)) {
     let data;
@@ -202,6 +202,40 @@ function auditDialogue(liveData, backupData, report, fragments) {
       for (const [, v] of Object.entries(data)) if (typeof v === "string" && v.trim()) bakVals.push(v);
     }
   }
+
+  // Everything else under resources/: not a locale folder, so the pipeline neither extracts nor
+  // patches it — but it is game data all the same. One game keeps its in-game social feed in
+  // resources/hiroka_tweet_list.json, and an older pass had translated it and left ten word-salad
+  // values behind. Pollution there is reported; coverage is not, because the pipeline cannot
+  // translate it yet.
+  const resRoot = subdir(liveData, "resources") || subdir(liveData, "Resources");
+  if (resRoot) {
+    const seen = new Set(dialogueFiles(liveData).map((f) => path.resolve(f.full)));
+    (function walk(dir, depth) {
+      if (depth < 0) return;
+      let ents;
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const e of ents) {
+        // child() is the only path builder here: a plain directory entry, asserted to stay inside
+        // the directory it was found in.
+        let p;
+        try { p = child(dir, e.name); } catch (err) { continue; }
+        if (e.isDirectory()) { walk(p, depth - 1); continue; }
+        if (!/\.json$/i.test(e.name) || seen.has(path.resolve(p))) continue;
+        let j;
+        try { j = parseJson(fs.readFileSync(p, "utf8")); } catch (e2) { continue; }
+        out.otherFiles++;
+        const rel = "resources/" + path.relative(resRoot, p).replace(/\\/g, "/");
+        for (const [at, v] of strings(j, "")) {
+          const echo = promptEchoMatches(v, "", fragments);
+          if (echo) report.promptEcho.push({ file: rel, key: at, echo, value: v.slice(0, 160), uncovered: true });
+          const degen = degenerationMatches(v);
+          if (degen) report.degradation.push({ file: rel, key: at, bigrams: degen, value: v.slice(0, 160), editorLabel: false, uncovered: true });
+        }
+      }
+    })(resRoot, 4);
+  }
+
   out.total = bakVals.length || liveVals.length;
   out.kanaLive = liveVals.filter((v) => KANA.test(v)).length;
   out.kanaBackup = bakVals.filter((v) => KANA.test(v)).length;
@@ -215,7 +249,7 @@ function auditDialogue(liveData, backupData, report, fragments) {
 function auditGame(game) {
   const report = {
     game: path.resolve(game), live: null, backup: null,
-    files: 0, unparsable: [], promptEcho: [], codePollution: [],
+    files: 0, unparsable: [], promptEcho: [], degradation: [], codePollution: [],
     resourceChanged: [], nonStringChanged: [],
     editorLabels: 0, kanaStrings: 0, totalStrings: 0,
     audioUnresolvedLive: 0, audioUnresolvedBackup: 0, audioBrokenByTranslation: [],
@@ -244,6 +278,13 @@ function auditGame(game) {
       if (KANA.test(v)) report.kanaStrings++;
       const echo = promptEchoMatches(v, "", fragments);
       if (echo) report.promptEcho.push({ file: name, key: at, echo, value: v.slice(0, 160) });
+      const degen = degenerationMatches(v);
+      if (degen) {
+        // A value produced by the model's degeneration cycle. Player-visible when it sits in an
+        // event parameter; an editor label when it sits in a `.name`.
+        const label = /(^|\.)name$/.test(at) && /^(CommonEvents|Map\d*|MapInfos|Tilesets|Troops)\./.test(name + ".");
+        report.degradation.push({ file: name, key: at, bigrams: degen, value: v.slice(0, 160), editorLabel: label });
+      }
     }
     for (const ref of audioRefs(L)) liveAudio.add(ref.toLowerCase());
 
@@ -292,7 +333,7 @@ function auditGame(game) {
 
   const defects = report.promptEcho.length + report.resourceChanged.length +
     report.nonStringChanged.length + report.codePollution.length +
-    report.unparsable.length + report.audioBrokenByTranslation.length;
+    report.unparsable.length + report.audioBrokenByTranslation.length + report.degradation.length;
   return { report, defects, nodata: false };
 }
 

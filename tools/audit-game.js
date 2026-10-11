@@ -43,6 +43,7 @@ const line = (label, n, isDefect) => say("  [" + (n ? (isDefect ? "BAD " : "info
   label.padEnd(34) + String(n));
 line("unparsable data files", report.unparsable.length, true);
 line("prompt-instruction residue", report.promptEcho.length, true);
+line("degenerate (word-salad) values", report.degradation.length, true);
 line("resource refs changed", report.resourceChanged.length, true);
 line("non-string values changed", report.nonStringChanged.length, true);
 line("control-code pollution", report.codePollution.length, true);
@@ -66,6 +67,17 @@ const dump = (title, list, fmt, limit) => {
 };
 dump("unparsable", report.unparsable, (x) => x.file + " — " + x.err, 20);
 dump("prompt residue", report.promptEcho, (x) => x.file + "  " + x.key + "\n      echo [" + x.echo + "]  value " + JSON.stringify(x.value), 40);
+{
+  const real = report.degradation.filter((x) => !x.editorLabel);
+  const labels = report.degradation.filter((x) => x.editorLabel);
+  if (report.degradation.length) {
+    say("");
+    say("=== degenerate (word-salad) values ===");
+    say("  " + real.length + " in player-visible content, " + labels.length + " in editor labels");
+    for (const x of real.slice(0, 40)) say("  " + x.file + "  " + x.key + "\n      " + JSON.stringify(x.value).slice(0, 140) + "\n      bigrams " + x.bigrams.slice(0, 4).join(","));
+    if (real.length > 40) say("  … " + (real.length - 40) + " more");
+  }
+}
 dump("resource references changed", report.resourceChanged, (x) => x.file + "  " + x.key + "\n      original " + JSON.stringify(x.from) + "\n      now      " + JSON.stringify(x.to), 40);
 dump("non-string values changed", report.nonStringChanged, (x) => x.file + "  " + x.key + "  " + x.from + " -> " + x.to, 20);
 dump("control-code pollution", report.codePollution, (x) => x.file + "  " + x.key + "\n      lost " + JSON.stringify(x.lost) + "  added " + JSON.stringify(x.added) + "\n      original " + JSON.stringify(x.from) + "\n      now      " + JSON.stringify(x.to), 40);

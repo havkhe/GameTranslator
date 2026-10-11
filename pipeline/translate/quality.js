@@ -82,6 +82,60 @@ function promptFragments(template) {
 }
 
 /**
+ * Bigrams of the cycle the model falls into when it degenerates.
+ *
+ * Taken from the values themselves rather than invented: each pair below is consecutive inside a
+ * stored value such as 「本解学篇义文明文\n汉例语子语式示译」, and together they trace one cycle over a
+ * vocabulary of translation-methodology words (汉语 / 例句 / 语法 / 句式 / 示译 / 句构 / 翻译 …).
+ * Longer windows wrap around the cycle, which is why a single value can hold several of these.
+ */
+const DEGENERATE_BIGRAMS = [
+  "汉例", "例语", "语子", "子语", "语式", "式示", "示译", "译句", "句构", "构方",
+  "方容", "容翻", "翻汇", "汇结", "结达", "达内", "内释", "释词", "词章", "章表",
+  "表本", "本解", "解学", "学篇", "篇义", "义文", "文明", "明文", "文落", "落语",
+  "译说", "说言", "言段", "段法",
+  // The cycle is a loop, so the pair that closes it counts as well: 段法{法汉}汉例. Leaving it out
+  // let 「段法汉例」 through, which is a window that straddles the join.
+  "法汉",
+];
+const DEGENERATE_SET = new Set(DEGENERATE_BIGRAMS);
+const KANA_ANY = /[\u3040-\u309f\u30a0-\u30fa\uff66-\uff9f]/;   // ー (30fc) and ・ (30fb) excluded: they decorate a Han-only value
+// Ordinary Chinese function words. Their presence means the text is a sentence, not word salad.
+const CN_FUNC = /[的了是在我你他她它们这那就都也很不没和与跟对把被给到从之其于并且但所以因为如果]/;
+const NON_HAN = /[，。、；：！？…‥—～·「」『』（）〈〉《》,.;:!?\s\dA-Za-z０-９；]/;
+// ー (prolonged sound mark) and ・ are tolerated inside a Han-only value: the observed windows
+// sometimes end on one ("义文明文ー"), and neither carries lexical content on its own.
+const TOLERATED = /[\u30fc\u30fb]/g;
+
+/**
+ * Does this value look like the degeneration cycle rather than a translation?
+ *
+ * Requires all of: Han only (plus a trailing prolonged sound mark), no punctuation or digits or
+ * Latin, no ordinary function word, at least FOUR characters, and THREE distinct cycle bigrams.
+ * Three rather than two because a lone ordinary word can supply one bigram (「文明」 contains both
+ * 文明 and 明文), and requiring three keeps that kind of coincidence out while still catching the
+ * shortest observed window (「汉例语子语式」 carries four). Four characters rather than five
+ * because windows of that length occur too (「句构方容」, 「义文明文」).
+ *
+ * Measured on the game that exposed this: 309 stored values match, every one of them word salad,
+ * and none of the 10 224 others do.
+ *
+ * @returns {string[]|null} the matched bigrams, or null when the value is not degenerate
+ */
+function degenerationMatches(value) {
+  const t = String(value == null ? "" : value).replace(TOLERATED, "");
+  if (t.length < 4) return null;
+  if (KANA_ANY.test(t) || NON_HAN.test(t) || CN_FUNC.test(t)) return null;
+  if (!/^[\u3400-\u9fff]+$/.test(t)) return null;
+  const hit = new Set();
+  for (let i = 0; i + 2 <= t.length; i++) {
+    const g = t.slice(i, i + 2);
+    if (DEGENERATE_SET.has(g)) hit.add(g);
+  }
+  return hit.size >= 3 ? Array.from(hit) : null;
+}
+
+/**
  * Which instruction fragment does `dst` echo, or "" when it echoes none.
  *
  * A fragment the SOURCE itself contains is not an echo: a game may legitimately ship a string that
@@ -231,6 +285,18 @@ function qualityCheck(src, dst, opts) {
   const echo = promptEchoMatches(d, s, opts && opts.promptFragments);
   if (echo) fatal.push("prompt-echo:" + echo.slice(0, 10));
 
+  // 9) the answer is the degeneration cycle, not a translation.
+  //
+  // Measured on a game translated by an earlier configuration: 351 data values and 309 cache
+  // entries held windows over the cycle below. 85 of them were player-visible — skill descriptions
+  // read 「本解学篇义文明文\n汉例语子语式示译」 — while the rest sat in event labels. The existing
+  // repetition rule misses this shape: no single character dominates and a window of eight to forty
+  // characters is far below its 120-character threshold. The current configuration no longer
+  // produces it (verified by re-asking four of the original sources), so this is a guard against
+  // the class, not a fix for a live cause.
+  const degen = degenerationMatches(d);
+  if (degen) fatal.push("degenerate:" + degen.slice(0, 3).join(","));
+
   return { fatal, warn };
 }
 
@@ -238,4 +304,5 @@ module.exports = {
   qualityCheck, looksLikeEnglish, contentLength, translatableSource,
   longestRepeatedPhrase, MIN_RATIO_CHECK, KANA_ALL, KANA_EVIDENCE, HAN,
   promptFragments, promptEchoMatches, PROMPT_ECHO_MARKERS,
+  degenerationMatches, DEGENERATE_BIGRAMS,
 };
