@@ -272,6 +272,9 @@ function ensureDataBackup(engine, gameDir) {
   let failCount = 0;
   const { cache, stats, fails } = await translate({
     entries, cacheFile: TRANS, port: PORT, template,
+    // The window's 暂停 drops this file; the translate loop waits while it exists. Per REQUEST, not per
+    // game, so the button takes effect in seconds instead of at the end of the current game.
+    pauseFile: path.join(WORK_DIR, "paused.flag"),
     // The UI reads PROGRESS to drive its progress bar and status line, exactly as it
     // did with the v2 pipeline, so the line format is kept identical.
     onProgress: (s) => {

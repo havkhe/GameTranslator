@@ -5,6 +5,7 @@
 // This is stronger than a screenshot for layout questions — it names what is present.
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
@@ -437,6 +438,42 @@ namespace GameTranslatorV3.UiCheck
                     int n = 0;
                     foreach (var o in none) n++;
                     Assert(n == 0, "无人监听的端口返回空列表（实际 " + n + "）");
+                }
+            }
+
+            Console.WriteLine("");
+            Console.WriteLine("=== 暂停是真的会停（协作式标记文件）===");
+            // Pausing only between games meant the button looked dead for as long as the current game took,
+            // which on a large one is hours — reported as "暂停失效". The window now drops a flag the
+            // translate loop watches between REQUESTS, so this checks the file really appears and goes away.
+            {
+                var pauseM = typeof(MainForm).GetMethod("Pause", BindingFlags.NonPublic | BindingFlags.Instance);
+                var resumeM = typeof(MainForm).GetMethod("Resume", BindingFlags.NonPublic | BindingFlags.Instance);
+                var pathP = typeof(MainForm).GetProperty("PauseFlagPath", BindingFlags.NonPublic | BindingFlags.Instance);
+                var clearM = typeof(MainForm).GetMethod("ClearStalePauseFlag", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(pauseM != null && resumeM != null && pathP != null && clearM != null,
+                    "找到 Pause / Resume / PauseFlagPath / ClearStalePauseFlag（反射）");
+                if (pauseM != null && resumeM != null && pathP != null)
+                {
+                    string flag = Convert.ToString(pathP.GetValue(form, null));
+                    Console.WriteLine("        标记文件: " + flag);
+                    Assert(!string.IsNullOrEmpty(flag) && Path.GetFileName(flag) == "paused.flag",
+                        "标记文件名为 paused.flag");
+                    // start from a known state
+                    if (File.Exists(flag)) File.Delete(flag);
+                    pauseM.Invoke(form, null);
+                    Assert(File.Exists(flag), "点「暂停」后标记文件出现");
+                    resumeM.Invoke(form, null);
+                    Assert(!File.Exists(flag), "点「继续」后标记文件消失");
+                    // and a leftover flag is dropped when a run starts, or the next run would wait forever
+                    File.WriteAllText(flag, "leftover");
+                    if (clearM != null) clearM.Invoke(form, null);
+                    Assert(!File.Exists(flag), "运行开始时清除遗留标记");
+                    // the pipeline must be watching this exact path
+                    var pipeJs = File.ReadAllText(Path.Combine(root, "pipeline", "index.js"));
+                    Assert(pipeJs.Contains("paused.flag"), "管线读取同一个 paused.flag");
+                    var trJs = File.ReadAllText(Path.Combine(root, "pipeline", "translate", "index.js"));
+                    Assert(trJs.Contains("waitWhilePaused"), "translate 阶段实现了 waitWhilePaused");
                 }
             }
 

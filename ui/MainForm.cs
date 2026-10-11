@@ -86,6 +86,8 @@ namespace GameTranslatorV3
         private Button _btnNewGroupAddSel, _btnAddSelToGroup, _btnRemoveSel, _btnClearQueue, _btnSkipGroup, _btnStartQueue;
         private CancellationTokenSource _cts;
         private bool _paused, _running;
+        /// <summary>True while 检查翻译 runs — it is synchronous, so pause/resume cannot act.</summary>
+        private bool _checking;
         private ToolTip _tips;
 
         public MainForm(string root)
@@ -1201,7 +1203,14 @@ namespace GameTranslatorV3
 
                 // rate from the last progress report, not from the batch start: a batch is
                 // overwhelmingly dominated by whichever game is running now.
-                if (_lastProgressAt != DateTime.MinValue && _lastProgressCount > 0)
+                if (_paused)
+                {
+                    // The pause is cooperative and per request, so this is true within seconds of the click.
+                    // Showing it here is what tells the user the button worked during a long game, where the
+                    // old game-level pause left the display unchanged for as long as the game ran.
+                    _lblRate.Text = "速度：已暂停（当前请求结束后不再发出新请求）";
+                }
+                else if (_lastProgressAt != DateTime.MinValue && _lastProgressCount > 0)
                 {
                     var span = (DateTime.Now - _lastProgressAt).TotalMinutes;
                     if (span > 0.05 && _gameTotal > 0)
@@ -1231,6 +1240,8 @@ namespace GameTranslatorV3
             _barGame.Value = 0;
             _lblBatch.Text = "批次：准备中…";
             _lblCurrent.Text = "当前：—";
+            // A run must never inherit a pause from a previous one.
+            ClearStalePauseFlag();
             // The reference panel describes one run, so it is emptied when one starts.
             ClearPairs();
         }
@@ -1624,8 +1635,10 @@ namespace GameTranslatorV3
             _btnStartSel.Enabled = !_running && checkedGames > 0;
             _btnStartAll.Enabled = !_running && _games.Count > 0;
             _btnStop.Enabled = _running;
-            _btnPause.Enabled = _running && !_paused;
-            _btnResume.Enabled = _running && _paused;
+            // 检查翻译 runs synchronously on this thread, so a click could not even be processed while it
+            // works — the two buttons would be enabled and do nothing. They say so instead.
+            _btnPause.Enabled = _running && !_paused && !_checking;
+            _btnResume.Enabled = _running && _paused && !_checking;
             _btnCheck.Enabled = !_running && checkedGames > 0;
 
             // While a run is going, the list stays usable: scrolling, selecting, the right-click menu,
@@ -1687,7 +1700,8 @@ namespace GameTranslatorV3
             Tip(_btnUninstall, "把勾选的那一个游戏还原成日文原版（需先勾选恰好一个）。");
             Tip(_btnRestore, "把勾选的那一个游戏切回汉化版（需先勾选恰好一个）。");
             Tip(_btnStop, "停止整个批次。已经完成的译文会保留。");
-            Tip(_btnPause, "让当前请求跑完后不再开始下一个游戏。");
+            Tip(_btnPause, "暂停翻译：当前这一条请求结束后不再发出新请求（通常几秒内生效），进度与缓存都保留。\n" +
+                           "「继续」从停下的地方接着跑。要彻底停下用「终止」。");
 
             // The queue panel. The two 加入 buttons are the ones that deliberately keep working during
             // a run, so their tips say so rather than saying "unavailable while running".
@@ -2468,6 +2482,9 @@ namespace GameTranslatorV3
         {
             var list = _games.Where(g => g.Checked).ToList();
             if (list.Count == 0) { MessageBox.Show(this, "请先勾选游戏。", "提示"); return; }
+            // 暂停 cannot act here: this method runs synchronously and the window is not pumping messages,
+            // so the buttons are disabled for its duration rather than left clickable but dead.
+            _checking = true;
             _running = true; UpdateButtons();
             foreach (var g in list)
             {
@@ -2499,11 +2516,71 @@ namespace GameTranslatorV3
                     _runner.LogError("质检 " + g.Name + " 失败：" + ex.Message);
                 }
             }
+            _checking = false;
             _running = false; UpdateButtons();
         }
 
-        private void Pause() { _paused = true; AppendLog("⏸ 已暂停：当前请求完成后不再开始下一个游戏。"); UpdateButtons(); }
-        private void Resume() { _paused = false; AppendLog("▶ 已继续。"); UpdateButtons(); }
+        private void Pause()
+        {
+            _paused = true;
+            WritePauseFlag(true);
+            AppendLog("⏸ 已暂停：当前这一条请求结束后不再发出新请求（通常几秒内）。点「继续」恢复。");
+            UpdateButtons();
+        }
+
+        private void Resume()
+        {
+            _paused = false;
+            WritePauseFlag(false);
+            AppendLog("▶ 已继续。");
+            UpdateButtons();
+        }
+
+        /// <summary>
+        /// The file the translate loop watches, next to the other work files.
+        ///
+        /// The pipeline is a separate process, so a pause has to be cooperative: the window drops this file
+        /// and the loop waits between requests (pipeline/translate/index.js waitWhilePaused). Per-request
+        /// granularity is the point — pausing only between games meant the button looked dead for as long as
+        /// the current game took, which on a large one is hours.
+        /// </summary>
+        private string PauseFlagPath
+        {
+            get { return Path.Combine(_settings.WorkDir, "paused.flag"); }
+        }
+
+        /// <summary>Create or remove the pause flag, reporting a failure instead of pausing silently.</summary>
+        private void WritePauseFlag(bool paused)
+        {
+            try
+            {
+                if (paused)
+                {
+                    Directory.CreateDirectory(_settings.WorkDir);
+                    File.WriteAllText(PauseFlagPath, "paused " + DateTime.Now.ToString("s"), new UTF8Encoding(false));
+                }
+                else if (File.Exists(PauseFlagPath)) File.Delete(PauseFlagPath);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("暂停标记写入失败（暂停可能不生效）：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Drop a flag left behind by a run that was paused when it died. Without this the next run would
+        /// sit waiting for a 「继续」 nobody pressed.
+        /// </summary>
+        private void ClearStalePauseFlag()
+        {
+            try
+            {
+                if (!File.Exists(PauseFlagPath)) return;
+                File.Delete(PauseFlagPath);
+                AppendLog("已清除上一次运行遗留的暂停标记。");
+            }
+            catch (Exception ex) { AppendLog("清除暂停标记失败：" + ex.Message); }
+        }
 
         private void Stop()
         {
@@ -2511,6 +2588,10 @@ namespace GameTranslatorV3
             if (MessageBox.Show(this, "确定终止当前批次？已经完成的译文会保留，下次可从进度继续。",
                     "终止", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
             AppendLog("■ 正在终止…");
+            // Clear the pause first: a pause left standing would make the next run wait for a 「继续」
+            // nobody pressed.
+            _paused = false;
+            WritePauseFlag(false);
             _cts.Cancel();
             _runner.StopCurrent();
         }

@@ -67,6 +67,25 @@ function mayBeChineseAlready(s) {
 }
 
 /**
+ * Cooperative pause: wait while the window's flag file exists.
+ *
+ * Pausing between GAMES was the only granularity before, so on a large game the button looked dead for as
+ * long as that game took — measured elsewhere in this project, one game ran 58 minutes, and the user
+ * reported the pause as broken while it was simply waiting for the game to end. Waiting per request makes
+ * the delay the length of one request (seconds), which is what the button promises, and the run resumes
+ * exactly where it stopped because nothing is torn down.
+ *
+ * The flag lives in the work directory, whose path the caller already passes for every other work file.
+ */
+async function waitWhilePaused(flag) {
+  if (!flag) return;
+  if (!fs.existsSync(flag)) return;
+  console.log("PAUSED 已暂停：当前请求结束后不再发出新请求（点「继续」恢复）");
+  while (fs.existsSync(flag)) await new Promise((r) => setTimeout(r, 500));
+  console.log("RESUMED 已继续");
+}
+
+/**
  * Translate a list of entries.
  *
  * @param {object} o
@@ -74,6 +93,7 @@ function mayBeChineseAlready(s) {
  * @param {string} o.cacheFile
  * @param {number} o.port
  * @param {string} [o.template] prompt template containing {lines}
+ * @param {string} [o.pauseFile] while this file exists, no new request is sent
  * @param {function} [o.onProgress]  called after every request
  * @returns {Promise<{cache, stats, fails}>}
  */
@@ -306,6 +326,7 @@ async function translate(o) {
   const SAVE_INTERVAL_MS = 20000;
   let lastSaveAt = Date.now();
   for (let i = 0; i < groups.length; i++) {
+    await waitWhilePaused(o.pauseFile);      // the window's 暂停, honoured between requests
     await run(groups[i], 0);
     const now = Date.now();
     if (now - lastSaveAt >= SAVE_INTERVAL_MS || i === groups.length - 1) {
