@@ -1070,6 +1070,20 @@ namespace GameTranslatorV3
         private bool _modelUp;
         private DateTime _modelProbeAt = DateTime.MinValue;
         private bool _modelProbeBusy;
+        /// <summary>
+        /// The model file the SERVER reports it loaded (`/props` → model_path), or null when unknown.
+        ///
+        /// This is not the same as the selection. The panel used to show `_settings.Model`, i.e. whatever
+        /// the dropdown said — so after picking a smaller model and pressing 启动模型 the window would read
+        /// 「模型：Hy-MT2-1.8B-Q8_0」 while the requests were still answered by the model that was already
+        /// loaded. Measured on this machine: two llama-server processes can occupy one port at the same time
+        /// (llama.cpp sets SO_REUSEADDR and Windows permits the second bind), so both models sat in a 6 GB
+        /// card — 5,899 / 6,144 MiB used — and the traffic kept going to the older one. Asking the server
+        /// what it loaded is the only way to know.
+        /// </summary>
+        private string _serverModel;
+        /// <summary>True when the model the server reports differs from the one selected in the dropdown.</summary>
+        private bool _modelMismatch;
 
         private void UpdateModelState()
         {
@@ -1081,6 +1095,7 @@ namespace GameTranslatorV3
                 System.Threading.Tasks.Task.Run(() =>
                 {
                     bool up = false;
+                    string loaded = null;
                     try
                     {
                         using (var c = new System.Net.Sockets.TcpClient())
@@ -1090,11 +1105,14 @@ namespace GameTranslatorV3
                         }
                     }
                     catch { up = false; }
+                    // What the server actually loaded. Read-only and one short request every few seconds.
+                    if (up) loaded = AskLoadedModel(port);
                     try
                     {
                         BeginInvoke(new Action(() =>
                         {
                             _modelUp = up;
+                            _serverModel = loaded;
                             _modelProbeAt = DateTime.Now;
                             _modelProbeBusy = false;
                             ApplyModelState();
@@ -1106,12 +1124,63 @@ namespace GameTranslatorV3
             ApplyModelState();
         }
 
+        /// <summary>The model file the server says it loaded, or null. Runs off the UI thread.</summary>
+        private static string AskLoadedModel(int port)
+        {
+            try
+            {
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(
+                    "http://127.0.0.1:" + port + "/props");
+                req.Timeout = 2500;
+                req.ReadWriteTimeout = 2500;
+                req.Method = "GET";
+                using (var resp = req.GetResponse())
+                using (var sr = new System.IO.StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                {
+                    var props = SimpleJson.ParseFlat(sr.ReadToEnd());
+                    string path = SimpleJson.Get(props, "model_path");
+                    return string.IsNullOrEmpty(path) ? null : Path.GetFileName(path);
+                }
+            }
+            catch { return null; }
+        }
+
         /// <summary>Paint the model state from the cached reading. No I/O, safe to call anywhere.</summary>
         private void ApplyModelState()
         {
             if (_lblModelState == null) return;
-            _lblModelState.Text = _modelUp ? "状态：已就绪" : "状态：未启动";
-            _lblModelState.ForeColor = _modelUp ? Color.SeaGreen : Color.DimGray;
+            string selected = _settings.Model ?? "";
+            if (!_modelUp)
+            {
+                _lblModelState.Text = "状态：未启动";
+                _lblModelState.ForeColor = Color.DimGray;
+                _modelMismatch = false;
+            }
+            else if (string.IsNullOrEmpty(_serverModel))
+            {
+                // Answering, but /props could not be read: say so instead of implying the selection is what
+                // is running.
+                _lblModelState.Text = "状态：已就绪（模型未知）";
+                _lblModelState.ForeColor = Color.SeaGreen;
+                _modelMismatch = false;
+            }
+            else if (!string.Equals(_serverModel, selected, StringComparison.OrdinalIgnoreCase))
+            {
+                // The lie this label used to tell. Name both, and colour it as a problem.
+                _lblModelState.Text = "状态：已就绪（实际 " + _serverModel + "，非所选 " + selected + "）";
+                _lblModelState.ForeColor = Color.FromArgb(200, 90, 0);
+                _modelMismatch = true;
+            }
+            else
+            {
+                _lblModelState.Text = "状态：已就绪（" + _serverModel + "）";
+                _lblModelState.ForeColor = Color.SeaGreen;
+                _modelMismatch = false;
+            }
+            Tip(_lblModelState, _modelMismatch
+                ? "端口 " + _settings.Port + " 上的服务加载的是「" + _serverModel + "」，不是下拉里选的「" + selected + "」。\n" +
+                  "翻译实际用的是前者。要让选择生效：点「停止模型」，或若该服务不是本程序启动的，先用任务管理器结束它，再点「启动模型」。"
+                : "下拉里选中的模型就是服务实际加载的模型。");
             _btnModelStart.Enabled = !_running;
             _btnModelStop.Enabled = !_running && _modelUp;
         }
@@ -2475,8 +2544,41 @@ namespace GameTranslatorV3
                 if (!File.Exists(modelPath)) { MessageBox.Show(this, "未找到模型文件：\n" + modelPath); return; }
 
                 // Replace any server this app previously started, so switching models takes
-                // effect. A server started elsewhere is left alone.
+                // effect. A server started elsewhere is left alone — but if one is HOLDING THE PORT it has
+                // to go, or the new server binds alongside it and nothing changes.
+                //
+                // Windows permits a second bind on the same port here (llama.cpp sets SO_REUSEADDR), so this
+                // does not fail loudly: measured on this machine, the previous model and the newly started
+                // one both listened on 18080, both sat in a 6 GB card (5,899 / 6,144 MiB used), and every
+                // request still went to the older one while the window reported the new model as ready.
                 StopLlama(quiet: true);
+                if (IsPortOpen())
+                {
+                    var owners = PortOwners(_settings.Port);
+                    string who = owners.Count > 0
+                        ? string.Join("、", owners.Select(p => "PID " + p).ToArray())
+                        : "另一个进程";
+                    var answer = MessageBox.Show(this,
+                        "端口 " + _settings.Port + " 已被" + who + "占用，但它不是本程序启动的模型服务" +
+                        (string.IsNullOrEmpty(_serverModel) ? "" : "（它加载的是 " + _serverModel + "）") + "。\n\n" +
+                        "Windows 允许两个服务同时监听一个端口，所以继续启动不会报错 —— 结果是两个模型都占着显存，" +
+                        "而翻译仍然由旧的那个应答。\n\n" +
+                        "是 = 结束" + who + "，然后加载「" + model + "」\n" +
+                        "否 = 什么都不做（保持现状）",
+                        "端口已被占用", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    if (answer != DialogResult.Yes) return;
+                    foreach (var p in owners) KillProcessTree(p);
+                    for (int i = 0; i < 20 && IsPortOpen(); i++) System.Threading.Thread.Sleep(250);
+                    if (IsPortOpen())
+                    {
+                        MessageBox.Show(this,
+                            "端口 " + _settings.Port + " 仍然被占用，无法启动新模型。\n\n" +
+                            "请手动结束占用它的进程后重试。", "仍然被占用", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    AppendLog("已结束占用端口 " + _settings.Port + " 的进程" +
+                        (owners.Count > 0 ? "（" + string.Join("、", owners.Select(p => "PID " + p).ToArray()) + "）" : "") + "。");
+                }
 
                 var psi = new ProcessStartInfo(exe)
                 {
@@ -2496,6 +2598,23 @@ namespace GameTranslatorV3
                 _settings.Model = model;
                 _runner.Model = model;
                 _settings.Save(_root);
+
+                // A process that dies within a couple of seconds never loads anything (a bad path, not
+                // enough memory for the offload). Say so instead of leaving 「加载中…」 on screen for a
+                // server that no longer exists.
+                System.Threading.Thread.Sleep(1500);
+                if (proc != null && proc.HasExited)
+                {
+                    string err = "模型进程启动后立即退出（退出码 " + proc.ExitCode + "）。加载失败，本次没有启动任何服务。";
+                    AppendLog("✖ " + model + "：" + err);
+                    _runner.LogError("启动模型服务失败：" + model + "  " + err);
+                    _lblModelState.Text = "状态：启动失败";
+                    _lblModelState.ForeColor = Color.Firebrick;
+                    MessageBox.Show(this, err + "\n\n常见原因：显存不足（先停掉其他模型服务）、模型文件损坏。",
+                        "启动失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
                 AppendLog("已启动模型服务：" + model + "（端口 " + _settings.Port + "）。加载需要 30-45 秒，管线会等待。");
                 _lblModelState.Text = "状态：加载中…";
                 _lblModelState.ForeColor = Color.DarkOrange;
@@ -2505,6 +2624,71 @@ namespace GameTranslatorV3
                 AppendLog("启动模型服务失败：" + ex.Message);
                 _runner.LogError("启动模型服务失败：" + ex.Message);
             }
+        }
+
+        // --- which process holds a local port --------------------------------------------------------
+        //
+        // Asked of iphlpapi in this process. The obvious alternative — parse `netstat -ano` — means
+        // spawning a shell command, and its output would also have to be matched through a localized header
+        // and state word.
+        [System.Runtime.InteropServices.DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern uint GetExtendedTcpTable(IntPtr table, ref int size, bool order, int family, int tableClass, int reserved);
+
+        private const int AF_INET = 2;
+        private const int TCP_TABLE_OWNER_PID_LISTENER = 3;
+        private const uint ERROR_INSUFFICIENT_BUFFER = 122;
+
+        /// <summary>
+        /// Every PID listening on a local IPv4 port.
+        ///
+        /// A LIST, not one PID, because two processes really can hold the same port on Windows: measured
+        /// here, the previous model and the newly started one both listened on 18080. Killing only one
+        /// would leave the port occupied and the takeover would look like it failed.
+        /// </summary>
+        private static List<int> PortOwners(int port)
+        {
+            var found = new List<int>();
+            int size = 0;
+            if (GetExtendedTcpTable(IntPtr.Zero, ref size, true, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) != ERROR_INSUFFICIENT_BUFFER
+                || size <= 0) return found;
+            IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+            try
+            {
+                if (GetExtendedTcpTable(buf, ref size, true, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) != 0) return found;
+                int rows = System.Runtime.InteropServices.Marshal.ReadInt32(buf);
+                // MIB_TCPTABLE_OWNER_PID: a DWORD count, then rows of six DWORDs —
+                // state, localAddr, localPort, remoteAddr, remotePort, owningPid.
+                long row = (long)buf + 4;
+                for (int i = 0; i < rows; i++, row += 24)
+                {
+                    uint localPort = (uint)System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)row, 8);
+                    // The port sits network-ordered in the low half of the DWORD.
+                    int p = ((int)(localPort & 0xFF) << 8) | (int)((localPort >> 8) & 0xFF);
+                    if (p != port) continue;
+                    int pid = System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)row, 20);
+                    if (pid > 0 && !found.Contains(pid)) found.Add(pid);
+                }
+            }
+            catch { }
+            finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+            return found;
+        }
+
+        /// <summary>The first PID listening on a port, or -1. For messages and checks.</summary>
+        private static int PortOwner(int port)
+        {
+            var all = PortOwners(port);
+            return all.Count > 0 ? all[0] : -1;
+        }
+
+        /// <summary>End a process. llama-server has no children, and Process.Kill needs no shell.</summary>
+        private void KillProcessTree(int pid)
+        {
+            try
+            {
+                using (var p = Process.GetProcessById(pid)) p.Kill();
+            }
+            catch (Exception ex) { AppendLog("结束进程 " + pid + " 失败：" + ex.Message); }
         }
 
         private void StopLlama() { StopLlama(false); }

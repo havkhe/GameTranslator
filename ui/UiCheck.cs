@@ -361,6 +361,86 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 模型状态必须反映服务器实际加载的模型 ===");
+            // The label used to show whatever the dropdown said. Measured on this machine: two llama-server
+            // processes can hold the same port (llama.cpp sets SO_REUSEADDR and Windows allows the second
+            // bind), so picking a smaller model and pressing 启动模型 loaded a second model into a 6 GB card
+            // while every request still went to the first. The label has to read the model from the server.
+            {
+                var apply = typeof(MainForm).GetMethod("ApplyModelState", BindingFlags.NonPublic | BindingFlags.Instance);
+                var ask = typeof(MainForm).GetMethod("AskLoadedModel", BindingFlags.NonPublic | BindingFlags.Static);
+                var ownerM = typeof(MainForm).GetMethod("PortOwner", BindingFlags.NonPublic | BindingFlags.Static);
+                var upField = typeof(MainForm).GetField("_modelUp", BindingFlags.NonPublic | BindingFlags.Instance);
+                var serverField = typeof(MainForm).GetField("_serverModel", BindingFlags.NonPublic | BindingFlags.Instance);
+                var state = Flatten(form).OfType<Label>().FirstOrDefault(l => (l.Text ?? "").StartsWith("状态："));
+                Assert(apply != null && ask != null && ownerM != null && upField != null && serverField != null,
+                    "找到 ApplyModelState / AskLoadedModel / PortOwner / _modelUp / _serverModel（反射）");
+                Assert(state != null, "找到模型状态标签：" + (state == null ? "无" : state.Text));
+                if (apply != null && upField != null && serverField != null && state != null)
+                {
+                    string selected = ReadSetting(form, "Model");
+
+                    // 1) nothing listening
+                    upField.SetValue(form, false);
+                    apply.Invoke(form, null);
+                    Assert(state.Text.Contains("未启动"), "未监听时显示未启动：" + state.Text);
+
+                    // 2) listening, and the server reports exactly what the dropdown selects
+                    upField.SetValue(form, true);
+                    serverField.SetValue(form, selected);
+                    apply.Invoke(form, null);
+                    Assert(state.Text.Contains("已就绪") && !state.Text.Contains("非所选"),
+                        "实际模型与所选一致时不报警：" + state.Text);
+
+                    // 3) listening, but the server reports a DIFFERENT model — the case that misled
+                    string other = string.Equals(selected, "Hy-MT2-1.8B-Q8_0.gguf", StringComparison.OrdinalIgnoreCase)
+                        ? "Galtransl-v4-4B-2601.gguf" : "Hy-MT2-1.8B-Q8_0.gguf";
+                    serverField.SetValue(form, other);
+                    apply.Invoke(form, null);
+                    Assert(state.Text.Contains("实际") && state.Text.Contains("非所选"),
+                        "实际与所选不一致时明确标出：" + state.Text);
+                    Console.WriteLine("        不一致时的状态文字: " + state.Text);
+
+                    // 4) answering but /props unreadable must not imply the selection is running
+                    serverField.SetValue(form, null);
+                    upField.SetValue(form, true);
+                    apply.Invoke(form, null);
+                    Assert(state.Text.Contains("模型未知"), "读不到 /props 时说未知：" + state.Text);
+
+                    // leave the label as it was found
+                    serverField.SetValue(form, null);
+                    upField.SetValue(form, false);
+                    apply.Invoke(form, null);
+                }
+
+                // The port owner lookup is real: if something listens on the configured port, its PID must
+                // come back — this is what lets 启动模型 reclaim a port a previous run left behind. It
+                // returns a LIST because two processes can hold one port on Windows.
+                var ownersM = typeof(MainForm).GetMethod("PortOwners", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(ownersM != null, "找到 PortOwners（查找占用端口的进程）");
+                if (ownersM != null)
+                {
+                    int appPort = 0;
+                    int.TryParse(ReadSetting(form, "Port"), out appPort);
+                    var owners = (System.Collections.IEnumerable)ownersM.Invoke(null, new object[] { appPort });
+                    var list = new List<int>();
+                    foreach (var o in owners) list.Add(Convert.ToInt32(o));
+                    Console.WriteLine("        端口 " + appPort + " 的监听者: " + (list.Count == 0 ? "无" : string.Join("、", list.ConvertAll(x => "PID " + x).ToArray())));
+                    Assert(list.TrueForAll(p => p > 0), "返回的 PID 都是正数");
+                    foreach (var pid in list)
+                    {
+                        var proc = System.Diagnostics.Process.GetProcessById(pid);
+                        Assert(proc != null, "PID " + pid + " 可解析为进程：" + (proc == null ? "" : proc.ProcessName));
+                    }
+                    // and a port nobody listens on must come back empty
+                    var none = (System.Collections.IEnumerable)ownersM.Invoke(null, new object[] { 1 });
+                    int n = 0;
+                    foreach (var o in none) n++;
+                    Assert(n == 0, "无人监听的端口返回空列表（实际 " + n + "）");
+                }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
             Console.WriteLine("        标题: " + form.Text + "   尺寸: " + form.Size);
             Console.WriteLine("");
@@ -396,6 +476,28 @@ namespace GameTranslatorV3.UiCheck
         {
             var hit = form.Controls.Find(name, true);
             return hit.Length > 0 ? hit[0] : null;
+        }
+
+        /// <summary>
+        /// One value out of the form's Settings, via its field or its property — whichever the class uses.
+        /// Returns null when it cannot be read, so a caller can skip the assertion instead of guessing.
+        /// </summary>
+        private static string ReadSetting(Form form, string name)
+        {
+            try
+            {
+                var sf = typeof(MainForm).GetField("_settings", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (sf == null) return null;
+                object settings = sf.GetValue(form);
+                if (settings == null) return null;
+                var t = settings.GetType();
+                var f = t.GetField(name, BindingFlags.Public | BindingFlags.Instance);
+                if (f != null) return Convert.ToString(f.GetValue(settings));
+                var p = t.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
+                if (p != null) return Convert.ToString(p.GetValue(settings, null));
+            }
+            catch { }
+            return null;
         }
 
         /// <summary>The status line's text ("共 110 个游戏，已勾选 N 个").</summary>
