@@ -40,13 +40,32 @@ function runRuby(script, args, timeoutMs) {
   return stdout;
 }
 
-/** Is this string already Chinese (kanji-dominant, no kana)? */
-function isChineseLike(s) {
+/**
+ * Is this string already Chinese (kanji-dominant, no kana) — enough to skip it?
+ *
+ * A kana-free run of kanji is ambiguous: 剣 / 盾 / 薬 / 回復魔法 are Japanese words that happen to be
+ * written with the same characters the Chinese translation uses, and a title translated by another
+ * tool (MTool keeps its result inside the archive) really does yield Chinese source, and asking the
+ * model to translate Chinese into Chinese made it refuse — measured on one such game, 1,954 of 2,117
+ * entries were already Chinese.
+ *
+ * The MV side resolves this by only skipping PROSE (see translate/index.js mayBeChineseAlready and
+ * CHINESE_PROSE_MIN): a short kana-free term is sent rather than dropped. This side never got that
+ * change, so on a real VX Ace game 226 of the 905 collected strings — skill, item and enemy NAMES,
+ * the text the player reads in every menu — were discarded as "already Chinese" and never entered a
+ * translation task (docs/P25).
+ */
+function isChineseLike(s, minLength) {
   const t = String(s);
   if (/[\u3040-\u309f\u30a0-\u30ff]/.test(t)) return false;
   const han = (t.match(/[\u3400-\u9fff]/g) || []).length;
-  return han >= 2 && han * 2 >= t.replace(/\s/g, "").length;
+  if (!(han >= 2 && han * 2 >= t.replace(/\s/g, "").length)) return false;
+  // Only prose counts as "already Chinese"; a short term goes to the model.
+  return minLength === undefined ? true : t.length >= minLength;
 }
+
+/** The length from which a kana-free CJK string is treated as prose rather than a term (as in MV). */
+const CHINESE_PROSE_MIN = 12;
 
 /**
  * Extract translatable strings from a folder of .rvdata2/.rvdata files.
@@ -70,7 +89,7 @@ function extract(dataDir, root, workDir, extractJson) {
     // One prompt line per entry, so embedded breaks become spaces (see translate/index.js).
     const t = String(e.text).replace(/\r\n|\n|\r/g, " ");
     if (!R.isTranslatable(t)) { filtered++; continue; }
-    if (isChineseLike(t)) { skipped++; continue; }
+    if (isChineseLike(t, CHINESE_PROSE_MIN)) { skipped++; continue; }
     if (seen.has(t)) continue;
     seen.add(t);
     entries.push({ id: entries.length, file: e.file, path: e.path, text: t });
@@ -88,4 +107,4 @@ function patch(dataDir, root, workDir, extractJson, transJson, reportJson) {
   return out.trim();
 }
 
-module.exports = { extract, patch, runtimePaths, runRuby, isChineseLike };
+module.exports = { extract, patch, runtimePaths, runRuby, isChineseLike, CHINESE_PROSE_MIN };
