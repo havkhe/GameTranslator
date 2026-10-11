@@ -240,7 +240,13 @@ console.log("=== 汇总（" + rows.length + " 个游戏）===");
 for (const [k, n] of [...tally.entries()].sort((a, b) => b[1] - a[1])) console.log("  " + String(n).padStart(4) + "  " + k);
 
 if (outDir && outName) {
-  const target = A.writeJsonInside(outDir, outName, JSON.stringify(rows, null, 1));
-  console.log("");
-  console.log("已写出 " + target);
+  try {
+    const target = A.writeJsonInside(outDir, outName, JSON.stringify(rows, null, 1));
+    console.log("");
+    console.log("已写出 " + target);
+  } catch (e) {
+    // One readable line rather than a Node stack trace in the UI log.
+    console.error("写出状态文件失败：" + (e && e.message ? e.message : e));
+    process.exit(1);
+  }
 }

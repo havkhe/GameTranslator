@@ -837,6 +837,11 @@ namespace GameTranslatorV3
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // Node writes UTF-8. Without this the reader decodes it with the console's ANSI code
+                // page, so every Chinese line arrives as 「姹囨€伙紙110 涓父鎴忥級」 — the same trap as
+                // the .bat encoding one, and it is set here and in the pipeline reader for that reason.
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 WorkingDirectory = _root
             };
             try

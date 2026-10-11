@@ -112,8 +112,27 @@ function writeJsonInside(dir, name, data) {
   if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) throw new Error("not a directory: " + base);
   const target = path.resolve(base, path.basename(name));
   if (target !== base && !target.startsWith(base + path.sep)) throw new Error("refusing write outside " + base + ": " + name);
-  fs.writeFileSync(target, data, "utf8");
-  return target;
+  // Write, then move into place, and retry a few times.
+  //
+  // On Windows a plain write onto a file another process is holding raises EPERM, and that happens
+  // for real: clicking 刷新状态 twice, or while a second instance is open, puts two writers on this
+  // one file. Without the retry the loser dumps an EPERM stack trace into the UI log instead of the
+  // summary, which is how this was noticed.
+  const tmp = target + "." + process.pid + ".tmp";
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      fs.writeFileSync(tmp, data, "utf8");
+      fs.renameSync(tmp, target);
+      return target;
+    } catch (e) {
+      lastErr = e;
+      try { fs.unlinkSync(tmp); } catch (e2) { }
+      const until = Date.now() + 150 * attempt;
+      while (Date.now() < until) { /* brief backoff, synchronously: this tool is short-lived */ }
+    }
+  }
+  throw new Error("无法写入 " + target + "（另一进程正在占用？）：" + (lastErr && lastErr.code ? lastErr.code : lastErr));
 }
 
 /** Write a text file as `<dir>/<name>`, same guards as writeJsonInside but for any .js/.json name. */
