@@ -79,11 +79,18 @@ namespace GameTranslatorV3.UiCheck
             Console.WriteLine("=== 游戏列表（虚拟模式）===");
             // Virtual mode is what keeps start-up at about a second: rows are produced on demand
             // instead of being pushed into the native control, which cost ~300 ms per row.
+            //
+            // The game list is picked out by VirtualMode rather than by position: the 翻译对照 panel added
+            // a second ListView, and taking lists[0] would silently depend on which pane the walk reaches
+            // first.
             var lists = all.OfType<ListView>().ToList();
-            Assert(lists.Count == 1, "恰好一个 ListView 数量=" + lists.Count);
-            if (lists.Count == 1)
+            var gameList = lists.FirstOrDefault(l => l.VirtualMode);
+            Assert(gameList != null, "存在游戏列表（VirtualMode=true）数量=" + lists.Count(l => l.VirtualMode));
+            Assert(lists.Count(l => l.VirtualMode) == 1, "恰好一个虚拟列表（游戏列表）");
+            Assert(lists.Count == 2, "列表控件共 2 个（游戏列表 + 翻译对照）实际=" + lists.Count);
+            if (gameList != null)
             {
-                var lv = lists[0];
+                var lv = gameList;
                 Assert(lv.VirtualMode, "列表处于虚拟模式 (VirtualMode=true)");
                 // The check is drawn as a character in the first column, not as the native themed box:
                 // at 200 % display scaling the native glyph rendered as nothing on the machine this was
@@ -134,8 +141,9 @@ namespace GameTranslatorV3.UiCheck
 
             Console.WriteLine("");
             Console.WriteLine("=== 勾选交互（不依赖原生复选框）===");
+            if (gameList != null)
             {
-                var lv = lists[0];
+                var lv = gameList;
                 // Toggling must change the model and be reflected in the count line — the two things the
                 // row click does. Exercised through the same private method the click handlers call, so
                 // this covers the action itself even though a click cannot be synthesised here.
@@ -177,8 +185,17 @@ namespace GameTranslatorV3.UiCheck
                 Assert(buttons.Any(t => t.Contains(want)), "队列按钮存在：" + want);
 
             Assert(byText.ContainsKey("跳过本组") && !byText["跳过本组"].Enabled, "未运行时「跳过本组」为禁用");
-            Assert(byText.ContainsKey("开始队列") && !byText["开始队列"].Enabled, "队列为空时「开始队列」为禁用");
-            Assert(byText.ContainsKey("清空队列") && !byText["清空队列"].Enabled, "队列为空时「清空队列」为禁用");
+            // The queue is the user's, and this check runs against the real install: it may well already
+            // hold groups the user built. So these assert the INVARIANT (enabled exactly when the queue has
+            // something to act on) rather than an empty queue — an earlier version asserted "disabled
+            // because the queue is empty" and reported five failures the moment the feature was used.
+            var queueField0 = typeof(MainForm).GetField("_queue", BindingFlags.NonPublic | BindingFlags.Instance);
+            int groupsAtStart = queueField0 == null ? 0 : ((System.Collections.IList)queueField0.GetValue(form)).Count;
+            Console.WriteLine("        开始时队列里已有 " + groupsAtStart + " 组（来自用户的 work\\queue.json）");
+            Assert(byText.ContainsKey("开始队列") && byText["开始队列"].Enabled == (groupsAtStart > 0),
+                "「开始队列」的可用性与「队列非空」一致（现有 " + groupsAtStart + " 组）");
+            Assert(byText.ContainsKey("清空队列") && byText["清空队列"].Enabled == (groupsAtStart > 0),
+                "「清空队列」的可用性与「队列非空」一致");
 
             var addNewGroup = typeof(MainForm).GetMethod("AddCheckedToNewGroup", BindingFlags.NonPublic | BindingFlags.Instance);
             var saveQueue = typeof(MainForm).GetMethod("SaveQueue", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -188,30 +205,33 @@ namespace GameTranslatorV3.UiCheck
                 "找到队列的私有成员（AddCheckedToNewGroup / SaveQueue / LoadQueue / _queue）");
             if (addNewGroup != null && saveQueue != null && loadQueue != null && queueField != null)
             {
-                // Exactly one game is checked at this point (the toggle test above left it that way),
-                // so one group with one member is what the button must produce.
+                // At least one game is checked at this point (the toggle test above left one ticked), so
+                // 新建组并加入选中 must append exactly one group holding the ticked games.
                 int checkedNow = CountChecked(form);
                 Console.WriteLine("        当前已勾选：" + checkedNow + " 个");
                 addNewGroup.Invoke(form, null);
                 var q = (System.Collections.IList)queueField.GetValue(form);
-                Assert(q.Count == 1, "新建组后队列有 1 组（实际 " + q.Count + "）");
-                if (q.Count == 1)
+                Assert(q.Count == groupsAtStart + 1, "新建组后组数 +1（" + groupsAtStart + " → " + q.Count + "）");
+                if (q.Count > groupsAtStart)
                 {
-                    var grp = q[0];
+                    var grp = q[q.Count - 1];                       // the group just appended
                     var tasks = (System.Collections.IList)grp.GetType().GetField("Tasks").GetValue(grp);
                     Assert(tasks.Count == checkedNow && tasks.Count > 0,
-                        "该组包含勾选的 " + checkedNow + " 个任务（实际 " + tasks.Count + "）");
+                        "新组包含勾选的 " + checkedNow + " 个任务（实际 " + tasks.Count + "）");
                 }
                 Assert(trees.Count == 1 && trees[0].Nodes.Count == q.Count,
                     "树里有 " + q.Count + " 个组节点");
                 if (trees.Count == 1 && trees[0].Nodes.Count > 0)
                 {
-                    Console.WriteLine("        组节点: " + trees[0].Nodes[0].Text);
-                    Assert(trees[0].Nodes[0].Text.Contains("第 1 组"), "组节点标明「第 1 组」：" + trees[0].Nodes[0].Text);
-                    Assert(trees[0].Nodes[0].Nodes.Count == checkedNow, "组节点下挂着成员");
+                    var last = trees[0].Nodes[trees[0].Nodes.Count - 1];
+                    Console.WriteLine("        新组节点: " + last.Text);
+                    Assert(last.Text.Contains("第 " + q.Count + " 组"),
+                        "新组节点编号正确：" + last.Text);
+                    Assert(last.Nodes.Count == checkedNow, "新组节点下挂着勾选的成员");
                 }
                 var sumText = all.OfType<Label>().Select(l => l.Text ?? "").FirstOrDefault(t => t.StartsWith("队列")) ?? "";
-                Assert(sumText.Contains("1 组") && sumText.Contains("个任务"), "摘要显示组数与任务数：" + sumText);
+                Assert(sumText.Contains(q.Count + " 组") && sumText.Contains("个任务"),
+                    "摘要显示组数与任务数：" + sumText);
                 update.Invoke(form, null);
                 Assert(byText["开始队列"].Enabled, "队列非空后「开始队列」可用");
                 Assert(byText["清空队列"].Enabled, "队列非空后「清空队列」可用");
@@ -242,7 +262,7 @@ namespace GameTranslatorV3.UiCheck
             {
                 runningField2.SetValue(form, true);
                 update2.Invoke(form, null);
-                Assert(lists[0].Enabled, "运行中：游戏列表仍可滚动/选择/右键");
+                Assert(gameList != null && gameList.Enabled, "运行中：游戏列表仍可滚动/选择/右键");
                 Assert(byText["全选"].Enabled && byText["取消全选"].Enabled, "运行中：全选/取消全选可用");
                 Assert(byText["终止"].Enabled && byText["暂停"].Enabled, "运行中：终止/暂停可用");
                 Assert(!byText["扫描全部路径"].Enabled && !byText["添加游戏"].Enabled && !byText["刷新状态"].Enabled,
@@ -291,6 +311,56 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 翻译对照面板（实时显示原文/译文）===");
+            {
+                var srcBox = FindControl(form, "pairSrc") as TextBox;
+                var dstBox = FindControl(form, "pairDst") as TextBox;
+                var list = FindControl(form, "pairList") as ListView;
+                var auto = FindControl(form, "pairAuto") as CheckBox;
+                var count = FindControl(form, "pairCount") as Label;
+                var log = FindControl(form, "log") as TextBox;
+                Assert(srcBox != null && dstBox != null, "有原文/译文两个显示框");
+                Assert(list != null, "有历史对照列表");
+                Assert(auto != null && auto.Checked, "有「自动滚动」开关且默认开启");
+                Assert(count != null && count.Text.Contains("0 条"), "有计数标签且初值为 0");
+                Assert(srcBox != null && dstBox != null && srcBox.ReadOnly && dstBox.ReadOnly, "两个对照框只读");
+                Assert(srcBox != null && srcBox.Multiline, "对照框可显示多行");
+                Assert(log != null, "找到日志框（用于确认 PAIR 不进日志）");
+
+                // Drive the real display path with the line the pipeline emits, so both the parse and the
+                // widgets are exercised. The text deliberately contains a quote and a newline: the pipeline
+                // escapes them through JSON.stringify, and that is the property that keeps one pair on one
+                // output line.
+                var onLine = typeof(MainForm).GetMethod("OnPipelineLine", BindingFlags.NonPublic | BindingFlags.Instance);
+                var clear = typeof(MainForm).GetMethod("ClearPairs", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(onLine != null && clear != null, "找到 OnPipelineLine / ClearPairs（反射）");
+                if (onLine != null && list != null && srcBox != null && dstBox != null && count != null && log != null)
+                {
+                    string src = "\u300c\u304a\u306f\u3088\u3046\u3001\"\u5148\u751f\"\u300d\n\u4eca\u65e5\u306f\u3044\u3044\u5929\u6c17\u3067\u3059\u306d\u3002";
+                    string dst = "\u300c\u65e9\u4e0a\u597d\uff0c\u201c\u8001\u5e08\u201d\u300d\n\u4eca\u5929\u5929\u6c14\u771f\u597d\u3002";
+                    string logBefore = log.Text;
+                    onLine.Invoke(form, new object[] { PairLine(src, dst) });
+                    Assert(srcBox.Text == src, "原文框显示完整原文（含引号与换行）");
+                    Assert(dstBox.Text == dst, "译文框显示完整译文");
+                    Assert(list.Items.Count == 1, "历史列表新增 1 行，实际 " + list.Items.Count);
+                    Assert(list.Items.Count == 1 && list.Items[0].SubItems[0].Text.IndexOf('\n') < 0,
+                        "列表单元格把换行折成空格");
+                    Assert(count.Text.Contains("1 条"), "计数更新：" + count.Text);
+                    Assert(log.Text == logBefore, "PAIR 行没有进日志");
+
+                    onLine.Invoke(form, new object[] { PairLine("\u3042", "\u554a") });
+                    Assert(list.Items.Count == 2 && list.Items[0].SubItems[0].Text == "\u3042", "最新的排在最前");
+
+                    if (clear != null)
+                    {
+                        clear.Invoke(form, null);
+                        Assert(list.Items.Count == 0 && srcBox.Text == "" && count.Text.Contains("0 条"),
+                            "清空后对照面板回到初始状态");
+                    }
+                }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
             Console.WriteLine("        标题: " + form.Text + "   尺寸: " + form.Size);
             Console.WriteLine("");
@@ -321,12 +391,43 @@ namespace GameTranslatorV3.UiCheck
                     yield return x;
         }
 
+        /// <summary>A control by name, anywhere in the tree, or null. C# 5 has no local functions.</summary>
+        private static Control FindControl(Form form, string name)
+        {
+            var hit = form.Controls.Find(name, true);
+            return hit.Length > 0 ? hit[0] : null;
+        }
+
         /// <summary>The status line's text ("共 110 个游戏，已勾选 N 个").</summary>
         private static string GetStatusText(Form form)
         {
             var labels = Flatten(form).OfType<Label>().Select(l => l.Text ?? "");
             foreach (var t in labels) if (t.StartsWith("共 ")) return t;
             return "(not found)";
+        }
+
+        /// <summary>
+        /// The line the pipeline emits for one pair. Built here with the same escaping JSON.stringify does
+        /// on the other side, so the check exercises the real wire format rather than a simplified one.
+        /// </summary>
+        private static string PairLine(string src, string dst)
+        {
+            return "PAIR {\"src\":" + JsonStr(src) + ",\"dst\":" + JsonStr(dst) + "}";
+        }
+
+        private static string JsonStr(string s)
+        {
+            var outText = "\"";
+            foreach (var c in s ?? "")
+            {
+                if (c == '"') outText += "\\\"";
+                else if (c == '\\') outText += "\\\\";
+                else if (c == '\n') outText += "\\n";
+                else if (c == '\r') outText += "\\r";
+                else if (c == '\t') outText += "\\t";
+                else outText += c;
+            }
+            return outText + "\"";
         }
     }
 }

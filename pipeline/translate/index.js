@@ -103,6 +103,21 @@ async function translate(o) {
     fails.push({ hash: hashText(source), err: "quality:refused", text: String(source).slice(0, 40) });
   };
 
+  /**
+   * Store one finished pair and report it for display.
+   *
+   * Only values produced by THIS run are reported. A run served entirely from the cache produces nothing
+   * new, and the display saying so is the honest signal — the alternative (replaying cached pairs) would
+   * show thousands of pairs the run never translated.
+   */
+  const store = (source, value) => {
+    if (!cache.set(source, value)) { recordRefused(source); return false; }
+    if (typeof o.onPair === "function") {
+      try { o.onPair(String(source), String(value)); } catch (e) { /* display only: never fail a run */ }
+    }
+    return true;
+  };
+
   // Count attempts UP from zero.
   //
   // The first version counted DOWN and asked "is it exhausted?" as
@@ -216,8 +231,8 @@ async function translate(o) {
             const joined = st.got.join(e.__multi.breaks[0] !== undefined ? e.__multi.breaks[0] : "\n");
             if (B.contentLength(joined) < B.contentLength(target.text) * 0.25) {
               fails.push({ hash: hashText(target.text), err: "multiline-too-short", text: target.text.slice(0, 40) });
-            } else if (!cache.set(target.text, joined)) {
-              recordRefused(target.text);
+            } else {
+              store(target.text, joined);
             }
           }
         } else if (e.parent) {
@@ -227,12 +242,12 @@ async function translate(o) {
             const joined = st.got.join("");
             if (B.contentLength(joined) < B.contentLength(target.text) * 0.25) {
               fails.push({ hash: hashText(target.text), err: "parts-too-short", text: target.text.slice(0, 40) });
-            } else if (!cache.set(target.text, joined)) {
-              recordRefused(target.text);
+            } else {
+              store(target.text, joined);
             }
           }
-        } else if (!cache.set(target.text, decorated)) {
-          recordRefused(target.text);
+        } else {
+          store(target.text, decorated);
         }
       }
       // retry only the rejected lines, once

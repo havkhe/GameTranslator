@@ -278,6 +278,11 @@ function ensureDataBackup(engine, gameDir) {
       console.log("PROGRESS", s.cached, "/", entries.length,
         "REQUESTS", s.requests, "FAILURES", failCount);
     },
+    // Every pair this run produced is printed for the window's 翻译对照 panel, which shows the source and
+    // the translation side by side for reference. JSON.stringify escapes any newline or quote inside the
+    // text, so one pair is always exactly one output line — the window parses it with the same flat-JSON
+    // reader it uses for games-cache.json. The line never reaches the log; MainForm routes it.
+    onPair: (src, dst) => console.log("PAIR", JSON.stringify({ src, dst })),
   });
 
   // A save can be refused to protect an existing cache; report rather than hide it.

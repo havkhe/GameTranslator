@@ -56,6 +56,19 @@ namespace GameTranslatorV3
         private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck;
         private Button _btnUninstall, _btnRestore, _btnOpenLog, _btnClearLog, _btnSettings;
 
+        // ---- 翻译对照 ------------------------------------------------------------------------
+        //
+        // Shows the pair the run just produced: the source above, the translation below, and the recent
+        // pairs in a list for reference. Session only — nothing here is written to disk, and a pair is
+        // shown only when this run actually produced it (a run served from the cache displays nothing,
+        // which is the honest signal that it translated nothing new).
+        private TextBox _pairSrc, _pairDst;
+        private ListView _pairList;
+        private CheckBox _chkPairAuto;
+        private Label _lblPairCount;
+        private long _pairCount;
+        private const int PairHistoryMax = 200;
+
         // ---- grouped translation queue -------------------------------------------------------
         //
         // The one-shot batch above and this queue are separate paths on purpose: the old buttons keep
@@ -813,6 +826,7 @@ namespace GameTranslatorV3
             var logBox = new GroupBox { Dock = DockStyle.Fill, Text = "日志 / 错误", MinimumSize = new Size(0, 120) };
             _log = new TextBox
             {
+                Name = "log",
                 Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
                 ScrollBars = ScrollBars.Both, WordWrap = false,
                 Font = new Font("Consolas", 8.5f), BackColor = Color.FromArgb(250, 250, 250)
@@ -823,13 +837,119 @@ namespace GameTranslatorV3
             logBox.Controls.Add(_log);
             logBox.Controls.Add(logBar);
 
+            // ---- 翻译对照 --------------------------------------------------------
+            // The pair the run just produced. Two read-only boxes for the current pair — a column would
+            // cut a sentence off — plus the recent pairs below for scrolling back.
+            var pairBox = new GroupBox { Dock = DockStyle.Top, Height = 200, Text = "翻译对照（实时）", MinimumSize = new Size(0, 120) };
+
+            var pairTop = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2, RowCount = 2, Padding = new Padding(6, 4, 6, 0)
+            };
+            pairTop.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40f));
+            pairTop.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            _pairSrc = new TextBox
+            {
+                Name = "pairSrc", Dock = DockStyle.Fill, ReadOnly = true, Multiline = true,
+                Height = 36, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(252, 252, 252)
+            };
+            _pairDst = new TextBox
+            {
+                Name = "pairDst", Dock = DockStyle.Fill, ReadOnly = true, Multiline = true,
+                Height = 36, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(247, 252, 247)
+            };
+            pairTop.Controls.Add(new Label { Text = "原文", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            pairTop.Controls.Add(_pairSrc, 1, 0);
+            pairTop.Controls.Add(new Label { Text = "译文", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+            pairTop.Controls.Add(_pairDst, 1, 1);
+
+            _pairList = new ListView
+            {
+                Name = "pairList", Dock = DockStyle.Fill, View = View.Details,
+                FullRowSelect = true, GridLines = true, HideSelection = false,
+                ShowItemToolTips = true, MultiSelect = false
+            };
+            _pairList.Columns.Add("原文", 200);
+            _pairList.Columns.Add("译文", 200);
+            _pairList.Resize += (s, e) =>
+            {
+                if (_pairList.Columns.Count < 2) return;
+                int half = Math.Max(90, _pairList.ClientSize.Width / 2);
+                _pairList.Columns[0].Width = half;
+                _pairList.Columns[1].Width = Math.Max(90, _pairList.ClientSize.Width - half - 4);
+            };
+
+            var pairBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 28, WrapContents = false, Padding = new Padding(4, 2, 0, 0) };
+            _chkPairAuto = new CheckBox { Name = "pairAuto", Text = "自动滚动", Checked = true, AutoSize = true, Margin = new Padding(2, 4, 8, 0) };
+            var btnPairClear = MakeButton("清空对照", (s, e) => ClearPairs());
+            _lblPairCount = new Label { Name = "pairCount", AutoSize = true, Text = "本次已显示 0 条", TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(2, 7, 0, 0) };
+            pairBar.Controls.Add(_chkPairAuto);
+            pairBar.Controls.Add(btnPairClear);
+            pairBar.Controls.Add(_lblPairCount);
+
+            pairBox.Controls.Add(_pairList);
+            pairBox.Controls.Add(pairBar);
+            pairBox.Controls.Add(pairTop);
+            Tip(_pairSrc, "本次运行刚翻译的原文。只显示本次新产生的对照；全部命中缓存的一轮不会显示任何内容，说明没有新翻译。");
+            Tip(_pairList, "最近 " + PairHistoryMax + " 条：上面一行是最新的一条。勾上「自动滚动」会始终停在最新一条。");
+
             // Docked controls stack in reverse order of addition, so the log (fill) is
             // added first and the top rows last.
             host.Controls.Add(logBox);
             host.Controls.Add(actBox);
+            host.Controls.Add(pairBox);
             host.Controls.Add(progBox);
             host.Controls.Add(modelBox);
             return host;
+        }
+
+        /// <summary>
+        /// Show one newly produced pair.
+        ///
+        /// The pipeline emits `PAIR {"src":"…","dst":"…"}`, escaped by JSON.stringify, so one pair is
+        /// always exactly one output line whatever the text contains — including the newlines that make a
+        /// multi-line entry, which a tab- or pipe-separated format would have split.
+        /// </summary>
+        private void ShowPair(string json)
+        {
+            if (_pairSrc == null) return;
+            var obj = SimpleJson.ParseFlat(json);
+            string src = SimpleJson.Get(obj, "src");
+            string dst = SimpleJson.Get(obj, "dst");
+            if (string.IsNullOrEmpty(src) && string.IsNullOrEmpty(dst)) return;
+            _pairSrc.Text = src ?? "";
+            _pairDst.Text = dst ?? "";
+            _pairCount++;
+            if (_lblPairCount != null) _lblPairCount.Text = "本次已显示 " + _pairCount + " 条";
+            if (_pairList == null) return;
+            _pairList.BeginUpdate();
+            try
+            {
+                var it = new ListViewItem(Flatten(src));
+                it.SubItems.Add(Flatten(dst));
+                it.ToolTipText = src + "\n\n→ " + dst;
+                _pairList.Items.Insert(0, it);
+                while (_pairList.Items.Count > PairHistoryMax) _pairList.Items.RemoveAt(_pairList.Items.Count - 1);
+                if (_chkPairAuto == null || _chkPairAuto.Checked) _pairList.EnsureVisible(0);
+            }
+            finally { _pairList.EndUpdate(); }
+        }
+
+        /** One line for a cell: a ListView row cannot hold the line breaks a multi-line entry has. */
+        private static string Flatten(string s)
+        {
+            return (s ?? "").Replace("\r\n", " ").Replace("\r", " ").Replace("\n", " ");
+        }
+
+        /// <summary>Empty the reference panel. Called when a run starts, so it always describes that run.</summary>
+        private void ClearPairs()
+        {
+            _pairCount = 0;
+            if (_pairSrc != null) _pairSrc.Clear();
+            if (_pairDst != null) _pairDst.Clear();
+            if (_pairList != null) _pairList.Items.Clear();
+            if (_lblPairCount != null) _lblPairCount.Text = "本次已显示 0 条";
         }
 
         /// <summary>A grid of buttons: `columns` equal columns, as many rows as it takes.</summary>
@@ -1042,6 +1162,8 @@ namespace GameTranslatorV3
             _barGame.Value = 0;
             _lblBatch.Text = "批次：准备中…";
             _lblCurrent.Text = "当前：—";
+            // The reference panel describes one run, so it is emptied when one starts.
+            ClearPairs();
         }
 
         // ---------------------------------------------------------------- games ------
@@ -2632,6 +2754,7 @@ namespace GameTranslatorV3
             if (line.StartsWith("ATTEMPTS_EXHAUSTED")) { _skipCount++; AppendLog(line); return; }
             if (line.StartsWith("LLAMA_TIMINGS")) return;   // one per request: too noisy
             if (line.StartsWith("SKIPPED_ALREADY_TRANSLATED")) { AppendLog(line); return; }
+            if (line.StartsWith("PAIR ")) { ShowPair(line.Substring(5)); return; }   // the 对照 panel shows it
 
             AppendLog(line);
             if (line.StartsWith("TOTAL")) _status.Text = line;
