@@ -1591,8 +1591,10 @@ namespace GameTranslatorV3
                             Status = st.Item1.Length > 0 ? st.Item1 : "未检查",
                             StateNote = st.Item2,
                             // Nothing to translate when the game ships its own Chinese: sending it
-                            // through would replace official text with the model's.
-                            Skip = st.Item1 == "已是中文" || st.Item1 == "自带中文"
+                            // through would replace official text with the model's. StartsWith, so a
+                            // qualified name (已是中文（外置汉化）) still counts.
+                            Skip = st.Item1.StartsWith("已是中文", StringComparison.Ordinal) ||
+                                   st.Item1.StartsWith("自带中文", StringComparison.Ordinal)
                         });
                     }
                 }
@@ -1684,12 +1686,22 @@ namespace GameTranslatorV3
             // report file per repaint made scrolling and clicking feel heavy.
             if (!g.ProgressLoaded)
             {
-                int entries, done;
                 g.ProgressLoaded = true;
-                if (TryReadProgress(g, out entries, out done) && entries > 0)
+                // The report describes OUR last run. Showing its percentage next to a game whose data
+                // is Japanese (未汉化 / 未汉化（已还原）) or that someone else translated (已是中文 /
+                // 自带中文) made the list claim work that is not in the game — measured: 12 games read
+                // "已译 100%" while their data was byte-identical to the pristine original. The state
+                // has to say the work is ours before the number is shown.
+                bool ours = g.Status.StartsWith("已汉化", StringComparison.Ordinal) ||
+                            g.Status.StartsWith("部分汉化", StringComparison.Ordinal);
+                if (ours)
                 {
-                    g.ProgressText = ((int)Math.Round(100.0 * done / entries)) >= 100 ? "已译完" : (int)Math.Round(100.0 * done / entries) + "%";
-                    g.ProgressDetail = done + " / " + entries + " 条（" + Math.Round(100.0 * done / entries) + "%）";
+                    int entries, done;
+                    if (TryReadProgress(g, out entries, out done) && entries > 0)
+                    {
+                        g.ProgressText = ((int)Math.Round(100.0 * done / entries)) >= 100 ? "已译完" : (int)Math.Round(100.0 * done / entries) + "%";
+                        g.ProgressDetail = done + " / " + entries + " 条（" + Math.Round(100.0 * done / entries) + "%）";
+                    }
                 }
             }
             return g.ProgressText;

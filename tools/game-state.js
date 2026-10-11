@@ -21,6 +21,7 @@ const path = require("path");
 const mv = require("../pipeline/extract/mv.js");
 const resources = require("../pipeline/extract/resources.js");
 const text2frame = require("../pipeline/extract/text2frame.js");
+const rgssad = require("../pipeline/archive/rgssad.js");
 const A = require("./audit-lib.js");
 
 const argv = process.argv.slice(2);
@@ -57,19 +58,24 @@ const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch (e) { retu
 
 /** Where this game's data lives, or why it cannot be read. */
 function locate(game) {
+  // An archive wins over loose files: measured on 莉娜的金钱探索, whose loose Data folder is Japanese
+  // (59.5 % kana) while the game plays in Chinese, i.e. the Chinese lives inside Game.rgss3a and the
+  // loose files are not what the player sees. The loose folder is still reported, so the ambiguity is
+  // visible instead of silently resolved.
+  let loose = null;
   for (const rel of ["www/data", "data", "Data"]) {
     const d = subdir(game, rel);
     if (!d) continue;
-    if (A.jsonNames(d).length) return { kind: "json", live: d };
+    if (A.jsonNames(d).length) { loose = { kind: "json", live: d }; break; }
     let files = [];
     try { files = fs.readdirSync(d); } catch (e) { }
-    if (files.some((f) => /\.rvdata2$/i.test(f))) return { kind: "vxace" };
-    if (files.some((f) => /\.rvdata$/i.test(f))) return { kind: "vx" };
+    if (files.some((f) => /\.rvdata2$/i.test(f))) { loose = { kind: "vxace", live: d }; break; }
+    if (files.some((f) => /\.(rvdata|rxdata)$/i.test(f))) { loose = { kind: "vx", live: d }; break; }
   }
   for (const n of ["Game.rgss3a", "Game.rgss2a", "Game.rgssad"]) {
-    try { if (isFile(child(game, n))) return { kind: "packed", archive: n }; } catch (e) { }
+    try { if (isFile(child(game, n))) return { kind: "packed", archive: n, loose: loose }; } catch (e) { }
   }
-  return null;
+  return loose;
 }
 
 function findBackup(game) {
@@ -81,6 +87,50 @@ function findBackup(game) {
 }
 
 const profile = (dir) => { try { return mv.languageProfile(dir); } catch (e) { return null; } };
+
+/**
+ * Kana vs Han over the raw bytes of a folder.
+ *
+ * For VX/VX Ace (`.rvdata2`, Ruby Marshal) and for an unpacked archive there is no JSON to parse, and
+ * loading them needs the portable Ruby. Counting the UTF-8 characters directly is crude but enough to
+ * tell "this data is Japanese" from "this data is Chinese", which is the question the state answers.
+ */
+function byteProfile(dir, exts) {
+  let kana = 0, han = 0, files = 0;
+  let names;
+  try { names = fs.readdirSync(dir); } catch (e) { return null; }
+  for (const n of names) {
+    if (!exts.test(n)) continue;
+    let buf;
+    try { buf = fs.readFileSync(child(dir, n)); } catch (e) { continue; }
+    files++;
+    const s = buf.toString("utf8");
+    for (const ch of s) {
+      const cp = ch.codePointAt(0);
+      if ((cp >= 0x3040 && cp <= 0x30ff) || cp === 0x30fc) kana++;
+      else if (cp >= 0x3400 && cp <= 0x9fff) han++;
+    }
+  }
+  const total = kana + han;
+  return { files: files, kana: kana, han: han, total: total, kanaPct: total ? 100 * kana / total : 0 };
+}
+
+// A data folder that is already Chinese still carries kana in names and sfx; raw Japanese sits at
+// 60-80 % of all CJK characters, a translated one at 5-30 %. These are the byte-scale cut-offs
+// (measured: 莉娜的金钱探索's archive 22.1 % and still Chinese; びたみんクエスト 73 % and raw Japanese).
+const CN_MAX = 35, JP_MIN = 55;
+const RV_EXT = /\.(rvdata2?|rxdata)$/i;
+const JSON_EXT = /\.json$/i;
+
+/** Did this project leave artifacts for the game (its cache or a run report)? */
+function ourArtifacts(gameDir) {
+  const stem = path.basename(gameDir).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "_").slice(0, 60);
+  const dir = path.resolve(__dirname, "..", "work");
+  for (const suffix of ["-translations.json", "-translate-report.json"]) {
+    try { if (fs.existsSync(path.join(dir, stem + suffix))) return true; } catch (e) { }
+  }
+  return false;
+}
 
 /** Dialogue strings, and how many still carry kana — live, and in the pristine original. */
 function dialogueCounts(dataDir, backupDataDir) {
@@ -138,11 +188,106 @@ function text2frameCounts(gameDir, dataDir) {
   return out;
 }
 
+/** The pristine .rvdata2/.rvdata files, if this project made a backup before touching the game. */
+function vxBackupProfile(game) {
+  for (const rel of ["data_原版备份\\Data", "data_原版备份", "Data_原版备份"]) {
+    const d = subdir(game, rel);
+    if (!d) continue;
+    const p = byteProfile(d, RV_EXT);
+    if (p && p.files) return p;
+  }
+  return null;
+}
+
+/** Unpack the pristine archive into a scratch folder and profile the data inside it. */
+function packedProfile(game, archiveName) {
+  const stem = path.basename(game).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "_").slice(0, 60);
+  const scratch = path.join(path.resolve(__dirname, "..", "work"), "_state-unpack", stem);
+  // The pristine archive if we kept one, otherwise the live archive (read-only either way).
+  let src = null;
+  for (const rel of ["data_原版备份", "Data_原版备份"]) {
+    const d = subdir(game, rel);
+    if (d) {
+      const a = path.join(d, archiveName);
+      if (isFile(a)) { src = a; break; }
+    }
+  }
+  if (!src) { try { src = child(game, archiveName); } catch (e) { src = null; } }
+  if (!src || !isFile(src)) return null;
+  try {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    fs.mkdirSync(scratch, { recursive: true });
+    rgssad.unpack(src, scratch);
+  } catch (e) { return null; }
+  // rgssad.unpack lays the archive out as <scratch>/unpacked/Data/*.rvdata2 plus its own manifest.
+  for (const rel of ["unpacked/Data", "Data", "unpacked", "."]) {
+    const d = rel === "." ? scratch : path.join(scratch, rel);
+    if (!isDir(d)) continue;
+    const p = byteProfile(d, RV_EXT);
+    if (p && p.files) return p;
+  }
+  return null;
+}
+
+/** Verdict for a game whose data is not JSON: VX / VX Ace, or an archive. */
+function verdictFromBytes(game, live, backup, kind, archiveName, looseProf, viaArchive) {
+  const label = kind === "packed"
+    ? (archiveName + (viaArchive === false ? " 归档读不出，按松散数据判断" : " 归档"))
+    : (kind === "vxace" ? "VX Ace" : "VX");
+  if (!live || live.total < 20) {
+    return { State: "无文本", Note: label + "（数据读不出来或文本太少）", Evidence: {} };
+  }
+  const ours = ourArtifacts(game);
+  const bakPct = backup && backup.total > 20 ? backup.kanaPct : null;
+  const evidence = { liveKanaPct: +live.kanaPct.toFixed(1), backupKanaPct: bakPct === null ? null : +bakPct.toFixed(1),
+    liveHan: live.han, liveKana: live.kana, engine: label, ours: ours };
+  const loose = looseProf && looseProf.total > 20
+    ? "；同目录松散数据假名 " + looseProf.kanaPct.toFixed(1) + "%（游戏读的是归档）" : "";
+  const fig = "假名占比 " + (bakPct === null ? "" : bakPct.toFixed(1) + "% → ") + live.kanaPct.toFixed(1) + "%" + loose;
+
+  // The pristine copy is Chinese too: the game shipped Chinese (a 汉化组 release, or the folder claim).
+  if (bakPct !== null && bakPct < CN_MAX) return { State: "自带中文", Note: label + "，原版数据即中文（" + fig + "）", Evidence: evidence };
+  if (live.kanaPct < CN_MAX) {
+    if (ours) return { State: "已汉化（本项目）", Note: label + "，" + fig, Evidence: evidence };
+    return { State: "已是中文", Note: label + "，外置汉化（非本项目所译；" + fig + "）", Evidence: evidence };
+  }
+  // Japanese in the archive but Chinese in the loose files (or the reverse) is worth saying out loud:
+  // the player sees whichever one the engine loads, and this tool can only edit what it can read.
+  if (looseProf && looseProf.total > 20 && looseProf.kanaPct < CN_MAX && live.kanaPct >= JP_MIN) {
+    return { State: "已是中文", Note: label + "，松散数据是中文而归档是日文（" + fig + "）", Evidence: evidence };
+  }
+  // "The data still equals the backup" is checked BEFORE the partial-coverage band: a game that was
+  // translated and then restored (data identical to the pristine copy) is not "partially translated"
+  // just because its kana share sits under the Japanese cut-off.
+  if (bakPct !== null && live.kanaPct >= bakPct * 0.9 && ours) {
+    return { State: "未汉化（已还原）", Note: label + "，数据与备份一致（" + fig + "）", Evidence: evidence };
+  }
+  if (live.kanaPct < JP_MIN && ours) return { State: "部分汉化", Note: label + "，" + fig, Evidence: evidence };
+  if (live.kanaPct >= CN_MAX && live.kanaPct < JP_MIN && !ours) {
+    return { State: "未汉化", Note: label + "，可能含外置汉化（MTool 等），本工具未处理（" + fig + "）", Evidence: evidence };
+  }
+  return { State: "未汉化", Note: label + "，" + fig, Evidence: evidence };
+}
+
 function classify(game) {  const loc = locate(game);
   if (!loc) return { State: "非 MV/MZ", Note: "无 JSON 数据，本工具不支持", Evidence: {} };
-  if (loc.kind === "packed") return { State: "打包归档", Note: loc.archive + "，需先解包", Evidence: {} };
-  if (loc.kind === "vxace") return { State: "VX Ace", Note: ".rvdata2，本工具不支持", Evidence: {} };
-  if (loc.kind === "vx") return { State: "VX", Note: ".rvdata，本工具不支持", Evidence: {} };
+
+  // Packed and VX/VX Ace games ARE supported (the pipeline unpacks the archive from its pristine copy
+  // and repacks it; VX/VX Ace is driven through the portable Ruby), so "not supported / needs
+  // unpacking" was simply untrue and made translated games look untouchable. Both are measured here
+  // instead: the archive is unpacked to a scratch folder, and the kana/Han ratio of the data is read
+  // straight from the bytes, which works for Marshal as well as JSON.
+  if (loc.kind !== "json") {
+    let held = loc.kind === "packed" ? packedProfile(game, loc.archive) : byteProfile(loc.live || "", RV_EXT);
+    const bak = vxBackupProfile(game);
+    const looseProf = loc.loose && loc.loose.live && loc.loose.live !== loc.live
+      ? byteProfile(loc.loose.live, /\.(json|rvdata2?|rxdata)$/i) : null;
+    // An archive we cannot open must not turn a readable game into "no text": fall back to the loose
+    // data and say which one the figures come from.
+    let viaArchive = true;
+    if (!held && looseProf && looseProf.total > 20) { held = looseProf; viaArchive = false; }
+    return verdictFromBytes(game, held, bak, loc.kind, loc.archive, viaArchive ? looseProf : null, viaArchive);
+  }
 
   const live = profile(loc.live);
   const backup = findBackup(game);
@@ -162,6 +307,14 @@ function classify(game) {  const loc = locate(game);
 
   const liveKanaPct = live && live.total ? 100 * live.kana / live.total : 0;
   const bakKanaPct = bakProfile && bakProfile.total ? 100 * bakProfile.kana / bakProfile.total : 0;
+  // The 自带/外置 verdicts need the share of ALL Japanese-looking characters, not the share inside the
+  // strings the extractor would translate: 露出女子校生2 是御光盟国汉化组的汉化版，它的对白全是中文，
+  // 只有道具/技能名还是日文 —— 按"可译字符串"算是 36.6% 假名（看着像没翻），按全部字符算只有 5%
+  // （正确反映"游戏本身是中文的"）。
+  const liveBytes = byteProfile(loc.live, JSON_EXT);
+  const bakBytesDirs = backup ? byteProfile(backup, JSON_EXT) : null;
+  const liveBytePct = liveBytes && liveBytes.total > 20 ? liveBytes.kanaPct : null;
+  const bakBytePct = bakBytesDirs && bakBytesDirs.total > 20 ? bakBytesDirs.kanaPct : null;
   const evidence = {
     liveStrings: live ? live.total : 0, liveKanaPct: +liveKanaPct.toFixed(1),
     backup: !!backup, backupStrings: bakProfile ? bakProfile.total : 0, backupKanaPct: +bakKanaPct.toFixed(1),
@@ -177,7 +330,10 @@ function classify(game) {  const loc = locate(game);
   const jaLocale = locales.find((l) => /^ja/i.test(l.locale));
   const jaIsChinese = jaLocale && jaLocale.strings > 20 && jaLocale.kana < jaLocale.strings * 0.1;
 
-  const ours = !!backup || installed;
+  // Whose work it is: a pristine backup we made, or a cache/report we left. The 一键还原汉化前.bat
+  // scripts do NOT count — those ship with other people's 汉化 releases (御光盟国汉化组 ships one), so
+  // counting them credited their work to this project.
+  const ours = !!backup || ourArtifacts(game);
   // "对话" only when the figure really comes from the dialogue folder; otherwise it is the share of
   // translatable data fields that became Chinese.
   const noteFrom = (pct, fromDialogue) => {
@@ -216,6 +372,21 @@ function classify(game) {  const loc = locate(game);
 
   if (zhLocale && !jaIsChinese) {
     return { State: "自带中文", Note: note("resources/" + zhLocale.locale + "（" + zhLocale.hanOnly + " 串中文）"), Evidence: evidence };
+  }
+  // The pristine copy is Chinese too: the game arrived translated (a 汉化 release, or the folder's
+  // own claim), so nothing here was translated by this project and nothing needs translating.
+  // Measured over ALL characters, not over the strings the extractor targets — see liveBytes above.
+  if (bakBytePct !== null && bakBytePct < CN_MAX) {
+    return { State: "自带中文", Note: note("原版数据即中文（假名占比 " + bakBytePct.toFixed(1) + "% → " + (liveBytePct === null ? "?" : liveBytePct.toFixed(1)) + "%）"
+      + (installed ? "，含其他汉化组的还原脚本" : "")), Evidence: evidence };
+  }
+  // Chinese in the data, Japanese in the original, and none of our artifacts: someone else's work —
+  // an external translation (MTool etc.) or a 汉化 patch applied before this tool ever saw the game.
+  // The state name stays exactly 已是中文 because the window skips those games (Skip = 已是中文/自带中文);
+  // "外置汉化" belongs in the note, not in the name.
+  if (liveBytePct !== null && liveBytePct < CN_MAX && !ours && !backup) {
+    return { State: "已是中文", Note: note("外置汉化（非本项目所译；假名占比 " + liveBytePct.toFixed(1) + "%）"
+      + (installed ? "，含汉化组的还原脚本" : "")), Evidence: evidence };
   }
   if (coverage !== null && coverage >= 0.9) {
     // Whose work it is needs evidence, not just coverage: a game whose data is Chinese but which has
