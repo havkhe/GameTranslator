@@ -57,6 +57,7 @@ namespace GameTranslatorV3
         private Button _btnUninstall, _btnRestore, _btnOpenLog, _btnClearLog, _btnSettings;
         private CancellationTokenSource _cts;
         private bool _paused, _running;
+        private ToolTip _tips;
 
         public MainForm(string root)
         {
@@ -226,6 +227,7 @@ namespace GameTranslatorV3
             Controls.Add(split);
             Controls.Add(bottom);
             UpdateButtons();
+            TipRunLockedButtons();
         }
 
         /// <summary>Left: what to translate.</summary>
@@ -256,18 +258,25 @@ namespace GameTranslatorV3
                 // row reaches the control, i.e. during the show if the list was filled before it, or
                 // on the UI thread for half a minute if it was filled after. Virtual mode pays none
                 // of it, so the window appears at once and stays responsive whatever the list length.
-                VirtualMode = true
+                VirtualMode = true,
+                // Rows carry their full text as a tooltip: a column is always narrower than a game
+                // name plus its state note, so hovering is how the rest is read.
+                ShowItemToolTips = true
             };
             _list.RetrieveVirtualItem += (s, e) =>
             {
                 if (e.ItemIndex >= 0 && e.ItemIndex < _games.Count) e.Item = MakeRow(_games[e.ItemIndex]);
             };
-            _list.Columns.Add("", 26);
-            _list.Columns.Add("游戏", 300);
-            _list.Columns.Add("引擎", 60);
-            _list.Columns.Add("条目", 60);
-            _list.Columns.Add("进度", 120);
-            _list.Columns.Add("状态", 160);
+            _list.Columns.Add("", 26);              // 0  checkbox
+            _list.Columns.Add("游戏", 300);          // 1  game name (absorbs the slack)
+            _list.Columns.Add("引擎", 60);           // 2  engine
+            _list.Columns.Add("进度", 150);          // 3  progress
+            _list.Columns.Add("状态", 170);          // 4  state
+            // Columns are sized to the pane, not to the window. At 200 % display scaling the pane is
+            // narrower than the fixed widths added up, and that is what cut the 状态 text off
+            // ("未汉化（已还原）（有原…"). The name column absorbs whatever is left, and 条目 moved
+            // into 进度 so there is room for the state.
+            _list.Resize += (s, e) => ApplyColumnWidths();
             // ItemCheck rather than ItemChecked: in virtual mode the event must carry the index and
             // the new state, which is exactly what ItemCheck supplies. The model, not the control,
             // holds the checked set, so the assignment here is the source of truth.
@@ -279,6 +288,7 @@ namespace GameTranslatorV3
             };
             _list.SelectedIndexChanged += (s, e) => UpdateButtons();
             AttachGameContextMenu();
+            Tip(_list, "右键可选：启动游戏 / 打开目录 / 打开数据目录 / 复制路径。\n翻译进行中仍可滚动查看、勾选与取消勾选。");
 
             var pane = new Panel { Dock = DockStyle.Fill };
             pane.Controls.Add(_list);
@@ -286,20 +296,51 @@ namespace GameTranslatorV3
             return pane;
         }
 
+        /// <summary>
+        /// Give the game-name column whatever the pane has left after the fixed ones, so the state
+        /// text is never the part that gets cut. Called on every resize and after a rebuild.
+        /// </summary>
+        private void ApplyColumnWidths()
+        {
+            if (_list == null || _list.Columns.Count < 5) return;
+            int room = _list.ClientSize.Width;
+            if (room <= 0) return;
+            int fixedCols = _list.Columns[0].Width + _list.Columns[2].Width + 4;
+            // Split the slack between the name and the state columns: the name needs the most, the
+            // state needs enough for 「未汉化（已还原）」 plus a percentage.
+            int stateW = Math.Max(150, Math.Min(260, room / 6));
+            _list.Columns[4].Width = stateW;
+            _list.Columns[3].Width = 150;
+            _list.Columns[1].Width = Math.Max(140, room - fixedCols - stateW - _list.Columns[3].Width);
+        }
+
         /// <summary>Right: the model, the progress, the controls, the log.</summary>
         private Control BuildControlPane()
         {
-            var host = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6, 0, 0, 0) };
+            // AutoScroll, and every button row wraps. A fixed one-line row is wider than the pane at
+            // the default window size and at 200 % display scaling, so the buttons on the right of each
+            // row (继续 / 终止 / 设置… / 打开日志文件) used to be cut off with no way to reach them.
+            // Wrapping plus a scrollable host means the content always fits, whatever the size.
+            var host = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6, 0, 0, 0), AutoScroll = true };
 
             // ---- model row -------------------------------------------------------
-            var modelBox = new GroupBox { Dock = DockStyle.Top, Height = 64, Text = "翻译模型" };
-            var modelRow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(6, 4, 6, 0), WrapContents = false };
-            _cmbModel = new ComboBox { Width = 300, DropDownStyle = ComboBoxStyle.DropDownList };
+            // A TableLayoutPanel, not a wrapping FlowLayoutPanel: a wrapped FlowLayoutPanel reports a
+            // preferred height measured before wrapping, so its container ends up too short and the
+            // rows overlap. A grid with AutoSize computes the height for the rows it actually used.
+            var modelBox = new GroupBox { Dock = DockStyle.Top, Text = "翻译模型", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(0, 64) };
+            var modelRow = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Padding = new Padding(6, 4, 6, 0) };
+            modelRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            modelRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _cmbModel = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
             _btnModelRefresh = MakeButton("刷新列表", (s, e) => RefreshModels());
             _btnModelStart = MakeButton("启动模型", (s, e) => StartLlama());
             _btnModelStop = MakeButton("停止模型", (s, e) => StopLlama());
-            _lblModelState = new Label { Width = 150, TextAlign = ContentAlignment.MiddleLeft, Text = "状态：未知", ForeColor = Color.DimGray };
-            modelRow.Controls.AddRange(new Control[] { _cmbModel, _btnModelRefresh, _btnModelStart, _btnModelStop, _lblModelState });
+            _lblModelState = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Text = "状态：未知", ForeColor = Color.DimGray };
+            modelRow.Controls.Add(_cmbModel, 0, 0);
+            modelRow.Controls.Add(_btnModelRefresh, 1, 0);
+            modelRow.Controls.Add(_lblModelState, 0, 1);
+            modelRow.Controls.Add(_btnModelStart, 1, 1);
+            modelRow.Controls.Add(_btnModelStop, 1, 2);
             modelBox.Controls.Add(modelRow);
 
             // ---- detailed progress ----------------------------------------------
@@ -328,27 +369,30 @@ namespace GameTranslatorV3
             progBox.Controls.Add(grid);
 
             // ---- task controls ---------------------------------------------------
-            var actBox = new GroupBox { Dock = DockStyle.Top, Height = 104, Text = "任务控制" };
-            var act1 = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 4, 0, 0), WrapContents = false };
+            // Three equal columns, as many rows as the buttons need. Every button is always on
+            // screen: nothing can be pushed off the right edge, whatever the window width or the
+            // display scaling.
+            var actBox = new GroupBox { Dock = DockStyle.Top, Text = "任务控制", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(0, 104) };
+            var act1 = MakeButtonGrid(3);
             _btnStartSel = MakeButton("开始汉化选中", (s, e) => StartTranslation(false));
             _btnStartAll = MakeButton("全部汉化", (s, e) => StartTranslation(true));
             _btnPause = MakeButton("暂停", (s, e) => Pause());
             _btnResume = MakeButton("继续", (s, e) => Resume());
             _btnStop = MakeButton("终止", (s, e) => Stop());
-            act1.Controls.AddRange(new Control[] { _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop });
+            AddToGrid(act1, _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop);
 
-            var act2 = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 0, 0, 0), WrapContents = false };
+            var act2 = MakeButtonGrid(3);
             _btnCheck = MakeButton("检查翻译", (s, e) => StartCheck());
             _btnUninstall = MakeButton("卸载汉化", (s, e) => Uninstall());
             _btnRestore = MakeButton("恢复汉化", (s, e) => Restore());
             _btnSettings = MakeButton("设置…", (s, e) => OpenSettings());
             _btnOpenLog = MakeButton("打开日志文件", (s, e) => OpenLogFiles());
-            act2.Controls.AddRange(new Control[] { _btnCheck, _btnUninstall, _btnRestore, _btnSettings, _btnOpenLog });
+            AddToGrid(act2, _btnCheck, _btnUninstall, _btnRestore, _btnSettings, _btnOpenLog);
             actBox.Controls.Add(act2);
             actBox.Controls.Add(act1);
 
             // ---- log -------------------------------------------------------------
-            var logBox = new GroupBox { Dock = DockStyle.Fill, Text = "日志 / 错误" };
+            var logBox = new GroupBox { Dock = DockStyle.Fill, Text = "日志 / 错误", MinimumSize = new Size(0, 120) };
             _log = new TextBox
             {
                 Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
@@ -370,11 +414,48 @@ namespace GameTranslatorV3
             return host;
         }
 
+        /// <summary>A grid of buttons: `columns` equal columns, as many rows as it takes.</summary>
+        private static TableLayoutPanel MakeButtonGrid(int columns)
+        {
+            var t = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = columns,
+                Padding = new Padding(6, 4, 6, 0)
+            };
+            for (int i = 0; i < columns; i++) t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / columns));
+            return t;
+        }
+
+        /// <summary>Place buttons into a grid row by row, each stretched to its cell.</summary>
+        private static void AddToGrid(TableLayoutPanel grid, params Control[] items)
+        {
+            for (int i = 0; i < items.Length; i++)
+            {
+                items[i].Dock = DockStyle.Fill;
+                items[i].Margin = new Padding(2);
+                grid.Controls.Add(items[i], i % grid.ColumnCount, i / grid.ColumnCount);
+            }
+        }
+
         private static Button MakeButton(string text, EventHandler onClick)
         {
             var b = new Button { Text = text, AutoSize = true, Height = 28, Margin = new Padding(0, 0, 6, 4) };
             b.Click += onClick;
             return b;
+        }
+
+        /// <summary>
+        /// Attach a hover explanation. Buttons that are disabled during a run say why, instead of
+        /// just going grey — a greyed control with no reason is what makes a window feel broken.
+        /// </summary>
+        private void Tip(Control c, string text)
+        {
+            if (c == null || string.IsNullOrEmpty(text)) return;
+            if (_tips == null) _tips = new ToolTip { AutoPopDelay = 15000, InitialDelay = 400, ReshowDelay = 100 };
+            _tips.SetToolTip(c, text);
         }
 
         private static Label MakeStatLabel(string text)
@@ -516,7 +597,9 @@ namespace GameTranslatorV3
             public string Engine = "?";
             public int Entries = -1;
             public bool Checked;
-            public string Status = "";
+            public string Status = "";      // short text shown in the 状态 column, e.g. 已汉化（本项目）97%
+            public string StateNote = "";   // the long explanation, shown as a row tooltip
+            public bool Skip;               // already Chinese: nothing to translate
             public string Exe;
             public string OpenDir;
             public string LaunchProblem;
@@ -542,8 +625,7 @@ namespace GameTranslatorV3
                     {
                         string dir = SimpleJson.Get(g, "Dir") ?? SimpleJson.Get(g, "dir");
                         if (string.IsNullOrEmpty(dir)) continue;
-                        string st;
-                        state.TryGetValue(dir, out st);
+                        var st = LoadGameStateOf(state, dir);
                         _games.Add(new GameItem
                         {
                             Dir = dir,
@@ -551,7 +633,11 @@ namespace GameTranslatorV3
                             Engine = SimpleJson.Get(g, "Kind") ?? "?",
                             Entries = SimpleJson.GetInt(g, "Entries"),
                             Checked = false,
-                            Status = st ?? (SimpleJson.GetBool(g, "AlreadyCn") ? "已是中文，默认跳过" : "")
+                            Status = st.Item1.Length > 0 ? st.Item1 : (SimpleJson.GetBool(g, "AlreadyCn") ? "已是中文" : ""),
+                            StateNote = st.Item2,
+                            // Nothing to translate when the game ships its own Chinese: sending it
+                            // through would replace official text with the model's.
+                            Skip = st.Item1 == "已是中文" || st.Item1 == "自带中文"
                         });
                     }
                 }
@@ -560,15 +646,26 @@ namespace GameTranslatorV3
             RefreshList();
         }
 
+        /// <summary>State and note for one game, from the map LoadGameStates built.</summary>
+        private static Tuple<string, string> LoadGameStateOf(Dictionary<string, Tuple<string, string>> map, string dir)
+        {
+            Tuple<string, string> t;
+            if (map != null && map.TryGetValue(dir, out t) && t != null) return t;
+            return Tuple.Create("", "");
+        }
+
         /// <summary>
         /// Read work\games-state.json — one line per game, saying whether it is already Chinese,
         /// already translated, or still Japanese. Written by tools\game-state.js, which inspects the
-        /// game (its data against its pristine backup) rather than trusting any earlier claim.
+        /// game (its data against the pristine backup) rather than trusting any earlier claim.
+        ///
+        /// The state and its explanation are kept apart: the column shows the state, and the full
+        /// sentence goes to the row tooltip, because together they never fit in one column.
         /// Missing file simply means no state is shown.
         /// </summary>
-        private Dictionary<string, string> LoadGameStates()
+        private Dictionary<string, Tuple<string, string>> LoadGameStates()
         {
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var map = new Dictionary<string, Tuple<string, string>>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 var path = Path.Combine(_settings.WorkDir, "games-state.json");
@@ -577,9 +674,7 @@ namespace GameTranslatorV3
                 {
                     string dir = SimpleJson.Get(g, "Dir") ?? SimpleJson.Get(g, "dir");
                     if (string.IsNullOrEmpty(dir)) continue;
-                    string kind = SimpleJson.Get(g, "State") ?? "";
-                    string note = SimpleJson.Get(g, "Note") ?? "";
-                    map[dir] = note.Length > 0 ? kind + "（" + note + "）" : kind;
+                    map[dir] = Tuple.Create(SimpleJson.Get(g, "State") ?? "", SimpleJson.Get(g, "Note") ?? "");
                 }
                 AppendLog("已读取游戏状态：" + map.Count + " 条（work\\games-state.json）");
             }
@@ -597,6 +692,7 @@ namespace GameTranslatorV3
         {
             _list.VirtualListSize = 0;
             _list.VirtualListSize = _games.Count;
+            ApplyColumnWidths();
             _status.Text = "共 " + _games.Count + " 个游戏，已勾选 " + _games.Count(x => x.Checked) + " 个";
             UpdateButtons();
         }
@@ -608,29 +704,55 @@ namespace GameTranslatorV3
             var it = new ListViewItem("");
             it.SubItems.Add(g.Name);
             it.SubItems.Add(g.Engine);
-            it.SubItems.Add(g.Entries >= 0 ? g.Entries.ToString() : "");
             it.SubItems.Add(ReadProgress(g));
+            // The column carries the state only; the explanation and the raw counts go to the
+            // tooltip, where there is room for them.
             it.SubItems.Add(g.Status);
             it.Checked = g.Checked;
             it.Tag = g;
+            var tip = new StringBuilder();
+            tip.Append(g.Name).Append("\n").Append(g.Dir);
+            if (g.Engine != null && g.Engine.Length > 0) tip.Append("\n引擎：").Append(g.Engine);
+            if (g.Status.Length > 0) tip.Append("\n状态：").Append(g.Status);
+            if (g.StateNote.Length > 0) tip.Append("（").Append(g.StateNote).Append("）");
+            if (g.Entries >= 0) tip.Append("\n条目：").Append(g.Entries);
+            var progress = ReadProgressDetail(g);
+            if (progress.Length > 0) tip.Append("\n进度：").Append(progress);
+            it.ToolTipText = tip.ToString();
             return it;
         }
 
         /// <summary>Read the pipeline's own report so the list never overstates progress.</summary>
         private string ReadProgress(GameItem g)
         {
+            int entries, done;
+            if (!TryReadProgress(g, out entries, out done) || entries <= 0) return "";
+            int pct = (int)Math.Round(100.0 * done / entries);
+            return pct >= 100 ? "已译完" : pct + "%";
+        }
+
+        /// <summary>The same figures written out, for the row tooltip.</summary>
+        private string ReadProgressDetail(GameItem g)
+        {
+            int entries, done;
+            if (!TryReadProgress(g, out entries, out done) || entries <= 0) return "";
+            return done + " / " + entries + " 条（" + Math.Round(100.0 * done / entries) + "%）";
+        }
+
+        private bool TryReadProgress(GameItem g, out int entries, out int done)
+        {
+            entries = 0; done = 0;
             try
             {
                 string safe = new string(Path.GetFileName(g.Dir).Where(c => char.IsLetterOrDigit(c) || c > 127).ToArray());
                 string report = Path.Combine(_settings.WorkDir, safe + "-translate-report.json");
-                if (!File.Exists(report)) return "";
+                if (!File.Exists(report)) return false;
                 string txt = File.ReadAllText(report, Encoding.UTF8);
-                int entries = SimpleJson.GetInt(txt, "entries");
-                int done = SimpleJson.GetInt(txt, "translated");
-                if (entries <= 0) return "";
-                return done + "/" + entries + "  (" + Math.Round(100.0 * done / entries) + "%)";
+                entries = SimpleJson.GetInt(txt, "entries");
+                done = SimpleJson.GetInt(txt, "translated");
+                return true;
             }
-            catch { return ""; }
+            catch { return false; }
         }
 
         /// <summary>
@@ -703,20 +825,50 @@ namespace GameTranslatorV3
             _btnPause.Enabled = _running && !_paused;
             _btnResume.Enabled = _running && _paused;
             _btnCheck.Enabled = !_running && checkedGames > 0;
+
+            // While a run is going, the list stays usable: scrolling, selecting, the right-click menu,
+            // and checking/unchecking. Unchecking is how a run is stopped gently — the loop below does
+            // not start a game whose box is now clear, so the current game finishes and the rest are
+            // left alone. The buttons that rebuild or reorder the list itself stay off, because the
+            // run iterates a snapshot of it; their tooltips say so.
+            _list.Enabled = true;
+            _btnSelectAll.Enabled = true;
+            _btnClearSel.Enabled = true;
+
             _btnScan.Enabled = !_running;
             _btnAdd.Enabled = !_running;
             _btnRefresh.Enabled = !_running;
             _btnRescanAll.Enabled = !_running;
-            _btnSelectAll.Enabled = !_running;
-            _btnClearSel.Enabled = !_running;
             _btnUninstall.Enabled = !_running && checkedGames == 1;
             _btnRestore.Enabled = !_running && checkedGames == 1;
             _btnState.Enabled = !_running;
             _btnSettings.Enabled = !_running;
             _cmbModel.Enabled = !_running && _cmbModel.Items.Count > 0 && !Convert.ToString(_cmbModel.SelectedItem).StartsWith("（");
             _btnModelRefresh.Enabled = !_running;
-            _list.Enabled = !_running;
             UpdateModelState();
+        }
+
+        /// <summary>
+        /// Explain, on hover, what each run-locked button is for and why it is off just now.
+        /// A greyed control with no reason reads as a broken window.
+        /// </summary>
+        private void TipRunLockedButtons()
+        {
+            const string running = "翻译进行中不可用：它会改动游戏列表，而当前批次是按开始时的列表跑的。\n" +
+                                   "要提前结束，取消勾选不想翻的游戏（当前这个跑完就停），或点「终止」。";
+            Tip(_btnScan, running);
+            Tip(_btnAdd, running);
+            Tip(_btnRefresh, running);
+            Tip(_btnRescanAll, running);
+            Tip(_btnState, running);
+            Tip(_btnSettings, "翻译进行中不可用（改动设置会影响正在跑的任务）。");
+            Tip(_btnStartSel, "勾选要汉化的游戏后可用。翻译进行中不可用。");
+            Tip(_btnStartAll, "把列表里所有游戏依次汉化。翻译进行中不可用。");
+            Tip(_btnCheck, "对勾选的游戏做一次质检。翻译进行中不可用。");
+            Tip(_btnUninstall, "把勾选的那一个游戏还原成日文原版（需先勾选恰好一个）。");
+            Tip(_btnRestore, "把勾选的那一个游戏切回汉化版（需先勾选恰好一个）。");
+            Tip(_btnStop, "停止整个批次。已经完成的译文会保留。");
+            Tip(_btnPause, "让当前请求跑完后不再开始下一个游戏。");
         }
 
         // ------------------------------------------------------------ scan / add -----
@@ -1203,11 +1355,22 @@ namespace GameTranslatorV3
                 _lblBatch.Text = "批次：" + (i + 1) + " / " + list.Count + " 个游戏";
                 _barBatch.Value = Math.Min(1000, (int)(1000.0 * i / list.Count));
 
-                if (g.Status.Contains("跳过"))
+                if (g.Skip)
                 {
                     skipped.Add(g.Name + "（已是中文）");
                     _skipCount++;
                     _runner.LogSkip(g.Name + "  已跳过：检测为已是中文");
+                    continue;
+                }
+
+                // Unchecking a game while the batch runs means "do not start this one". The list is a
+                // snapshot, so the loop has to consult the model again here — that is what makes the
+                // checkbox a usable control during a run instead of a decoration.
+                if (!g.Checked)
+                {
+                    skipped.Add(g.Name + "（运行中取消勾选）");
+                    _skipCount++;
+                    AppendLog("⤼ 已取消勾选，跳过 " + g.Name);
                     continue;
                 }
                 while (_paused && !_cts.IsCancellationRequested) await Task.Delay(500);

@@ -82,17 +82,26 @@ namespace GameTranslatorV3.UiCheck
                 var lv = lists[0];
                 Assert(lv.VirtualMode, "列表处于虚拟模式 (VirtualMode=true)");
                 Assert(lv.CheckBoxes, "列表带勾选框");
-                Assert(lv.Columns.Count >= 6, "列表列数=" + lv.Columns.Count);
+                Assert(lv.ShowItemToolTips, "列表启用悬停提示（列宽装不下的全文靠它读）");
+                Assert(lv.Columns.Count >= 5, "列表列数=" + lv.Columns.Count);
                 Console.WriteLine("        列: " + string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)));
                 Console.WriteLine("        行数: " + lv.VirtualListSize + "（来自 work\\games-cache.json）");
                 Assert(lv.VirtualListSize >= 0, "行数已发布：" + lv.VirtualListSize);
+                // The columns must fit inside the list, or the last one is the text that gets cut —
+                // which is exactly what 「未汉化（已还原）（有原…」 was.
+                int total = lv.Columns.Cast<ColumnHeader>().Sum(c => c.Width);
+                Assert(total <= lv.ClientSize.Width, "列宽合计 " + total + " ≤ 列表宽度 " + lv.ClientSize.Width);
                 if (lv.VirtualListSize > 0)
                 {
                     // Asking for a row must produce one without throwing — that is the contract the
                     // control relies on while the user scrolls.
                     var it = lv.Items[0];
-                    Assert(it != null && it.SubItems.Count >= 6, "第 1 行可取且列数正确");
-                    if (it != null) Console.WriteLine("        第 1 行: " + it.SubItems[1].Text + "  [" + it.SubItems[5].Text + "]");
+                    Assert(it != null && it.SubItems.Count >= 5, "第 1 行可取且列数正确");
+                    if (it != null)
+                    {
+                        Console.WriteLine("        第 1 行: " + it.SubItems[1].Text + "  [" + it.SubItems[4].Text + "]");
+                        Assert(it.ToolTipText != null && it.ToolTipText.Length > 0, "第 1 行带悬停全文");
+                    }
                 }
             }
 
@@ -113,6 +122,29 @@ namespace GameTranslatorV3.UiCheck
             Assert(byText.ContainsKey("继续") && !byText["继续"].Enabled, "未运行时「继续」为禁用");
             Assert(byText["开始汉化选中"].Enabled == false, "未勾选游戏时「开始汉化选中」为禁用");
             Assert(byText.ContainsKey("全部汉化") && byText["全部汉化"].Enabled, "有游戏时「全部汉化」为可用");
+
+            Console.WriteLine("");
+            Console.WriteLine("=== 运行中左侧仍可操作（模拟 _running=true 后重算按钮）===");
+            // The window used to grey out the whole game list and every selection button for the
+            // duration of a batch, so it could not be scrolled and nothing could be unchecked.
+            // _running is private, so it is set through reflection and UpdateButtons re-run — that
+            // exercises the real decision instead of restating it.
+            var runningField = typeof(MainForm).GetField("_running", BindingFlags.NonPublic | BindingFlags.Instance);
+            var update = typeof(MainForm).GetMethod("UpdateButtons", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (runningField == null || update == null) Assert(false, "找到 _running 与 UpdateButtons（反射）");
+            else
+            {
+                runningField.SetValue(form, true);
+                update.Invoke(form, null);
+                Assert(lists[0].Enabled, "运行中：游戏列表仍可滚动/选择/右键");
+                Assert(byText["全选"].Enabled && byText["取消全选"].Enabled, "运行中：全选/取消全选可用");
+                Assert(byText["终止"].Enabled && byText["暂停"].Enabled, "运行中：终止/暂停可用");
+                Assert(!byText["扫描全部路径"].Enabled && !byText["添加游戏"].Enabled && !byText["刷新状态"].Enabled,
+                    "运行中：会改动列表的按钮停用（扫描/添加/刷新状态）");
+                runningField.SetValue(form, false);
+                update.Invoke(form, null);
+                Assert(!byText["终止"].Enabled, "模拟结束后回到未运行态");
+            }
 
             Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");

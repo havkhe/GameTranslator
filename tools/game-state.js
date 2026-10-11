@@ -169,7 +169,12 @@ function classify(game) {
     return { State: "自带中文", Note: "resources/" + zhLocale.locale + "（" + zhLocale.hanOnly + " 串中文）", Evidence: evidence };
   }
   if (coverage !== null && coverage >= 0.9) {
-    return { State: "已汉化（本项目）", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
+    // Whose work it is needs evidence, not just coverage: a game whose data is Chinese but which has
+    // neither a pristine backup nor our install scripts was already Chinese when it arrived. Without
+    // this check every such game was credited to this project (金色complex 慰安騎士 is one: the
+    // pipeline itself skips it as 已是中文).
+    if (ours) return { State: "已汉化（本项目）", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
+    return { State: "已是中文", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
   }
   if (coverage !== null && coverage >= 0.3) return { State: "部分汉化", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
   // Little or no Chinese found: with a pristine original present, a translation existed here and was
