@@ -101,6 +101,21 @@ function extract(pristineData, liveData) {
 }
 
 /**
+ * Normalise a value the way extraction does, so a cache key is reproducible from the file.
+ *
+ * Extraction replaces embedded line breaks with spaces, because the pipeline sends one prompt line per
+ * entry. Patching must apply the SAME transformation before looking a value up, or the two sides never
+ * agree: the cache holds "...旧市街区を 、He＆Roes社..." while the file holds
+ * "...旧市街区を\n、He＆Roes社..." with a literal backslash-n.
+ *
+ * Note the breaks are the two characters backslash and n rather than control characters — RPG Maker
+ * stores them that way — so they are replaced as text.
+ */
+function cacheKey(value) {
+  return String(value).replace(/\r\n|\n|\r/g, " ").replace(/\\n/g, " ");
+}
+
+/**
  * Write translations back into the localization files.
  *
  * Keyed by the source text, like the rest of the pipeline: the cache maps Japanese source to
@@ -117,7 +132,17 @@ function patch(liveData, cache, reportFile) {
     let changed = 0;
     for (const [key, value] of Object.entries(data)) {
       if (META_KEYS.has(key) || typeof value !== "string" || !value.trim()) continue;
-      const tr = cache.lookup(value);
+      // Look the value up in the form extraction stored it in, then fall back to the raw form for any
+      // entry the cache happens to hold verbatim.
+      //
+      // This matters more than it looks. Extraction replaces line breaks with spaces (one prompt line
+      // per entry), but a value read from the file still contains the literal characters backslash-n.
+      // Looking up the raw value therefore missed almost everything: measured on a real game, 29 of 5731
+      // dialogue strings were applied while 3632 translations sat unused in the cache, and the game
+      // showed Japanese dialogue with a fully populated cache.
+      const key1 = cacheKey(value);
+      let tr = cache.lookup(key1);
+      if (typeof tr !== "string" && key1 !== value) tr = cache.lookup(value);
       if (typeof tr === "string") {
         data[key] = tr;
         replaced++; changed++;
@@ -138,4 +163,4 @@ function patch(liveData, cache, reportFile) {
   return report;
 }
 
-module.exports = { extract, patch, dialogueFiles, isChineseLike, META_KEYS };
+module.exports = { extract, patch, dialogueFiles, isChineseLike, cacheKey, META_KEYS };
