@@ -17,6 +17,8 @@ const DEFAULT_PORT = 18080;
 const STALL_MS = parseInt(process.env.GT_STALL_MS || "45000", 10);
 const MAX_OUTPUT_TOKENS = parseInt(process.env.GT_MAX_OUTPUT_TOKENS || "1024", 10);
 const SLOT_ERASE = process.env.GT_NO_SLOT_ERASE !== "1";
+/** Ask the server to skip a reasoning model's thinking block; GT_NO_THINK=0 disables that. */
+const NO_THINK = process.env.GT_NO_THINK !== "0";
 
 const SYSTEM_PROMPT =
   "你是一个轻小说翻译模型，可以流畅通顺地以日本轻小说的风格将日文翻译成简体中文，" +
@@ -59,7 +61,7 @@ function eraseSlot(port, slotId) {
  */
 function ask({ port, prompt, maxTokens, onStall }) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
+    const body = JSON.stringify(Object.assign({
       model: "local",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -70,7 +72,17 @@ function ask({ port, prompt, maxTokens, onStall }) {
       frequency_penalty: 0.1,
       max_tokens: Math.max(64, Math.min(MAX_OUTPUT_TOKENS, maxTokens || MAX_OUTPUT_TOKENS)),
       stream: false,
-    });
+    },
+    // A reasoning model answers inside `reasoning_content` first and can spend the whole token budget
+    // there, leaving `content` empty — measured on Qwen3.5-0.8B: 3,492 characters of "Thinking Process" and
+    // no answer at max_tokens 1024, 16,732 and still none at 4096, finish_reason "length" every time. The
+    // pipeline saw "no content" and recorded a request failure for every entry, so that model translated
+    // nothing at all (0 / 24 long sentences, 29 request-failed).
+    //
+    // Switching the thinking block off makes it answer immediately and cheaply (7 characters in 5 tokens
+    // for the same input). The flag is sent for every model because a template that does not define the
+    // variable simply ignores it — Hy-MT2 and Galtransl are unaffected — and GT_NO_THINK=0 drops it.
+    NO_THINK ? { chat_template_kwargs: { enable_thinking: false } } : null));
     let settled = false;
     let stallTimer = null;
     const finish = (fn, arg) => { if (settled) return; settled = true; if (stallTimer) clearTimeout(stallTimer); fn(arg); };
@@ -95,8 +107,16 @@ function ask({ port, prompt, maxTokens, onStall }) {
           try {
             const j = JSON.parse(data);
             if (j.error) return finish(reject, new Error(typeof j.error === "string" ? j.error : JSON.stringify(j.error)));
-            const text = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-            if (!text) return finish(reject, new Error("llama returned no content"));
+            const msg = j.choices && j.choices[0] && j.choices[0].message;
+            const text = msg && msg.content;
+            if (!text) {
+              // Name the cause instead of the symptom: an empty answer next to a long reasoning block means
+              // a reasoning model spent the budget thinking, which is a setting, not a broken model.
+              const think = msg && typeof msg.reasoning_content === "string" ? msg.reasoning_content.length : 0;
+              return finish(reject, new Error(think > 0
+                ? "thinking-only reply: " + think + " chars of reasoning_content and no answer（该模型先思考后作答，思考占满了输出预算；关闭思考后即可）"
+                : "llama returned no content"));
+            }
             finish(resolve, text);
           } catch (e) { finish(reject, e); }
         });

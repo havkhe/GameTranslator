@@ -11,3 +11,7 @@ work/
 *.new
 *.tmp
 *.log
+
+# 编译产物（由 build-ui.bat / build-uicheck.bat 生成，不入库）
+*.exe
+*.pdb
