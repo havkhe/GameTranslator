@@ -11,7 +11,12 @@
 const fs = require("fs");
 const path = require("path");
 
-const GAME = "J:\\game\\HGAME\\H\\(同人ゲーム)[I'm moralist] 凍堂ヒロカの隷雄譚 Ver1.1.1";
+// usage: node verify-audio.js <gameDir>
+const GAME = process.argv[2];
+if (!GAME) {
+  console.log("用法: node verify-audio.js <游戏目录>");
+  process.exit(1);
+}
 const AUDIO = path.join(GAME, "audio");
 const LIVE = path.join(GAME, "data");
 const say = (s) => console.log(s);

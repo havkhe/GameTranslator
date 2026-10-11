@@ -19,7 +19,7 @@ const check = (name, cond, detail) => {
 };
 
 console.log("=== 实测被误判为「已中文」的日文术语，必须改送模型 ===");
-// From the already-chinese records of NTR Police / NTR Sisters / deadbunny_1001 / 静かな北国.
+// Taken from the "already Chinese" records of four real games whose skill and effect names look Chinese.
 const TERMS = [
   "\u65ac\u6483/\u5fc5\u6bba\u62803",     // 斬撃/必殺技3
   "\u523a\u7a81/\u5fc5\u6bba\u62801",     // 刺突/必殺技1

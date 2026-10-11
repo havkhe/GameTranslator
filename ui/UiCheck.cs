@@ -290,8 +290,8 @@ namespace GameTranslatorV3.UiCheck
             Console.WriteLine("=== 进度列的文件名必须与管线一致 ===");
             // The pipeline names its work files with its own sanitizer (alnum + CJK kept, everything else
             // "_", cut at 60). The window must derive the same stem or it can never find the report — it
-            // used to keep every non-ASCII character and drop punctuation, so "NTR Police ver1.10" became
-            // "NTRPolicever110" while the file on disk is "NTR_Police_ver1_10-translate-report.json".
+            // used to keep every non-ASCII character and drop punctuation, so "My Game ver1.10" became
+            // "MyGamever110" while the file on disk is "My_Game_ver1_10-translate-report.json".
             {
                 var stemOf = typeof(MainForm).GetMethod("WorkStem", BindingFlags.NonPublic | BindingFlags.Static);
                 Assert(stemOf != null, "找到 WorkStem（文件名推导）");
@@ -299,9 +299,9 @@ namespace GameTranslatorV3.UiCheck
                 {
                     var cases = new[]
                     {
-                        new[] { @"J:\game\HGAME\H\NTR Police ver1.10\NTR Police ver1.10", "NTR_Police_ver1_10" },
-                        new[] { @"J:\x\NTR Sisters - Ciella & Luciella", "NTR_Sisters___Ciella___Luciella" },
-                        new[] { @"J:\x\deadbunny_1001", "deadbunny_1001" },
+                        new[] { @"D:\games\My Game ver1.10\My Game ver1.10", "My_Game_ver1_10" },
+                        new[] { @"D:\games\Sample Title - Part A & Part B", "Sample_Title___Part_A___Part_B" },
+                        new[] { @"D:\games\plain_name_1001", "plain_name_1001" },
                     };
                     foreach (var c in cases)
                     {

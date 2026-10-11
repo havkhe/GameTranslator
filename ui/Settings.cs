@@ -12,7 +12,9 @@ namespace GameTranslatorV3.Core
 {
     public sealed class Settings
     {
-        public string ModelDir = @"H:\model";
+        /// <summary>Where the .gguf files live. The shipped default is the one the manual documents;
+        /// a new install is expected to point this at its own model folder.</summary>
+        public string ModelDir = @"D:\galtrans";
         public string Model = "Galtransl-v4-4B-2601.gguf";
         public string WorkDir = "";
         public string PromptFile = "";

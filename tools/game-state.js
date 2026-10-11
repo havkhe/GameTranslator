@@ -108,7 +108,7 @@ function dialogueCounts(dataDir, backupDataDir) {
  * Text2Frame message text: the script of a game that keeps dialogue in text/*.txt.
  *
  * The data folder can measure fully translated while every message line is still Japanese, because the
- * extractor never reads these files. Measured: NTR Gyaru had 24 of 24 translatable data fields in
+ * extractor never reads these files. Measured on one such game: 24 of 24 translatable data fields in
  * Chinese and 67 of 67 message lines still Japanese, so the game read as translated and played as
  * Japanese. Counted here so the state cannot be reported from the data alone.
  */
@@ -237,7 +237,8 @@ function classify(game) {  const loc = locate(game);
   // because the difference decides whether translating it again is a small job or a full one. A single
   // translated string is enough evidence: the measure is already scoped to what the extractor targets,
   // so a non-zero figure means a real pass ran here — and a game whose data is done while its message
-  // script is not (NTR Gyaru: 17 of 17 data strings, 0 of 67 message lines) must not read as "restored".
+  // script is not (measured on one game: 17 of 17 data strings, 0 of 67 message lines) must not read
+  // as "restored".
   const pct = Math.round(coverage * 100);
   if (dataDiff && dataDiff.translated >= 1) {
     return { State: "部分汉化", Note: note((pct >= 1 ? "已译 " + pct + "%" : "已译 " + dataDiff.translated + " 串") + mismatch), Evidence: evidence };

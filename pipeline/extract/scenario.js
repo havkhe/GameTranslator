@@ -1,14 +1,14 @@
 // Story data kept outside the data folder: a `scenario/` folder of event-command JSON.
 //
-// Games built with a scenario plugin (deadbunny_1001 uses the Nore_* family; 聖少女シェリーと寝取られの村
-// ships the same layout) hold the WHOLE script in scenario/Scenario.json — one object keyed by scenario
+// Games built with a scenario plugin (one measured title uses the Nore_* family, another ships the same
+// layout) hold the WHOLE script in scenario/Scenario.json — one object keyed by scenario
 // name, each value an array of MV/MZ event commands, referenced from the data only by a plugin parameter
 // ("ファイル名 = オープニング_3行で_01"). The event data therefore contains a few strings and the game's
 // actual text is in this file.
 //
-// Measured: deadbunny_1001 has 2 kana-bearing fields in its event parameters and 42,757 extractable
+// Measured on that game: 2 kana-bearing fields in its event parameters and 42,757 extractable
 // entries in scenario/Scenario.json, 42,654 of them Japanese. Pointing the pipeline at data/ alone is
-// why that game translated to a two-line patch report and stayed Japanese in play.
+// why such a game translated to a two-line patch report and stayed Japanese in play.
 //
 // The schema is identical to data/*.json, so this module adds no parsing of its own: it locates the
 // folder, keeps a pristine copy beside it (the same convention as data_原版备份 and text_原版备份) and

@@ -299,8 +299,8 @@ function auditDialogue(liveData, backupData, report, fragments) {
 
   // Text2Frame message files: dialogue kept in text/*.txt beside the data folder rather than in the
   // data files or resources/. Without this the audit reports a game whose whole script is Japanese as
-  // having no dialogue at all (measured: NTR Gyaru, 67 of 67 message lines still Japanese, reported as
-  // "files 0 total 0"), so both the counts and the pollution checks cover them here.
+  // having no dialogue at all (measured on one such game: 67 of 67 message lines still Japanese,
+  // reported as "files 0 total 0"), so both the counts and the pollution checks cover them here.
   const t2f = { files: 0, lines: 0, kanaLive: 0, kanaBackup: 0 };
   const dirExists = (p) => { try { return fs.statSync(p).isDirectory(); } catch (e) { return false; } };
   try {

@@ -53,7 +53,7 @@ RPG Maker 汉化管理器（GameTranslator.exe） v2.4
   - 修复"检查翻译"的对照基准：以前是拿译文和"游戏当前文件"比，游戏已汉化时
     文件本身就是中文，等于中文对中文、结论没有意义；现在改为与 data_原版备份 里的
     原始日文对照（加密包也会解包），并报告实际对照了多少条。
-  - 【模型选择建议 · 本机 GTX 1060 实测】同一份 126 条真实日文：
+  - 【模型选择建议 · 6 GB 显存级别显卡实测】同一份 126 条真实日文：
       · Qwen3.5-0.8B-Q4_K_M：**不可用**，0 条可用译文（连单条兜底也失败），
         请勿用于汉化；
       · Hy-MT2-1.8B-Q8_0：可用，约 90 秒完成 121/126 条（5 条失败），
@@ -136,12 +136,12 @@ RPG Maker 汉化管理器（GameTranslator.exe） v2.4
 
 【v2.2.2 更新说明】
   - 内置 llama 改用 Vulkan 后端：新版 CUDA 预编译包已不支持 GTX 10 系
-    （Pascal），会静默退回 CPU；Vulkan 版可让 GTX 1060 等老显卡真正使用 GPU。
+    （Pascal），会静默退回 CPU；Vulkan 版可让 GTX 10 系等老显卡真正使用 GPU。
   - 界面新增“运行设备”下拉：显示检测到的真实 CPU / GPU 型号
-    （如 GPU (NVIDIA GeForce GTX 1060 6GB)），可选 GPU 或 CPU 运行；
+    （如 GPU (NVIDIA GeForce GTX 10xx)），可选 GPU 或 CPU 运行；
     默认 GPU（-ngl 99），CPU 模式不加载显存（-ngl 0）。
   - 新增 llama 内存硬限制：启动时通过 Windows 任务对象限制进程内存，
-    默认自动 = 总内存 - 4GB（本机 16GB → 上限 12GB），可在 settings.json
+    默认自动 = 总内存 - 4GB（16GB 内存 → 上限 12GB），可在 settings.json
     的 MaxMemoryMB 调整（0=自动）。同时限制 batch 大小降低内存峰值。
 
 【v2.2 更新说明】

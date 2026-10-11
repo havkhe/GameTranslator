@@ -40,13 +40,11 @@ const HAN = /[\u3400-\u9fff]/;
 /** The cache file name the pipeline would use for this game, so an import lands where a run looks. */
 const sanitize = (name) => name.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "_").slice(0, 60);
 
-/** Pick the work directory: the caller's, the deployment's, or the repository's. */
+/** Pick the work directory: the caller's, or the one beside this script (the install layout). */
 function defaultWork(explicit) {
   if (explicit) return path.resolve(explicit);
-  for (const cand of ["D:\\GameTranslatorV3\\work", path.resolve(__dirname, "..", "work")]) {
-    if (isDir(cand)) return path.resolve(cand);
-  }
-  return null;
+  const beside = path.resolve(__dirname, "..", "work");
+  return isDir(beside) ? beside : null;
 }
 
 /** Candidate maps: a named file, or every root-level JSON big enough to be one. */

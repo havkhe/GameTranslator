@@ -9,8 +9,8 @@
 // Usage:
 //   node tools/audit-all.js [root ...] [--depth N] [--json] [--quiet]
 //
-// Defaults: root J:\game, depth 5. With --json the per-game rows are printed as JSON at the end, so
-// the caller decides where they land (redirect it); this script writes no file of its own.
+// Defaults: the current directory, depth 5. With --json the per-game rows are printed as JSON at the
+// end, so the caller decides where they land (redirect it); this script writes no file of its own.
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -24,7 +24,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === "--json") asJson = true;
   else if (argv[i] === "--quiet") quiet = true;
 }
-if (!roots.length) roots.push("J:\\game");
+if (!roots.length) roots.push(".");   // no root given: audit the current directory
 
 /** Is this directory a game? Same signals the pipeline's detectEngine uses. */
 function looksLikeGame(dir) {

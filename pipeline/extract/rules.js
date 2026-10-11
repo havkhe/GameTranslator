@@ -176,8 +176,8 @@ function splitPluginArg(text) {
  *
  *   kana required        a kana-free value in a plugin argument is a name, an id or a kanji term that reads
  *                        the same in Chinese — "対象キャラ名 = 琵琶乃" (a name), "リソースラベル = ..." (an id).
- *                        Requiring kana is what removes ~60,000 no-op translations on the moralist game and
- *                        all 7,596 English values on NTR Gyaru (its choice text is English, its story is in
+ *                        Requiring kana is what removes ~60,000 no-op translations on one measured game and
+ *                        all 7,596 English values on another (its choice text is English, its story lives in
  *                        text/message.txt, so it gains nothing here — correctly).
  *   resource key         "ファイル名 = オープニング_3行で_01" has kana and must still be refused.
  *   number / boolean     "結果受け取り変数 = 15", "キャンセル許可 = false", "ウィンドウ幅 = 720".

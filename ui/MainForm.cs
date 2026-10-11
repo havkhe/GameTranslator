@@ -1144,9 +1144,9 @@ namespace GameTranslatorV3
         /// This is not the same as the selection. The panel used to show `_settings.Model`, i.e. whatever
         /// the dropdown said — so after picking a smaller model and pressing 启动模型 the window would read
         /// 「模型：Hy-MT2-1.8B-Q8_0」 while the requests were still answered by the model that was already
-        /// loaded. Measured on this machine: two llama-server processes can occupy one port at the same time
-        /// (llama.cpp sets SO_REUSEADDR and Windows permits the second bind), so both models sat in a 6 GB
-        /// card — 5,899 / 6,144 MiB used — and the traffic kept going to the older one. Asking the server
+        /// loaded. Measured: two llama-server processes can occupy one port at the same time
+        /// (llama.cpp sets SO_REUSEADDR and Windows permits the second bind), so both models sat in one
+        /// 6 GB card until it was full, and the traffic kept going to the older one. Asking the server
         /// what it loaded is the only way to know.
         /// </summary>
         private string _serverModel;
@@ -1707,8 +1707,8 @@ namespace GameTranslatorV3
         ///
         /// It has to be the SAME rule. This used to keep every letter, digit and non-ASCII character and
         /// drop the rest, while the pipeline keeps ASCII alphanumerics and CJK, turns everything else into
-        /// "_" and truncates to 60: "NTR Police ver1.10" became "NTRPolicever110" here and
-        /// "NTR_Police_ver1_10" on disk. The names never matched, so the 进度 column could not read any
+        /// "_" and truncates to 60: "My Game ver1.10" became "MyGamever110" here and
+        /// "My_Game_ver1_10" on disk. The names never matched, so the 进度 column could not read any
         /// report whatever the pipeline wrote, and with nothing writing the file either it always showed
         /// nothing at all.
         /// </summary>
@@ -2857,9 +2857,9 @@ namespace GameTranslatorV3
                 // to go, or the new server binds alongside it and nothing changes.
                 //
                 // Windows permits a second bind on the same port here (llama.cpp sets SO_REUSEADDR), so this
-                // does not fail loudly: measured on this machine, the previous model and the newly started
-                // one both listened on 18080, both sat in a 6 GB card (5,899 / 6,144 MiB used), and every
-                // request still went to the older one while the window reported the new model as ready.
+                // does not fail loudly: measured, the previous model and the newly started one both listened
+                // on 18080, both sat in one 6 GB card until it was full, and every request still went to the
+                // older one while the window reported the new model as ready.
                 StopLlama(quiet: true);
                 if (IsPortOpen())
                 {

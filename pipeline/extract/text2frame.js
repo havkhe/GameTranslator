@@ -4,10 +4,10 @@
 // in a `text/` folder beside the data folder, not from event commands. The event data then holds only a
 // short label, so the extractor sees almost nothing:
 //
-//   NTR Gyaru      data holds 24 translatable fields; text/message.txt holds 67 more lines of dialogue,
+//   game A         data holds 24 translatable fields; text/message.txt holds 67 more lines of dialogue,
 //                  every one of them still Japanese. The game read as "partly translated" while its
 //                  whole story was untouched.
-//   牧场Ver1.1     102 kana lines in text/*.txt, none of them reachable by the data extractor.
+//   game B         102 kana lines in text/*.txt, none of them reachable by the data extractor.
 //
 // mtool's own list for these games is the same story from the other side: its key set contains the raw
 // source strings, and the strings that matter to the player here are the event lines and the text file,
