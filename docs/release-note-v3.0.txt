@@ -1,0 +1,104 @@
+# 🎮 GameTranslator v3.0（正式版）—— 全新界面 + 分组队列 + 更稳的翻译管线
+
+> **v3.0 是全新的一代**（v2.3.2 及更早版本仍可下载）。
+> **从 v3 起不再分「RTX 版 / 普通版」两个包**：一个包内含 Vulkan 通用运行库，RTX 用户执行一条命令即可换成 CUDA 版。
+
+## 📥 下载 / Downloads
+
+- `GameTranslatorV3-v3.0.zip` —— **完整包（解压即用）**：程序 + 翻译管线 + 自带 node 与 ruby 运行库 + Vulkan 版 llama.cpp。
+  - RTX 20 / 30 / 40 / 50 想更快，在解压后的目录里开 PowerShell 执行一次即可（自动下载最新 llama.cpp 并覆盖 `llama` 目录）：
+    `.\download-llama.ps1 -Dest .\llama -Backend cuda12`
+  - 想换回通用版：`.\download-llama.ps1 -Dest .\llama -Backend vulkan`
+- 模型文件（.gguf）不含在包内，请自行准备（推荐 Galtransl-v4-4B；显存小或求快可用 Hy-MT2-1.8B）。
+
+## 🖥️ 全新的界面（单页重做）
+
+- **左列**：游戏列表（点任意一行即可勾选，启动约 1 秒）→ **任务队列** → 任务控制 → 日志
+- **右侧**：模型选择 / **任务进度** / **翻译对照**
+  - 任务进度：**每秒 token 数**、**每分钟条数**（每 15 秒采样一次）、**预计完成时间**（本局 / 本批）、用时、请求 / 失败 / 跳过
+  - **翻译对照（实时）**：上面是这一轮刚翻出来的「原文 ↔ 译文」，下面是最近的历史，可回看、可自动滚动——正在翻什么、翻成了什么，一眼能看到
+- **分组翻译队列**：勾选几个游戏先编成「第 1 组」，跑完自动进第 2 组；**运行中还能往任意一组追加**游戏；终止 / 失败只记在队列里，不写游戏
+- **暂停**改为「当前这一条请求结束后就停」（以前要等整整一局跑完）；**终止**保留已完成译文，下次接着翻
+- **模型状态不再说谎**：显示服务器里**实际加载**的模型。下拉选了 A 而端口上跑着 B 时会明确标出（llama.cpp 允许两个服务占同一端口，这正是"显存被占满、却不知道在跑哪个模型"的原因）
+- 翻译过程中仍可滚动列表、**取消勾选**（后面的游戏不再开始）、往队列里加游戏
+
+## 🔤 新的翻译逻辑
+
+- **共享译文缓存**：按「原文」建键，同一句话在别的游戏里直接复用；坏值（原样返回 / 复读 / 模板回显 / 控制符丢失）**拒绝写入**，加载时也会清理
+- **九道质量闸门**：控制符与占位符存活、假名占优、乱码与泄漏标记、长度异常、复读退化、换行守恒、模板回显、退化、恒等——不合格的**不会写进游戏**，自动拆批重试
+- **覆盖率扩展**：除 `data/*.json` 外还翻 `scenario/` 剧情脚本、`text/*.txt` 文本、插件指令的参数值（只改值侧、键感知；**资源名一律不翻**）
+- **术语表**：游戏目录放 `glossary.txt`（每行 `原文->译文`）即可强制统一人名与专有名词，并注入提示词
+- **稳定性**：按长度自动分批、失败自动拆分重试、**45 秒无输出判卡死**并主动清空槽位、连续 3 次卡死自动停止且保留全部进度
+- **思考链关闭**：Qwen3.5 / Murasaki 这类"先思考后作答"的模型不再把正文写在思考里（在此之前它们**一条都译不出来**）
+- **VX / VX Ace 支持**：走便携 Ruby 直接改 Marshal 数据；**文件名永不翻译**（图块表贴图名、立绘、战斗图、音乐名都在拒绝名单里）
+- **MTool 译文导入**：可直接导入 MTool 的明文译文（实测 39,721 条）
+- 断点续翻、**检查翻译**（与原版备份逐条对照，只在结果更好时替换）、原版 / 汉化一键切换、卸载 / 恢复汉化
+
+## 🐞 本版修掉的问题（精选）
+
+1. **"改了代码但界面没变"**：P15~P18 的四个界面功能一直只躺在 `.exe.new` 里没生效——现在有明确的更新流程（`build-ui.bat` → `.new` → 关程序 → `应用新版本.bat`），并写进了文档
+2. **四局"没有汉化成功"**：scenario 剧情正文漏抽、汉字术语被误判成"已是中文"、恒等译文被写进缓存、进度列读错文件名——逐个查因修掉
+3. **覆盖率数字虚高**：统计口径错误（把重复/恒等文本也算作覆盖）
+4. **暂停要等到局末**才生效 → 改成请求级；**终止不再被误报成"退出码 1 失败"**
+5. **模型状态与实际加载不一致**：改为读服务器 `/props`，不一致时明确标注（并处理"两个 llama-server 抢同一端口"）
+6. **卡死会拖垮整批**：旧版只断开客户端、服务端还在生成，后续重试全堵在同一槽位 → 现为 45 秒判死 + 清槽
+7. **术语/人名前后不一致**：新增术语表强制替换
+8. **VX 游戏启动即报 `unable to find file graphics\Tilesets\运动场`**：图块表的**文件名（数组字段）被当成正文翻译**了 → 提取与补丁两侧都加了"资源名字段"拒绝名单，并在全库 12 个 VX/VX Ace 游戏上逐字段核查（只有这一例，已修复）
+9. **0.8B 模型一条都译不出**：它是推理模型，答案全写在思考里、正文为空 → 关闭思考后正常（但仍不建议当主力）
+10. 若干小问题：启动约 1 秒（虚拟列表）、200% 缩放下列宽不再截断、退出码与停机的误报、日志污染等
+
+## 🚀 使用方法
+
+1. 解压到任意目录（路径里避免 emoji 等特殊字符）；
+2. 把 `.gguf` 模型放到任意目录，在【设置…】里把「模型目录」指向它；
+3. 运行 `GameTranslatorV3.exe` →【扫描文件夹】把游戏目录加进来 → 勾选游戏（或【全选】）→【启动模型】→【开始汉化选中】；
+4. RTX 用户可选：`.\download-llama.ps1 -Dest .\llama -Backend cuda12`（换成 CUDA 版，通常更快）。
+
+## ⚠️ 已知限制
+
+- **建议用 4B 级模型**：1.8B 约快 1.4 倍，但译文里的日文残留（人名、整词未翻）约 **13%**，4B 约 **0.5%**；
+- 含 `❤︎`（U+FE0E 不可见字符）的条目会被闸门误判为乱码并反复重试——约占语料 **2%**，相关游戏会明显变慢；修复方案已验证，尚未并入本版；
+- **「全部汉化」在没有勾选任何游戏时不会翻译任何东西**（勾选状态不跨重启保存）：请先【全选】，或直接用左侧【任务队列】开始（队列与勾选无关，且能断点续跑）；
+- VX / VX Ace 只翻「数据里有日文且已进词典」的条目，运行时注入的文本（如 MTool 的那部分）不在本工具范围内。
+
+---
+
+# 🎮 GameTranslator v3.0 (Stable) — New UI + Grouped Queue + a Steadier Pipeline (abridged)
+
+> **v3.0 is a new generation** (v2.3.2 and earlier remain downloadable).
+> **No more Vulkan/CUDA dual builds**: one package ships a Vulkan runtime, and an RTX owner switches to CUDA with a single command.
+
+## 📥 Downloads
+
+- `GameTranslatorV3-v3.0.zip` — complete, unpack-and-run: app + pipeline + bundled node and ruby + Vulkan llama.cpp.
+  - RTX 20/30/40/50: `.\download-llama.ps1 -Dest .\llama -Backend cuda12` (fetches the latest llama.cpp)
+  - Back to generic: `.\download-llama.ps1 -Dest .\llama -Backend vulkan`
+- Model files (.gguf) are not included.
+
+## 🖥️ New single-page UI
+
+- Left: game list (click a row to tick it; starts in about a second) → **grouped task queue** (groups run in order, new tasks can be appended to any group while it runs) → task controls → log.
+- Right: model selector / **live progress** (tokens/s, lines per minute sampled every 15 s, estimated finish for this game and the whole batch) / **real-time pair panel** showing the source and the translation it just produced, with a scrollable history.
+- **Pause** now stops within one request instead of at the end of a game; **stop** keeps everything translated so far.
+- **The model status no longer lies**: it reads the model the server actually loaded, and says so when it differs from the dropdown (two llama-server processes can hold the same port).
+
+## 🔤 New translation core
+
+- Shared by-source cache with bad-value rejection (echo, repetition, prompt echo, lost control codes).
+- Nine quality gates; failing lines are never written into the game — they are split and retried instead.
+- Coverage extended to `scenario/` story scripts, `text/*.txt` and plugin-command argument values (values only; resource names are never touched).
+- Glossary file, batched requests with split retry, 45-second stall detection with slot erasure, thinking-chain disabled for reasoning models, VX/VX Ace support through portable Ruby, MTool translation import, resume, translation check against a pristine backup, uninstall/restore.
+
+## 🐞 Fixed in this release (highlights)
+
+Four games that never translated at all (story scripts never extracted, kanji-only terms mistaken for Chinese, identity translations cached, progress column reading the wrong file); a coverage figure that counted duplicates; a pause that only took effect at the end of a game; a model status line that could report a model that was not loaded; stalls that clogged every retry behind one server slot; VX games that refused to start because a **tileset filename** had been translated (extractor and patcher now both refuse resource-name fields — all 12 VX games in the library were re-checked field by field); and 0.8B models that answered nothing because the answer stayed inside their reasoning block.
+
+## 🚀 Usage
+
+Unpack anywhere → point the model directory at your .gguf files → run `GameTranslatorV3.exe` → scan, tick games, start. RTX owners may run `download-llama.ps1 -Backend cuda12` first.
+
+## ⚠️ Known limitations
+
+- Prefer a 4B-class model: 1.8B is about 1.4x faster but leaves Japanese residue (names, whole words) in roughly 13% of lines versus about 0.5% for 4B.
+- Lines containing `❤︎` (the invisible U+FE0E selector) are misjudged by one gate and retried; that is about 2% of the corpus and it noticeably slows the games that use the glyph. The fix is verified but not part of this release.
+- 「全部汉化」 does nothing when no game is ticked (ticks are not persisted across restarts): press 全选 first, or drive the queue instead.
