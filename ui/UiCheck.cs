@@ -72,12 +72,37 @@ namespace GameTranslatorV3.UiCheck
                 Assert(labels.Any(t => t.Contains(want)), "进度面板包含「" + want + "」字样");
 
             Console.WriteLine("");
+            Console.WriteLine("=== 游戏列表（虚拟模式）===");
+            // Virtual mode is what keeps start-up at about a second: rows are produced on demand
+            // instead of being pushed into the native control, which cost ~300 ms per row.
+            var lists = all.OfType<ListView>().ToList();
+            Assert(lists.Count == 1, "恰好一个 ListView 数量=" + lists.Count);
+            if (lists.Count == 1)
+            {
+                var lv = lists[0];
+                Assert(lv.VirtualMode, "列表处于虚拟模式 (VirtualMode=true)");
+                Assert(lv.CheckBoxes, "列表带勾选框");
+                Assert(lv.Columns.Count >= 6, "列表列数=" + lv.Columns.Count);
+                Console.WriteLine("        列: " + string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)));
+                Console.WriteLine("        行数: " + lv.VirtualListSize + "（来自 work\\games-cache.json）");
+                Assert(lv.VirtualListSize >= 0, "行数已发布：" + lv.VirtualListSize);
+                if (lv.VirtualListSize > 0)
+                {
+                    // Asking for a row must produce one without throwing — that is the contract the
+                    // control relies on while the user scrolls.
+                    var it = lv.Items[0];
+                    Assert(it != null && it.SubItems.Count >= 6, "第 1 行可取且列数正确");
+                    if (it != null) Console.WriteLine("        第 1 行: " + it.SubItems[1].Text + "  [" + it.SubItems[5].Text + "]");
+                }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 功能按钮 ===");
             var buttons = all.OfType<Button>().Select(b => b.Text ?? "").ToList();
             Console.WriteLine("        按钮: " + string.Join(" | ", buttons));
             foreach (var want in new[] { "开始汉化选中", "全部汉化", "暂停", "继续", "终止",
                                          "检查翻译", "卸载汉化", "恢复汉化", "启动模型", "停止模型", "设置…",
-                                         "扫描文件夹", "扫描全部路径", "重新扫描全部", "添加游戏" })
+                                         "扫描文件夹", "扫描全部路径", "重新扫描全部", "添加游戏", "刷新状态" })
                 Assert(buttons.Any(t => t.Contains(want)), "按钮存在：" + want);
 
             Console.WriteLine("");

@@ -30,7 +30,6 @@ namespace GameTranslatorV3
     internal static class Program
     {
         private static string _root = "";
-        private static string _traceFile = "";
         private static NotifyIcon _tray;
         private static MainForm _form;
 
@@ -39,24 +38,24 @@ namespace GameTranslatorV3
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
         private const int SW_SHOWNORMAL = 1, SW_SHOW = 5, SW_RESTORE = 9;
 
-        private static void Trace(string s)
+        private static void Trace(string s) { Startup.Trace(s); }
+
+        /// <summary>
+        /// Instance mutex name. Overridable so a second copy can be started deliberately — for
+        /// testing a build while the user's own window is open — without changing this file.
+        /// </summary>
+        private static string InstanceName()
         {
-            try
-            {
-                File.AppendAllText(_traceFile,
-                    DateTime.Now.ToString("HH:mm:ss.fff") + "  pid=" +
-                    Process.GetCurrentProcess().Id + "  " + s + Environment.NewLine, Encoding.UTF8);
-            }
-            catch { }
+            var custom = Environment.GetEnvironmentVariable("GT_INSTANCE_NAME");
+            return "Local\\GameTranslatorV3_SingleInstance" + (string.IsNullOrEmpty(custom) ? "" : "_" + custom);
         }
 
         [STAThread]
         private static void Main()
         {
             _root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-            try { Directory.CreateDirectory(Path.Combine(_root, "work")); } catch { }
-            _traceFile = Path.Combine(_root, "work", "startup-trace.log");
-            Trace("launcher start");
+            Startup.Init(_root);
+            Trace("launcher start  (root=" + _root + ")");
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -64,7 +63,7 @@ namespace GameTranslatorV3
             // One window only. A second launch raises the running one rather than opening a
             // second copy at the same place, which looked like the app doing nothing.
             bool owned;
-            using (var single = new Mutex(true, @"Local\GameTranslatorV3_SingleInstance", out owned))
+            using (var single = new Mutex(true, InstanceName(), out owned))
             {
                 if (!owned) { Trace("already running; raising it and exiting"); RaiseExisting(); return; }
 
@@ -75,15 +74,12 @@ namespace GameTranslatorV3
                 {
                     Trace("constructing MainForm");
                     _form = new MainForm(_root);
-                    Trace("constructed; handle=" + _form.Handle + " visible=" + _form.Visible);
+                    Trace("MainForm constructed (handle=" + _form.Handle + " visible=" + _form.Visible + ")");
 
                     SetupTray();
-                    StartShowRetries();
+                    Trace("tray ready");
 
-                    // Show by handle BEFORE the loop: the in-process Show() path does not take
-                    // effect here, but the native call does.
-                    TryNativeShow("before run");
-                    Trace("entering message loop");
+                    Trace("Application.Run 之前");
                     Application.Run(_form);
                     Trace("message loop exited");
                 }
@@ -106,6 +102,24 @@ namespace GameTranslatorV3
             Trace("launcher exit");
         }
 
+        /// <summary>
+        /// Show and foreground the window by native handle.
+        ///
+        /// Called from the tray menu and from the form itself, never before Application.Run: the
+        /// launcher used to call this (and a threaded retry loop) while the message loop had not
+        /// started, and the main thread then sat inside the call for about thirty-four seconds —
+        /// the message loop, the Load event and every timer all waited on it. Touching the window
+        /// only once the loop is pumping removes that.
+        /// </summary>
+        /// <summary>
+        /// Show and foreground the window by native handle.
+        ///
+        /// Called from the tray menu and from the form itself, never before Application.Run: the
+        /// launcher used to call this (and a threaded retry loop) while the message loop had not
+        /// started, which both delayed the loop and worked around a stall that is now fixed at its
+        /// source — the game list is filled in virtual mode, so showing the window costs milliseconds
+        /// rather than the 34 s it used to spend pushing rows into the native ListView.
+        /// </summary>
         private static void TryNativeShow(string tag)
         {
             try
@@ -120,35 +134,6 @@ namespace GameTranslatorV3
                 Trace(tag + ": ShowWindow done, visible=" + IsWindowVisible(h));
             }
             catch (Exception ex) { Trace(tag + " failed: " + ex.Message); }
-        }
-
-        /// <summary>
-        /// Keep trying to show the window during the first seconds. The first attempt can
-        /// land before the window is ready, and the loop is not dispatching, so a timer is
-        /// not an option — a background thread schedules the attempts instead.
-        /// </summary>
-        private static void StartShowRetries()
-        {
-            var th = new Thread(() =>
-            {
-                foreach (var delay in new[] { 300, 800, 1500, 3000, 6000 })
-                {
-                    Thread.Sleep(delay);
-                    try
-                    {
-                        if (!_form.IsHandleCreated) continue;
-                        var h = _form.Handle;
-                        if (IsWindowVisible(h)) { Trace("shown after " + delay + "ms"); return; }
-                        ShowWindow(h, SW_SHOW);
-                        SetForegroundWindow(h);
-                        Trace("retry at " + delay + "ms: visible=" + IsWindowVisible(h));
-                        if (IsWindowVisible(h)) return;
-                    }
-                    catch (Exception ex) { Trace("retry failed: " + ex.Message); }
-                }
-            });
-            th.IsBackground = true;
-            th.Start();
         }
 
         /// <summary>A tray icon is the guaranteed way back to the window.</summary>

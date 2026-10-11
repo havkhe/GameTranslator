@@ -91,6 +91,43 @@ function parseJson(text) {
 }
 
 /**
+ * Read a text file, asserting first that it lies inside `root`.
+ *
+ * Callers hand back absolute paths built elsewhere (the dialogue locator, a walk of the tree), so the
+ * boundary is re-checked at the moment of the read rather than assumed.
+ */
+function readTextInside(root, p) {
+  const base = path.resolve(root);
+  // A relative name is resolved against the root, so the caller may pass either an absolute path
+  // produced elsewhere or a plain file name; an absolute path must still land inside the root.
+  const target = path.isAbsolute(p) ? path.resolve(p) : path.resolve(base, p);
+  if (target !== base && !target.startsWith(base + path.sep)) throw new Error("refusing read outside " + base + ": " + p);
+  return fs.readFileSync(target, "utf8");
+}
+
+/** Write a JSON file as `<dir>/<name>`, with the name and the resulting path both checked. */
+function writeJsonInside(dir, name, data) {
+  if (typeof name !== "string" || !/^[A-Za-z0-9_.\-]{1,120}\.json$/.test(name)) throw new Error("refusing unsafe file name: " + JSON.stringify(name));
+  const base = path.resolve(dir);
+  if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) throw new Error("not a directory: " + base);
+  const target = path.resolve(base, path.basename(name));
+  if (target !== base && !target.startsWith(base + path.sep)) throw new Error("refusing write outside " + base + ": " + name);
+  fs.writeFileSync(target, data, "utf8");
+  return target;
+}
+
+/** Write a text file as `<dir>/<name>`, same guards as writeJsonInside but for any .js/.json name. */
+function writeTextInside(dir, name, text) {
+  if (typeof name !== "string" || !/^[A-Za-z0-9_.\-]{1,120}\.(js|json|txt)$/.test(name)) throw new Error("refusing unsafe file name: " + JSON.stringify(name));
+  const base = path.resolve(dir);
+  fs.mkdirSync(base, { recursive: true });
+  const target = path.resolve(base, path.basename(name));
+  if (target !== base && !target.startsWith(base + path.sep)) throw new Error("refusing write outside " + base + ": " + name);
+  fs.writeFileSync(target, text, "utf8");
+  return target;
+}
+
+/**
  * Identity of one backslash code, with a NON-numeric argument folded away.
  *
  * `\N[1]` must keep its number: 1 indexes the actor table, so 1 -> 2 is a real defect. `\n<犬>`
@@ -337,4 +374,81 @@ function auditGame(game) {
   return { report, defects, nodata: false };
 }
 
-module.exports = { auditGame, findDataDir, findBackupDir, jsonNames, strings, parseJson, codeCounts, codeKey, KANA };
+/**
+ * How much of a game's data was translated, measured against its pristine original.
+ *
+ * Only fields the pipeline would actually translate are counted: an event command's text parameter
+ * or a whitelisted database field (rules.js TEXT_FIELDS / EVENT_TEXT_CODES). Without that filter the
+ * denominator is dominated by script and plugin blobs the extractor never targets, and a game that
+ * is 95 % translated measures about 50 % — which is exactly what happened before this filter.
+ *
+ *   translated  the original carried kana and the current value does not
+ *   remaining   both still carry kana (still Japanese)
+ *   changed     every field that differs, which also moves when a code or filename is altered
+ */
+function translatedCount(liveDir, backupDir) {
+  let translated = 0, remaining = 0, changed = 0, comparable = 0;
+  const rules = require("../pipeline/extract/rules.js");
+  const isTextKey = (k) => {
+    if (/\.parameters\[\d+\]$/.test(k)) return true;
+    const last = k.split(".").pop() || "";
+    return rules.TEXT_FIELDS.has(last);
+  };
+  for (const name of jsonNames(backupDir)) {
+    let L, B;
+    try { L = parseJson(readTextInside(liveDir, child(liveDir, name))); } catch (e) { continue; }
+    try { B = parseJson(readTextInside(backupDir, child(backupDir, name))); } catch (e) { continue; }
+    const lm = flatten(L, "", new Map()), bm = flatten(B, "", new Map());
+    for (const [k, bv] of bm) {
+      const lv = lm.get(k);
+      if (lv === undefined) continue;
+      if (bv.startsWith("<") || lv.startsWith("<")) continue;
+      comparable++;
+      if (lv === bv) { if (KANA.test(bv) && isTextKey(k)) remaining++; continue; }
+      changed++;
+      if (!isTextKey(k)) continue;
+      if (KANA.test(bv) && !KANA.test(String(lv))) translated++;
+      else if (KANA.test(bv)) remaining++;
+    }
+  }
+  return { translated, remaining, changed, comparable };
+}
+
+/**
+ * What language each resources/<locale>/ folder holds.
+ *
+ * A game's own Chinese release keeps Japanese in ja-JP and puts Chinese somewhere else (zh-CN,
+ * zh-Hans, …), so "is ja-JP Chinese?" is not the same question as "does this game ship Chinese?".
+ * Sampling each locale folder answers the second one.
+ */
+function resourceLocaleProfile(dataDir) {
+  const root = subdir(dataDir, "resources") || subdir(dataDir, "Resources");
+  if (!root) return [];
+  const out = [];
+  let locales = [];
+  try { locales = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch (e) { return []; }
+  for (const locale of locales) {
+    let dir;
+    try { dir = child(root, locale); } catch (e) { continue; }
+    let files = [];
+    try { files = fs.readdirSync(dir).filter((f) => /\.json$/i.test(f)); } catch (e) { continue; }
+    let strings = 0, kana = 0, hanOnly = 0;
+    for (const f of files.slice(0, 6)) {
+      let j;
+      try { j = parseJson(readTextInside(dir, child(dir, f))); } catch (e) { continue; }
+      for (const v of Object.values(j)) {
+        if (typeof v !== "string" || !v.trim()) continue;
+        strings++;
+        if (KANA.test(v)) kana++;
+        else if (/[\u3400-\u9fff]/.test(v)) hanOnly++;
+      }
+    }
+    out.push({ locale, files: files.length, strings, kana, hanOnly });
+  }
+  return out;
+}
+
+module.exports = {
+  auditGame, findDataDir, findBackupDir, jsonNames, strings, parseJson, codeCounts, codeKey, KANA,
+  readTextInside, writeJsonInside, writeTextInside, translatedCount, resourceLocaleProfile,
+};

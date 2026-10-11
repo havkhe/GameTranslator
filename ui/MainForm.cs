@@ -52,7 +52,7 @@ namespace GameTranslatorV3
         private DateTime _lastProgressAt = DateTime.MinValue;
         private int _lastProgressCount, _gameTotal;
 
-        private Button _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnSelectAll, _btnClearSel;
+        private Button _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnState, _btnSelectAll, _btnClearSel;
         private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck;
         private Button _btnUninstall, _btnRestore, _btnOpenLog, _btnClearLog, _btnSettings;
         private CancellationTokenSource _cts;
@@ -76,26 +76,46 @@ namespace GameTranslatorV3
             _runner.Output += OnPipelineLine;
             _runner.AttemptFailed += (game, why) => { _failCount++; AppendLog("⚠ " + game + "：" + why); };
 
-            BuildUi();
-            RefreshModels();
-            LoadGames();
+            // Timing, so a slow start can be attributed instead of guessed. Reported once at the end
+            // of construction and written to the same startup trace the launcher uses.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            long tUi, tModels, tGames;
+            BuildUi(); tUi = sw.ElapsedMilliseconds;
+            RefreshModels(); tModels = sw.ElapsedMilliseconds - tUi;
+            LoadGames(); tGames = sw.ElapsedMilliseconds - tUi - tModels;
+            Startup.Trace("MainForm 内部耗时：界面 " + tUi + "ms，模型列表 " + tModels + "ms，游戏列表 " +
+                tGames + "ms（" + _games.Count + " 个游戏）");
 
             _ticker = new System.Windows.Forms.Timer { Interval = 1000 };
             _ticker.Tick += (s, e) => UpdateProgressPanel();
             _ticker.Start();
 
             FormClosing += OnFormClosing;
-            Load += OnLoadFix;
 
-            // The one-shot that actually shows the window; see ForceWindowVisible.
-            var once = new System.Threading.Timer(_ =>
-            {
-                try { BeginInvoke(new Action(ForceWindowVisible)); } catch { }
-            }, null, 1200, System.Threading.Timeout.Infinite);
-            FormClosed += (s, e) => { try { once.Dispose(); } catch { } };
+            // One nudge, on this thread, a moment after the loop is up.
+            //
+            // This used to be a System.Threading.Timer whose callback called BeginInvoke from a
+            // thread-pool thread. That is what kept the window invisible: Application.Run sets
+            // Visible and, before the loop reaches its first pump, the pool thread's BeginInvoke
+            // marshals onto the same window and the two wait on each other — no Load, no Shown, no
+            // timer tick ever reached the form, which is exactly what the launch trace showed. A
+            // WinForms timer runs on the UI thread, so it cannot race the pump that feeds it.
+            var nudge = new System.Windows.Forms.Timer { Interval = 700 };
+            nudge.Tick += (s, e) => { nudge.Stop(); ForceWindowVisible(); };
+            nudge.Start();
+            FormClosed += (s, e) => { try { nudge.Dispose(); } catch { } };
         }
 
-        private void OnLoadFix(object sender, EventArgs e) { ForceWindowVisible(); }
+        // The window now shows itself: the show path costs milliseconds once the game list is filled
+        // in virtual mode, so the Load event fires normally and neither a native ShowWindow nor a
+        // retry thread is needed to make the window appear. OnShown is kept only to record when it
+        // happened, which is the figure the launch trace is read for.
+
+        protected override void OnShown(EventArgs e)
+        {
+            Startup.Trace("窗口已显示");
+            base.OnShown(e);
+        }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -131,13 +151,14 @@ namespace GameTranslatorV3
         {
             try
             {
-                if (!IsHandleCreated) return;
+                if (!IsHandleCreated) { Startup.Trace("ForceWindowVisible: 尚无句柄"); return; }
                 var h = Handle;
-                if (IsWindowVisible(h)) { AppendLog("窗口已可见。"); return; }
+                if (IsWindowVisible(h)) { Startup.Trace("窗口已可见"); AppendLog("窗口已可见。"); return; }
                 ShowWindow(h, SW_SHOWNORMAL);
                 ShowWindow(h, SW_SHOW);
                 ShowWindow(h, SW_RESTORE);
                 SetForegroundWindow(h);
+                Startup.Trace("已强制显示窗口 visible=" + IsWindowVisible(h));
                 AppendLog("已强制显示窗口 (visible=" + IsWindowVisible(h) + ")。");
             }
             catch (Exception ex) { AppendLog("强制显示窗口失败：" + ex.Message); }
@@ -220,14 +241,26 @@ namespace GameTranslatorV3
             _btnAdd = MakeButton("添加游戏", (s, e) => AddGame());
             _btnRefresh = MakeButton("扫描全部路径", (s, e) => ScanAllRoots(false));
             _btnRescanAll = MakeButton("重新扫描全部", (s, e) => RescanAllRoots());
+            _btnState = MakeButton("刷新状态", (s, e) => RefreshGameStates());
             _btnSelectAll = MakeButton("全选", (s, e) => SetAllChecked(true));
             _btnClearSel = MakeButton("取消全选", (s, e) => SetAllChecked(false));
-            bar.Controls.AddRange(new Control[] { _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnSelectAll, _btnClearSel });
+            bar.Controls.AddRange(new Control[] { _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnState, _btnSelectAll, _btnClearSel });
 
             _list = new ListView
             {
                 Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true,
-                FullRowSelect = true, GridLines = true, HideSelection = false
+                FullRowSelect = true, GridLines = true, HideSelection = false,
+                // Virtual mode: rows are produced on demand instead of being pushed into the native
+                // control. Adding a row to a real ListView costs about 300 ms on the machine this was
+                // measured on (110 rows: 34 s; 10 rows: 3 s — linear), and that cost is paid when the
+                // row reaches the control, i.e. during the show if the list was filled before it, or
+                // on the UI thread for half a minute if it was filled after. Virtual mode pays none
+                // of it, so the window appears at once and stays responsive whatever the list length.
+                VirtualMode = true
+            };
+            _list.RetrieveVirtualItem += (s, e) =>
+            {
+                if (e.ItemIndex >= 0 && e.ItemIndex < _games.Count) e.Item = MakeRow(_games[e.ItemIndex]);
             };
             _list.Columns.Add("", 26);
             _list.Columns.Add("游戏", 300);
@@ -235,10 +268,13 @@ namespace GameTranslatorV3
             _list.Columns.Add("条目", 60);
             _list.Columns.Add("进度", 120);
             _list.Columns.Add("状态", 160);
-            _list.ItemChecked += (s, e) =>
+            // ItemCheck rather than ItemChecked: in virtual mode the event must carry the index and
+            // the new state, which is exactly what ItemCheck supplies. The model, not the control,
+            // holds the checked set, so the assignment here is the source of truth.
+            _list.ItemCheck += (s, e) =>
             {
-                var g = e.Item.Tag as GameItem;
-                if (g != null) g.Checked = e.Item.Checked;
+                if (e.Index >= 0 && e.Index < _games.Count)
+                    _games[e.Index].Checked = e.NewValue == CheckState.Checked;
                 UpdateButtons();
             };
             _list.SelectedIndexChanged += (s, e) => UpdateButtons();
@@ -428,6 +464,8 @@ namespace GameTranslatorV3
         /// <summary>Redraw the progress panel. Driven by a timer so 用时 keeps counting.</summary>
         private void UpdateProgressPanel()
         {
+            // Guarded so a diagnostic build with only part of the UI can still run its timers.
+            if (_lblCounts == null || _lblModelNow == null || _lblModelState == null || _status == null) return;
             if (_running)
             {
                 var el = DateTime.Now - _runStarted;
@@ -484,10 +522,18 @@ namespace GameTranslatorV3
             public string LaunchProblem;
         }
 
+        /// <summary>
+        /// Load the game list from the scan cache.
+        ///
+        /// The cache is written by the scanner; a per-game state file (work\games-state.json,
+        /// produced by tools\game-state.js) is merged in here when present, so the list can show
+        /// which games are already Chinese or already translated without re-reading each game.
+        /// </summary>
         private void LoadGames()
         {
             _games.Clear();
             var cache = Path.Combine(_settings.WorkDir, "games-cache.json");
+            var state = LoadGameStates();
             if (File.Exists(cache))
             {
                 try
@@ -496,6 +542,8 @@ namespace GameTranslatorV3
                     {
                         string dir = SimpleJson.Get(g, "Dir") ?? SimpleJson.Get(g, "dir");
                         if (string.IsNullOrEmpty(dir)) continue;
+                        string st;
+                        state.TryGetValue(dir, out st);
                         _games.Add(new GameItem
                         {
                             Dir = dir,
@@ -503,7 +551,7 @@ namespace GameTranslatorV3
                             Engine = SimpleJson.Get(g, "Kind") ?? "?",
                             Entries = SimpleJson.GetInt(g, "Entries"),
                             Checked = false,
-                            Status = SimpleJson.GetBool(g, "AlreadyCn") ? "已是中文，默认跳过" : ""
+                            Status = st ?? (SimpleJson.GetBool(g, "AlreadyCn") ? "已是中文，默认跳过" : "")
                         });
                     }
                 }
@@ -512,26 +560,60 @@ namespace GameTranslatorV3
             RefreshList();
         }
 
+        /// <summary>
+        /// Read work\games-state.json — one line per game, saying whether it is already Chinese,
+        /// already translated, or still Japanese. Written by tools\game-state.js, which inspects the
+        /// game (its data against its pristine backup) rather than trusting any earlier claim.
+        /// Missing file simply means no state is shown.
+        /// </summary>
+        private Dictionary<string, string> LoadGameStates()
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var path = Path.Combine(_settings.WorkDir, "games-state.json");
+                if (!File.Exists(path)) return map;
+                foreach (var g in SimpleJson.Array(File.ReadAllText(path, Encoding.UTF8)))
+                {
+                    string dir = SimpleJson.Get(g, "Dir") ?? SimpleJson.Get(g, "dir");
+                    if (string.IsNullOrEmpty(dir)) continue;
+                    string kind = SimpleJson.Get(g, "State") ?? "";
+                    string note = SimpleJson.Get(g, "Note") ?? "";
+                    map[dir] = note.Length > 0 ? kind + "（" + note + "）" : kind;
+                }
+                AppendLog("已读取游戏状态：" + map.Count + " 条（work\\games-state.json）");
+            }
+            catch (Exception ex) { AppendLog("读取 games-state.json 失败：" + ex.Message); }
+            return map;
+        }
+
+        /// <summary>
+        /// Rebuild the game list's size.
+        ///
+        /// In virtual mode there are no rows to add: the control asks for a row when it needs one, so
+        /// this only publishes the count. Nothing here can block, whatever the library size.
+        /// </summary>
         private void RefreshList()
         {
-            _list.BeginUpdate();
-            _list.Items.Clear();
-            foreach (var g in _games)
-            {
-                if (g.Exe == null && g.LaunchProblem == null) ResolveLaunchTarget(g);
-                var it = new ListViewItem("");
-                it.SubItems.Add(g.Name);
-                it.SubItems.Add(g.Engine);
-                it.SubItems.Add(g.Entries >= 0 ? g.Entries.ToString() : "");
-                it.SubItems.Add(ReadProgress(g));
-                it.SubItems.Add(g.Status);
-                it.Checked = g.Checked;
-                it.Tag = g;
-                _list.Items.Add(it);
-            }
-            _list.EndUpdate();
+            _list.VirtualListSize = 0;
+            _list.VirtualListSize = _games.Count;
             _status.Text = "共 " + _games.Count + " 个游戏，已勾选 " + _games.Count(x => x.Checked) + " 个";
             UpdateButtons();
+        }
+
+        /// <summary>Build one row's view from the model. Called only for rows the control needs.</summary>
+        private ListViewItem MakeRow(GameItem g)
+        {
+            if (g.Exe == null && g.LaunchProblem == null) ResolveLaunchTarget(g);
+            var it = new ListViewItem("");
+            it.SubItems.Add(g.Name);
+            it.SubItems.Add(g.Engine);
+            it.SubItems.Add(g.Entries >= 0 ? g.Entries.ToString() : "");
+            it.SubItems.Add(ReadProgress(g));
+            it.SubItems.Add(g.Status);
+            it.Checked = g.Checked;
+            it.Tag = g;
+            return it;
         }
 
         /// <summary>Read the pipeline's own report so the list never overstates progress.</summary>
@@ -606,7 +688,9 @@ namespace GameTranslatorV3
         private void SetAllChecked(bool value)
         {
             foreach (var g in _games) g.Checked = value;
-            foreach (ListViewItem it in _list.Items) it.Checked = value;
+            // The rows live in the control's own cache in virtual mode, so the visible checkmarks are
+            // refreshed by asking it to redraw from the model rather than by setting them one by one.
+            if (_list.VirtualListSize > 0) _list.RedrawItems(0, _list.VirtualListSize - 1, false);
             UpdateButtons();
         }
 
@@ -627,6 +711,7 @@ namespace GameTranslatorV3
             _btnClearSel.Enabled = !_running;
             _btnUninstall.Enabled = !_running && checkedGames == 1;
             _btnRestore.Enabled = !_running && checkedGames == 1;
+            _btnState.Enabled = !_running;
             _btnSettings.Enabled = !_running;
             _cmbModel.Enabled = !_running && _cmbModel.Items.Count > 0 && !Convert.ToString(_cmbModel.SelectedItem).StartsWith("（");
             _btnModelRefresh.Enabled = !_running;
@@ -714,6 +799,78 @@ namespace GameTranslatorV3
         }
 
         /// <summary>How deep to look, from settings. 1 means the root's children only.</summary>
+        // ------------------------------------------------------------------ state ------
+
+        /// <summary>
+        /// Recompute, for every game in the list, whether it is already Chinese or already
+        /// translated, and show that in the 状态 column.
+        ///
+        /// The work is done by tools\game-state.js, which inspects each game (its data against the
+        /// pristine backup, and its dialogue folder) rather than trusting any earlier claim; the
+        /// result is written to work\games-state.json, which LoadGames reads. Running it in a child
+        /// process keeps a half-minute scan off the UI thread.
+        /// </summary>
+        private void RefreshGameStates()
+        {
+            var node = Path.Combine(_root, "node", "node.exe");
+            var tool = Path.Combine(_root, "tools", "game-state.js");
+            var cache = Path.Combine(_settings.WorkDir, "games-cache.json");
+            if (!File.Exists(node)) { AppendLog("找不到 " + node + "，无法计算游戏状态。"); return; }
+            if (!File.Exists(tool)) { AppendLog("找不到 " + tool + "（发布时需一并拷贝 tools 目录）。"); return; }
+            if (!File.Exists(cache)) { AppendLog("还没有游戏列表，先扫描路径。"); return; }
+
+            AppendLog("正在检查 " + _games.Count + " 个游戏的状态（读取每个游戏的数据并与原版对比）…");
+            _btnState.Enabled = false;
+
+            string args = PipelineRunner.Join(new string[] {
+                PipelineRunner.Quote(tool),
+                "--cache", PipelineRunner.Quote(cache),
+                "--outdir", PipelineRunner.Quote(_settings.WorkDir),
+                "--out", "games-state.json",
+                "--quiet"
+            });
+
+            var psi = new ProcessStartInfo(node)
+            {
+                Arguments = args,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = _root
+            };
+            try
+            {
+                var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
+                var sb = new StringBuilder();
+                p.OutputDataReceived += (s, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
+                p.ErrorDataReceived += (s, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
+                p.Exited += (s, e) =>
+                {
+                    try
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            string tail = sb.ToString().Trim();
+                            if (tail.Length > 0) AppendLog(tail);
+                            LoadGames();
+                            AppendLog("状态已更新：已汉化的游戏在状态列标出，不必重复翻译。");
+                            UpdateButtons();
+                        }));
+                    }
+                    catch { }
+                };
+                p.Start();
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+            }
+            catch (Exception ex)
+            {
+                AppendLog("计算游戏状态失败：" + ex.Message);
+                _btnState.Enabled = true;
+            }
+        }
+
         private int MaxScanDepth { get { return Math.Max(1, _settings.ScanDepth); } }
 
         /// <summary>Children never worth descending into: they are data, not games.</summary>
@@ -926,8 +1083,10 @@ namespace GameTranslatorV3
 
         private GameItem CurrentGame()
         {
-            var it = _list != null && _list.SelectedItems.Count > 0 ? _list.SelectedItems[0] : null;
-            return it == null ? null : it.Tag as GameItem;
+            // Virtual mode supplies no SelectedItems: the selection is an index into the model.
+            if (_list == null || _list.SelectedIndices.Count == 0) return null;
+            int i = _list.SelectedIndices[0];
+            return i >= 0 && i < _games.Count ? _games[i] : null;
         }
 
         private void Launch(GameItem g)
@@ -1479,3 +1638,4 @@ namespace GameTranslatorV3
         }
     }
 }
+
