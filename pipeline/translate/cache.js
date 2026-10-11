@@ -20,7 +20,30 @@ const normText = (s) => String(s).replace(/\r\n/g, "\n").replace(/\r/g, "\n").re
 function badValue(value, source) {
   if (promptEchoMatches(value, source)) return "echo";
   if (degenerationMatches(value)) return "degenerate";
+  // The control codes must be the same multiset as the source's, which is what the quality gate's
+  // rules 1 and 6b require before a value is ever cached. Re-checked here because a cache file that
+  // already holds a mismatch is never re-validated, and the mismatch is the signature of a value that
+  // belongs to a DIFFERENT source: one game's stored "「\n[2]さん、油断はだめですよ。" came back as
+  // "“\n[3]さん，不要掉以轻心哦。" — a correct translation of some other line, written onto this one.
+  // 363 of that game's 2555 pairs were of that kind, and the patch step had already put them in the
+  // game. Dropping them at load makes the next run re-translate those sources instead of keeping text
+  // that was meant for a different line.
+  if (!codesAgree(value, source)) return "codes";
   return "";
+}
+
+/** Same backslash sequences, same counts — the comparison rules 1 and 6b make at the gate. */
+function codesAgree(value, source) {
+  const tokenize = (x) => {
+    const out = Object.create(null);
+    for (const c of String(x).match(/\\[A-Za-z]?[\[<][^\]>]{0,16}[\]>]|\\./g) || []) out[c] = (out[c] || 0) + 1;
+    return out;
+  };
+  const a = tokenize(source), b = tokenize(value);
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) if (a[k] !== b[k]) return false;
+  return true;
 }
 
 function makeCache(file) {
@@ -28,6 +51,7 @@ function makeCache(file) {
   let loadedFromDisk = 0;
   let purgedEcho = 0;
   let purgedDegenerate = 0;
+  let purgedCodes = 0;
   const refused = [];              // values set() refused; kept for the report, not written
 
   if (file && fs.existsSync(file)) {
@@ -49,7 +73,9 @@ function makeCache(file) {
           const why = badValue(byText[k], k);
           if (!why) continue;
           delete byText[k];
-          if (why === "echo") purgedEcho++; else purgedDegenerate++;
+          if (why === "echo") purgedEcho++;
+          else if (why === "degenerate") purgedDegenerate++;
+          else purgedCodes++;
         }
         loadedFromDisk = Object.keys(byText).length;
       }
@@ -58,6 +84,7 @@ function makeCache(file) {
     }
     if (purgedEcho) console.log("CACHE_PURGED_ECHO", purgedEcho);
     if (purgedDegenerate) console.log("CACHE_PURGED_DEGENERATE", purgedDegenerate);
+    if (purgedCodes) console.log("CACHE_PURGED_CODES", purgedCodes, "（译文与原文的控制代码不一致，视为串行写入，已丢弃待重译）");
   }
 
   return {
@@ -66,6 +93,7 @@ function makeCache(file) {
     get loaded() { return loadedFromDisk; },
     get purgedEcho() { return purgedEcho; },
     get purgedDegenerate() { return purgedDegenerate; },
+    get purgedCodes() { return purgedCodes; },
     get refused() { return refused.length; },
     has(text) { return typeof byText[normText(text)] === "string"; },
     lookup(text) { return byText[normText(text)]; },

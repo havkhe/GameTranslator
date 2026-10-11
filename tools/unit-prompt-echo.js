@@ -117,5 +117,38 @@ console.log("=== a cache holding echoes purges them at load ===");
 }
 
 console.log("");
+console.log("=== a cache whose value carries the wrong control codes is dropped ===");
+{
+  // Real pairs from one game's cache, where a value was written onto the wrong source: the reply is a
+  // correct translation of a DIFFERENT line, so its variable codes do not match this source's.
+  const fs = require("fs");
+  const os = require("os");
+  const C = require("../pipeline/translate/cache.js");
+  const tmp = fs.mkdtempSync(require("path").join(os.tmpdir(), "gt-codes-"));
+  const file = require("path").join(tmp, "cache.json");
+  const src = "\u300c\\n[2]\u3055\u3093\u3001\u6cb9\u65ad\u306f\u3060\u3081\u3067\u3059\u3088\u3002";   // 「\n[2]さん、油断はだめですよ。
+  const good = "\u300c\\n[2]\u5148\u751f\uff0c\u4e0d\u80fd\u6389\u4ee5\u8f7b\u5fc3\u3002";             // 「\n[2]先生，不能掉以轻心。
+  const wrong = "\u201c\\n[3]\u3055\u3093\uff0c\u4e0d\u8981\u6389\u4ee5\u8f7b\u5fc3\u54e6\u3002";      // “\n[3]さん，不要掉以轻心哦。
+  const seeded = {
+    version: 3,
+    byText: {
+      [src]: wrong,                                                        // codes differ -> drop
+      "\u30ed\u30fc\u30c9": "\u8bfb\u53d6",                                 // no codes either side -> keep
+      "\u300c\\n[1]\u3055\u3093\u300d": "\u300c\\n[1]\u5148\u751f\u300d",   // same code -> keep
+    },
+  };
+  fs.writeFileSync(file, JSON.stringify(seeded), "utf8");
+  const c = C.makeCache(file);
+  check("one code-mismatched entry purged", c.purgedCodes === 1, "purgedCodes=" + c.purgedCodes);
+  check("the mismatched key is gone", !c.has(src));
+  check("a code-free pair survives", c.lookup("\u30ed\u30fc\u30c9") === "\u8bfb\u53d6");
+  check("a matching-code pair survives", c.lookup("\u300c\\n[1]\u3055\u3093\u300d") === "\u300c\\n[1]\u5148\u751f\u300d");
+  check("set() refuses a code mismatch", c.set("\u300c\\n[3]\u3061\u3083\u3093\u300d", "\u300c\\n[2]\u5c0f\u59d0\u300d") === false);
+  check("set() accepts a matching code", c.set("\u300c\\n[3]\u3061\u3083\u3093\u300d", "\u300c\\n[3]\u5c0f\u59d0\u300d") === true);
+  check("lookup falls back to the original for a dropped entry", c.lookup(src) === undefined);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("");
 console.log("  pass " + pass + "   fail " + fail);
 process.exit(fail ? 1 : 0);
