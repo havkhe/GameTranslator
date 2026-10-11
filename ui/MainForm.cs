@@ -69,6 +69,28 @@ namespace GameTranslatorV3
         private long _pairCount;
         private const int PairHistoryMax = 200;
 
+        // ---- 速度与预计 ----------------------------------------------------------------------
+        //
+        // Both figures are SAMPLED over a window instead of read instantaneously: the counters move in
+        // bursts (one reply every few seconds), so an instantaneous reading swings wildly and the estimate
+        // built on it would too. Every window the rate is recomputed from the deltas and the baseline moves.
+        private Label _lblEta;
+        /// <summary>Last /metrics reading of predicted tokens, and when it was taken.</summary>
+        private long _serverTokens = -1;
+        private DateTime _serverTokensAt = DateTime.MinValue;
+        private DateTime _rateSampleAt = DateTime.MinValue;
+        private long _rateSampleTokens;
+        private int _rateSampleEntries;
+        private double _tokPerSec, _entriesPerMin;
+        /// <summary>The sampling window, in seconds.</summary>
+        private const int RateWindowSeconds = 15;
+        /// <summary>Games of the current run that have not finished yet, for the batch estimate.</summary>
+        private List<GameItem> _runGames = new List<GameItem>();
+        /// <summary>Entries already translated by the games of this run that have finished.</summary>
+        private int _runEntriesBase;
+        /// <summary>The game being translated now, so the estimate does not count it twice.</summary>
+        private GameItem _currentItem;
+
         // ---- grouped translation queue -------------------------------------------------------
         //
         // The one-shot batch above and this queue are separate paths on purpose: the old buttons keep
@@ -777,7 +799,7 @@ namespace GameTranslatorV3
             modelBox.Controls.Add(modelRow);
 
             // ---- detailed progress ----------------------------------------------
-            var progBox = new GroupBox { Dock = DockStyle.Top, Height = 190, Text = "任务进度" };
+            var progBox = new GroupBox { Dock = DockStyle.Top, Height = 210, Text = "任务进度" };
             var grid = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9,
@@ -789,6 +811,7 @@ namespace GameTranslatorV3
             _barGame = new ProgressBar { Dock = DockStyle.Top, Height = 16, Maximum = 1000 };
             _lblCounts = MakeStatLabel("条目：—    请求：0    失败：0    跳过：0");
             _lblRate = MakeStatLabel("速度：—");
+            _lblEta = MakeStatLabel("预计：—");
             _lblElapsed = MakeStatLabel("用时：—");
             _lblModelNow = MakeStatLabel("模型：—");
             grid.Controls.Add(_lblBatch, 0, 0);
@@ -797,8 +820,9 @@ namespace GameTranslatorV3
             grid.Controls.Add(_barGame, 0, 3);
             grid.Controls.Add(_lblCounts, 0, 4);
             grid.Controls.Add(_lblRate, 0, 5);
-            grid.Controls.Add(_lblElapsed, 0, 6);
-            grid.Controls.Add(_lblModelNow, 0, 7);
+            grid.Controls.Add(_lblEta, 0, 6);
+            grid.Controls.Add(_lblElapsed, 0, 7);
+            grid.Controls.Add(_lblModelNow, 0, 8);
             progBox.Controls.Add(grid);
 
             // ---- task controls ---------------------------------------------------
@@ -1098,6 +1122,7 @@ namespace GameTranslatorV3
                 {
                     bool up = false;
                     string loaded = null;
+                    long tokens = -1;
                     try
                     {
                         using (var c = new System.Net.Sockets.TcpClient())
@@ -1107,14 +1132,21 @@ namespace GameTranslatorV3
                         }
                     }
                     catch { up = false; }
-                    // What the server actually loaded. Read-only and one short request every few seconds.
-                    if (up) loaded = AskLoadedModel(port);
+                    // What the server actually loaded, and how many tokens it has generated so far. Both are
+                    // read-only, one short request every few seconds.
+                    if (up)
+                    {
+                        loaded = AskLoadedModel(port);
+                        tokens = AskPredictedTokens(port);
+                    }
                     try
                     {
                         BeginInvoke(new Action(() =>
                         {
                             _modelUp = up;
                             _serverModel = loaded;
+                            if (tokens >= 0) { _serverTokens = tokens; _serverTokensAt = DateTime.Now; }
+                            else _serverTokensAt = DateTime.MinValue;      // unknown: rates must not guess
                             _modelProbeAt = DateTime.Now;
                             _modelProbeBusy = false;
                             ApplyModelState();
@@ -1131,20 +1163,55 @@ namespace GameTranslatorV3
         {
             try
             {
-                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(
-                    "http://127.0.0.1:" + port + "/props");
-                req.Timeout = 2500;
-                req.ReadWriteTimeout = 2500;
-                req.Method = "GET";
-                using (var resp = req.GetResponse())
-                using (var sr = new System.IO.StreamReader(resp.GetResponseStream(), Encoding.UTF8))
-                {
-                    var props = SimpleJson.ParseFlat(sr.ReadToEnd());
-                    string path = SimpleJson.Get(props, "model_path");
-                    return string.IsNullOrEmpty(path) ? null : Path.GetFileName(path);
-                }
+                var body = HttpGet(port, "/props");
+                if (body == null) return null;
+                var props = SimpleJson.ParseFlat(body);
+                string path = SimpleJson.Get(props, "model_path");
+                return string.IsNullOrEmpty(path) ? null : Path.GetFileName(path);
             }
             catch { return null; }
+        }
+
+        /// <summary>Tokens the server has generated in total (Prometheus counter), or -1.</summary>
+        private static long AskPredictedTokens(int port)
+        {
+            try { return ParsePredictedTokens(HttpGet(port, "/metrics")); } catch { return -1; }
+        }
+
+        /// <summary>
+        /// Read `llamacpp:tokens_predicted_total` out of a Prometheus body, or -1.
+        ///
+        /// The `# HELP` and `# TYPE` lines carry the same metric name, so a plain substring search finds the
+        /// description — whose value column is a word, not a number — and reports no figure at all. Only
+        /// non-comment lines are considered, and the value must be digits.
+        /// </summary>
+        private static long ParsePredictedTokens(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return -1;
+            foreach (var raw in body.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                if (!line.StartsWith("llamacpp:tokens_predicted_total", StringComparison.Ordinal)) continue;
+                var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2) continue;
+                long v;
+                if (long.TryParse(parts[1], out v)) return v;
+            }
+            return -1;
+        }
+
+        /** A short GET, or null. Used only for the server's own read-only endpoints. */
+        private static string HttpGet(int port, string pathAndQuery)
+        {
+            var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(
+                "http://127.0.0.1:" + port + pathAndQuery);
+            req.Timeout = 2500;
+            req.ReadWriteTimeout = 2500;
+            req.Method = "GET";
+            using (var resp = req.GetResponse())
+            using (var sr = new System.IO.StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                return sr.ReadToEnd();
         }
 
         /// <summary>Paint the model state from the cached reading. No I/O, safe to call anywhere.</summary>
@@ -1209,16 +1276,11 @@ namespace GameTranslatorV3
                     // Showing it here is what tells the user the button worked during a long game, where the
                     // old game-level pause left the display unchanged for as long as the game ran.
                     _lblRate.Text = "速度：已暂停（当前请求结束后不再发出新请求）";
+                    _lblEta.Text = "预计：已暂停";
                 }
-                else if (_lastProgressAt != DateTime.MinValue && _lastProgressCount > 0)
+                else
                 {
-                    var span = (DateTime.Now - _lastProgressAt).TotalMinutes;
-                    if (span > 0.05 && _gameTotal > 0)
-                    {
-                        var pct = 100.0 * _lastProgressCount / _gameTotal;
-                        _lblRate.Text = "速度：本游戏 " + pct.ToString("0.0") + "%   " +
-                            (_lastProgressCount / 1.0).ToString("0") + " / " + _gameTotal + " 条";
-                    }
+                    UpdateRates();
                 }
             }
 
@@ -1240,10 +1302,108 @@ namespace GameTranslatorV3
             _barGame.Value = 0;
             _lblBatch.Text = "批次：准备中…";
             _lblCurrent.Text = "当前：—";
+            // The speed sample and the run's own bookkeeping restart with the run.
+            _rateSampleAt = DateTime.MinValue;
+            _rateSampleTokens = 0;
+            _rateSampleEntries = 0;
+            _tokPerSec = 0;
+            _entriesPerMin = 0;
+            _runEntriesBase = 0;
+            _runGames = new List<GameItem>();
+            _currentItem = null;
+            _lblRate.Text = "速度：—";
+            _lblEta.Text = "预计：—";
             // A run must never inherit a pause from a previous one.
             ClearStalePauseFlag();
             // The reference panel describes one run, so it is emptied when one starts.
             ClearPairs();
+        }
+
+        // ------------------------------------------------------ speed and estimate ----
+
+        /// <summary>
+        /// Sample the throughput and refresh the two lines. Called once a second by the ticker, but it only
+        /// takes a sample every RateWindowSeconds: both counters move in bursts (one reply per few seconds),
+        /// so an instantaneous rate swings wildly and an estimate built on it would swing with it.
+        /// </summary>
+        private void UpdateRates()
+        {
+            if (_lblRate == null) return;
+            int entriesNow = _runEntriesBase + _lastProgressCount;
+            var now = DateTime.Now;
+            if (_rateSampleAt == DateTime.MinValue || (now - _rateSampleAt).TotalSeconds >= RateWindowSeconds)
+            {
+                bool haveTokens = _serverTokens >= 0 && _serverTokensAt != DateTime.MinValue;
+                // A counter that went BACKWARDS means a different server answered — two can hold one port
+                // (llama.cpp sets SO_REUSEADDR and Windows allows it), and each keeps its own counters. The
+                // baseline is restarted instead of reporting a negative rate from mixed series.
+                if (_rateSampleAt != DateTime.MinValue && haveTokens && _serverTokens >= _rateSampleTokens)
+                {
+                    double secs = (now - _rateSampleAt).TotalSeconds;
+                    if (secs >= 1)
+                    {
+                        _tokPerSec = (_serverTokens - _rateSampleTokens) / secs;
+                        _entriesPerMin = 60.0 * (entriesNow - _rateSampleEntries) / secs;
+                    }
+                }
+                else if (_rateSampleAt != DateTime.MinValue)
+                {
+                    _tokPerSec = 0;
+                    _entriesPerMin = 0;
+                }
+                _rateSampleAt = now;
+                _rateSampleTokens = haveTokens ? _serverTokens : 0;
+                _rateSampleEntries = entriesNow;
+            }
+
+            string window = "近 " + RateWindowSeconds + " 秒";
+            _lblRate.Text = "速度：" + _tokPerSec.ToString("0.0") + " tok/s（" + window + "）    " +
+                _entriesPerMin.ToString("0.0") + " 条/分    已知已译 " + entriesNow + " 条";
+
+            // ---- estimate -------------------------------------------------------------------------
+            double perSec = _entriesPerMin / 60.0;
+            if (perSec <= 0.0001)
+            {
+                _lblEta.Text = "预计：—（等 " + RateWindowSeconds + " 秒统计出速率）";
+                Tip(_lblEta, "速度来自近 " + RateWindowSeconds + " 秒的采样。计数器刚重置、或刚好没有新译文时会是 0，稍等一个窗口即可。");
+                return;
+            }
+            int gameRemaining = _gameTotal > 0 ? Math.Max(0, _gameTotal - _lastProgressCount) : 0;
+            string gameEta = gameRemaining > 0
+                ? FormatSpan(gameRemaining / perSec)
+                : (_gameTotal > 0 ? "本局已译完" : "—");
+
+            // The other games of this run contribute the size from their own progress report. A game that has
+            // never been translated has no report, and is counted as UNKNOWN rather than as zero: an estimate
+            // that silently leaves out half the work is worse than one that says what it does not know.
+            int otherRemaining = 0, unknown = 0;
+            foreach (var g in _runGames)
+            {
+                if (ReferenceEquals(g, _currentItem)) continue;         // already counted as the live game
+                int e, d;
+                if (TryReadProgress(g, out e, out d) && e > 0) otherRemaining += Math.Max(0, e - d);
+                else unknown++;
+            }
+            int totalRemaining = gameRemaining + otherRemaining;
+            string runEta = totalRemaining > 0
+                ? FormatSpan(totalRemaining / perSec) + "（剩余 " + _runGames.Count + " 局、" + totalRemaining + " 条）"
+                : "—";
+            if (unknown > 0) runEta += "，另有 " + unknown + " 局大小未知";
+
+            _lblEta.Text = "预计：本局 " + gameEta + "    |    本批 " + runEta;
+            Tip(_lblEta, "按近 " + RateWindowSeconds + " 秒的「条/分」外推。\n" +
+                         "本局 = 本局剩余条数 ÷ 速率；本批 = 本局剩余 + 其余未完成游戏在各自进度报告里的剩余条数。\n" +
+                         "尚未翻译过的游戏没有报告，会被算作「大小未知」而不是 0，所以实际用时通常比粗估的更长。");
+        }
+
+        /** A duration as "1 小时 5 分" / "12 分 30 秒" / "45 秒". */
+        private static string FormatSpan(double seconds)
+        {
+            if (seconds < 0 || double.IsNaN(seconds) || double.IsInfinity(seconds)) return "—";
+            var t = TimeSpan.FromSeconds(seconds);
+            if (t.TotalHours >= 1) return (int)t.TotalHours + " 小时 " + t.Minutes + " 分";
+            if (t.TotalMinutes >= 1) return (int)t.TotalMinutes + " 分 " + t.Seconds + " 秒";
+            return Math.Max(1, (int)Math.Round(t.TotalSeconds)) + " 秒";
         }
 
         // ---------------------------------------------------------------- games ------
@@ -2192,6 +2352,9 @@ namespace GameTranslatorV3
             _running = true; _paused = false;
             _cts = new CancellationTokenSource();
             ResetProgress();
+            // What this run still has to do, for the estimate. Games marked 已是中文 are left out: they are
+            // not translated, so counting their size would inflate the figure.
+            _runGames = list.Where(g => !g.Skip).ToList();
             _barGame.Maximum = 1000;
             _batchTotal = list.Count;
             UpdateButtons();
@@ -2229,6 +2392,7 @@ namespace GameTranslatorV3
                 if (_cts.IsCancellationRequested) break;
 
                 _currentGame = g.Name;
+                _currentItem = g;
                 _lblCurrent.Text = "当前：" + g.Name;
                 _barGame.Value = 0;
                 _lastProgressAt = DateTime.MinValue;
@@ -2236,6 +2400,10 @@ namespace GameTranslatorV3
                 AppendLog("═══ 开始 " + g.Name + " ═══");
 
                 var outcome = await _runner.RunAsync(g.Dir, _settings.PromptFile, _cts.Token);
+                // The game leaves the run's remaining set, and the entries it translated move into the
+                // baseline so the sampled 条/分 keeps counting across games.
+                if (_runGames.Contains(g)) _runGames.Remove(g);
+                _runEntriesBase += _lastProgressCount;
                 if (outcome.Succeeded) { g.Status = "已完成"; AppendLog("✔ " + g.Name + " 完成（尝试 " + outcome.AttemptsUsed + " 次）"); }
                 else if (outcome.SkipReason == "用户终止") { AppendLog("■ 已终止"); break; }
                 else { g.Status = "失败已跳过"; failed.Add(g.Name + "：" + outcome.SkipReason); AppendLog("✖ " + g.Name + " 已跳过 —— " + outcome.SkipReason); }
@@ -2344,6 +2512,19 @@ namespace GameTranslatorV3
             _running = true; _paused = false; _skipGroupRequested = false;
             _cts = new CancellationTokenSource();
             ResetProgress();
+            // The run's remaining games, for the estimate: every unfinished task that maps to a game which
+            // is actually translatable.
+            _runGames = new List<GameItem>();
+            for (int gi = 0; gi < _queue.Count; gi++)
+            {
+                if (_queue[gi].State == "已完成" || _queue[gi].State == "已跳过" || _queue[gi].State == "已终止") continue;
+                foreach (var t in _queue[gi].Tasks)
+                {
+                    if (t.Result == "完成") continue;
+                    var it = _games.FirstOrDefault(x => SameDir(x.Dir, t.Dir));
+                    if (it != null && !it.Skip) _runGames.Add(it);
+                }
+            }
             _barGame.Maximum = 1000;
             _batchTotal = QueueTaskCount();
             _batchDone = 0;
@@ -2402,6 +2583,7 @@ namespace GameTranslatorV3
                     }
 
                     _currentGame = t.Name;
+                    _currentItem = g;
                     _lblCurrent.Text = "当前：" + t.Name + "（第" + (gi + 1) + "组 " + (ti + 1) + "/" + grp.Tasks.Count + "）";
                     _barGame.Value = 0;
                     _lastProgressAt = DateTime.MinValue;
@@ -2409,6 +2591,10 @@ namespace GameTranslatorV3
                     AppendLog("═══ 开始 " + t.Name + "（第" + (gi + 1) + "组）═══");
 
                     var outcome = await _runner.RunAsync(g.Dir, _settings.PromptFile, _cts.Token);
+                    // Same bookkeeping as the one-shot batch: the game leaves the run's remaining set and
+                    // its entries join the baseline the 条/分 sample counts against.
+                    if (_runGames.Contains(g)) _runGames.Remove(g);
+                    _runEntriesBase += _lastProgressCount;
                     if (outcome.Succeeded)
                     {
                         t.Result = "完成"; t.Note = "";

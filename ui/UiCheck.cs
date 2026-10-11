@@ -478,6 +478,59 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 速度/预计：tok/s、条/分、完成时间 ===");
+            {
+                var etaLabel = Flatten(form).OfType<Label>().FirstOrDefault(l => (l.Text ?? "").StartsWith("预计"));
+                Assert(etaLabel != null, "任务进度里有「预计」行：" + (etaLabel == null ? "无" : etaLabel.Text));
+                var rateLabel = Flatten(form).OfType<Label>().FirstOrDefault(l => (l.Text ?? "").StartsWith("速度"));
+                Assert(rateLabel != null, "任务进度里有「速度」行：" + (rateLabel == null ? "无" : rateLabel.Text));
+
+                // The Prometheus body is parsed, not substring-searched: the # HELP line carries the same
+                // metric name and its value column is a word, which is what a naive search picks up.
+                var parse = typeof(MainForm).GetMethod("ParsePredictedTokens", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(parse != null, "找到 ParsePredictedTokens（反射）");
+                if (parse != null)
+                {
+                    string sample = "# HELP llamacpp:tokens_predicted_total Number of tokens predicted\n" +
+                                    "# TYPE llamacpp:tokens_predicted_total counter\n" +
+                                    "llamacpp:tokens_predicted_total 410353\n" +
+                                    "llamacpp:prompt_tokens_total 357431\n";
+                    long got = Convert.ToInt64(parse.Invoke(null, new object[] { sample }));
+                    Assert(got == 410353, "真实 /metrics 文本解析出 410353（实际 " + got + "）");
+                    long none = Convert.ToInt64(parse.Invoke(null, new object[] { "# HELP x Total\nllamacpp:prompt_tokens_total 5\n" }));
+                    Assert(none == -1, "没有该指标时返回 -1（实际 " + none + "）");
+                    long empty = Convert.ToInt64(parse.Invoke(null, new object[] { "" }));
+                    Assert(empty == -1, "空文本返回 -1");
+                }
+
+                var span = typeof(MainForm).GetMethod("FormatSpan", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(span != null, "找到 FormatSpan（时长格式）");
+                if (span != null)
+                {
+                    var cases = new object[][]
+                    {
+                        new object[] { 3725.0, "1 小时 2 分" },      // 1h 2m 5s
+                        new object[] { 750.0, "12 分 30 秒" },
+                        new object[] { 45.0, "45 秒" },
+                        new object[] { 0.4, "1 秒" },                 // never "0 秒" for a positive estimate
+                    };
+                    foreach (var c in cases)
+                    {
+                        var s = Convert.ToString(span.Invoke(null, new[] { c[0] }));
+                        Assert(s == (string)c[1], "FormatSpan(" + c[0] + ") = " + s + "（应为 " + c[1] + "）");
+                    }
+                }
+
+                // The sampling window is the feature's contract: 15 seconds.
+                var win = typeof(MainForm).GetField("RateWindowSeconds", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(win != null && Convert.ToInt32(win.GetRawConstantValue()) == 15,
+                    "采样窗口为 15 秒（实际 " + (win == null ? "未找到" : Convert.ToString(win.GetRawConstantValue())) + "）");
+                // and the two figures are computed somewhere on every tick
+                var upd = typeof(MainForm).GetMethod("UpdateRates", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(upd != null, "找到 UpdateRates（每秒刷新、每 15 秒采样）");
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
             Console.WriteLine("        标题: " + form.Text + "   尺寸: " + form.Size);
             Console.WriteLine("");
