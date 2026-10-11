@@ -124,6 +124,79 @@ const AUDIO_CONTAINER_KEYS = new Set([
 /** Keys whose subtree is metadata and must stay untouched. */
 const META_KEYS = new Set(["metadata", "meta", "info", "__metadata", "note"]);
 
+/**
+ * Plugin-command codes whose arguments hold text — as `key = value` lines, not as whole strings.
+ *
+ * A plugin command stores each argument as `パラメータ名 = 値`, where the key is the plugin's own parameter
+ * name in Japanese and the value is the author's data: display text, a number, a boolean, or the name of a
+ * file the plugin will load. Translating the whole line was never an option —
+ *
+ *   measured on one library game: 172,596 such lines, of which the key alone is Japanese in almost every
+ *   one ("対象キャラ名 = 琵琶乃", "キャンセル許可 = false", "ウィンドウ画像 = "), and 10,448 have a file or
+ *   resource name as the value ("リソースラベル = Hiroka_Prologue_000", "ファイル名 = オープニング_3行で_01",
+ *   "取り込み元ファイル名 = message.txt"). Translating a key makes the plugin stop recognising its own
+ *   argument; translating a resource name makes it load the wrong file — the same class of damage the audio
+ *   `name` field and the face-image name caused (44 + 8 + 13 fields measured), but a hundred times larger.
+ *
+ * So only the VALUE is ever queued, and only when it really is display text: see
+ * pluginArgValueTranslatable, whose filters leave 0 / 64 / 5,322 new entries on the four games measured
+ * while refusing 7,596 / 5,012 / 123,692 values.
+ */
+const PLUGIN_ARG_CODES = new Set([356, 357, 657]);
+
+/**
+ * Keys whose value names a file or resource the plugin resolves.
+ *
+ * The value often looks like text — "オープニング_3行で_01" carries kana — so the key is what tells the two
+ * apart. ASCII keys are included because the same plugins take both spellings.
+ */
+const RESOURCE_ARG_KEY = /(リソース|ファイル|フォルダ|画像|素材|パス|音声|ボイス|サウンド|スクリーン|アイコン|アニメ|モーション|タイル|グラフィック|立ち絵|bgm|bgs|voice|sound|image|img|file|path|folder|sprite|picture)/i;
+
+/**
+ * Split one `key = value` plugin argument, keeping the exact bytes around the value.
+ *
+ * `prefix` is everything up to and including the separator and the spaces after it, `suffix` is the
+ * trailing whitespace, so patching can put a new value back without disturbing the author's spacing or the
+ * full-width `＝` some plugins use.
+ *
+ * @returns {{prefix: string, key: string, value: string, suffix: string}|null} null when there is no
+ *          `key = value` shape at all (a bare label such as "文章の表示", or a plugin name).
+ */
+function splitPluginArg(text) {
+  const t = String(text);
+  const m = t.match(/^(\s*.{1,30}?\s*[=＝]\s*)(\S(?:[\s\S]*\S)?)(\s*)$/);
+  if (!m) return null;
+  return { prefix: m[1], key: m[1].replace(/[=＝\s]+$/, "").trim(), value: m[2], suffix: m[3] };
+}
+
+/**
+ * Is this plugin argument's value display text that a translator should see?
+ *
+ * Every filter here is a measured refusal, not a guess:
+ *
+ *   kana required        a kana-free value in a plugin argument is a name, an id or a kanji term that reads
+ *                        the same in Chinese — "対象キャラ名 = 琵琶乃" (a name), "リソースラベル = ..." (an id).
+ *                        Requiring kana is what removes ~60,000 no-op translations on the moralist game and
+ *                        all 7,596 English values on NTR Gyaru (its choice text is English, its story is in
+ *                        text/message.txt, so it gains nothing here — correctly).
+ *   resource key         "ファイル名 = オープニング_3行で_01" has kana and must still be refused.
+ *   number / boolean     "結果受け取り変数 = 15", "キャンセル許可 = false", "ウィンドウ幅 = 720".
+ *   JSON structure       "選択肢リスト = [{...}]" — the text is inside the structure, and rebuilding it
+ *                        would corrupt the plugin's data.
+ *   file / path / URL    a bare reference that survived the key test.
+ */
+function pluginArgValueTranslatable(key, value) {
+  if (typeof key !== "string" || typeof value !== "string") return false;
+  if (!value) return false;
+  if (!KANA_RE.test(value)) return false;
+  if (RESOURCE_ARG_KEY.test(key)) return false;
+  if (/^(true|false|null|\d+([.,]\d+)?)$/i.test(value)) return false;
+  if (/^[\[{]/.test(value)) return false;
+  if (/\.(png|jpg|jpeg|gif|bmp|webp|ogg|m4a|mp3|wav|json|txt|csv|rpgmvp|rpgmvo|rpgmvm)$/i.test(value)) return false;
+  if (/^(https?:|[A-Za-z]:[\\/]|\/)/.test(value)) return false;
+  return true;
+}
+
 module.exports = {
   isTranslatable,
   EVENT_TEXT_CODES,
@@ -131,6 +204,10 @@ module.exports = {
   TERMS_KEYS,
   META_KEYS,
   AUDIO_CONTAINER_KEYS,
+  PLUGIN_ARG_CODES,
+  RESOURCE_ARG_KEY,
+  splitPluginArg,
+  pluginArgValueTranslatable,
   EXT_RE,
   INTERNAL_RE,
   EVENT_ID_RE,

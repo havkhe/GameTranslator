@@ -43,6 +43,21 @@ function patch(liveDir, cache, reportFile, opts) {
     for (const cmd of list) {
       if (!cmd || typeof cmd !== "object" || !Array.isArray(cmd.parameters)) continue;
       const params = cmd.parameters;
+      // Plugin-command arguments: only the value after `key = ` is a candidate, and it is rebuilt with the
+      // author's own key, separator and spacing. The same predicate the extractor used gates the write, so
+      // a value this step would not have queued cannot be replaced even when the cache holds a translation
+      // for it — that is what keeps a resource name ("ファイル名 = オープニング_3行で_01") safe.
+      if (R.PLUGIN_ARG_CODES.has(cmd.code)) {
+        params.forEach((v, i) => {
+          if (typeof v !== "string") return;
+          const arg = R.splitPluginArg(v);
+          if (!arg || !R.pluginArgValueTranslatable(arg.key, arg.value)) return;
+          const tr = cache.lookup(arg.value);
+          if (typeof tr !== "string" || tr === arg.value) return;
+          params[i] = arg.prefix + tr + arg.suffix;
+          replaced++;
+        });
+      }
       const slots = R.EVENT_TEXT_CODES.get(cmd.code);
       if (!slots) continue;
       for (const slot of slots) {

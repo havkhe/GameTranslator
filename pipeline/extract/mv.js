@@ -118,9 +118,21 @@ function extract(pristineDir, liveDir, opts) {
     list.forEach((cmd, idx) => {
       if (!cmd || typeof cmd.code !== "number") return;
       const params = cmd.parameters || [];
+      const here = at + "[" + idx + "]";
+      // Plugin-command arguments: each parameter is a `key = value` line, and only the value can be text.
+      // Handled before the table lookup below, because these codes are not in it at all — the whole line
+      // must never be translated. See rules.PLUGIN_ARG_CODES for what the filters refuse and why.
+      if (R.PLUGIN_ARG_CODES.has(cmd.code)) {
+        params.forEach((v, i) => {
+          if (typeof v !== "string") return;
+          const arg = R.splitPluginArg(v);
+          if (arg && R.pluginArgValueTranslatable(arg.key, arg.value)) {
+            add(file, here + ".parameters[" + i + "]", arg.value, skipTranslated);
+          }
+        });
+      }
       const slots = R.EVENT_TEXT_CODES.get(cmd.code);
       if (!slots) return;
-      const here = at + "[" + idx + "]";
       for (const slot of slots) {
         const v = params[slot];
         if (typeof v === "string") add(file, here, v, skipTranslated);
