@@ -102,7 +102,7 @@ const DEGENERATE_SET = new Set(DEGENERATE_BIGRAMS);
 const KANA_ANY = /[\u3040-\u309f\u30a0-\u30fa\uff66-\uff9f]/;   // ー (30fc) and ・ (30fb) excluded: they decorate a Han-only value
 // Ordinary Chinese function words. Their presence means the text is a sentence, not word salad.
 const CN_FUNC = /[的了是在我你他她它们这那就都也很不没和与跟对把被给到从之其于并且但所以因为如果]/;
-const NON_HAN = /[，。、；：！？…‥—～·「」『』（）〈〉《》,.;:!?\s\dA-Za-z０-９；]/;
+const NON_HAN = /[，。、；：！？…‥—～·「」『』（）〈〉《》,.;:!?\s\dA-Za-z０-９]/;
 // ー (prolonged sound mark) and ・ are tolerated inside a Han-only value: the observed windows
 // sometimes end on one ("义文明文ー"), and neither carries lexical content on its own.
 const TOLERATED = /[\u30fc\u30fb]/g;

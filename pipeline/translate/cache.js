@@ -28,6 +28,7 @@ function makeCache(file) {
   let loadedFromDisk = 0;
   let purgedEcho = 0;
   let purgedDegenerate = 0;
+  const refused = [];              // values set() refused; kept for the report, not written
 
   if (file && fs.existsSync(file)) {
     try {
@@ -65,12 +66,14 @@ function makeCache(file) {
     get loaded() { return loadedFromDisk; },
     get purgedEcho() { return purgedEcho; },
     get purgedDegenerate() { return purgedDegenerate; },
+    get refused() { return refused.length; },
     has(text) { return typeof byText[normText(text)] === "string"; },
     lookup(text) { return byText[normText(text)]; },
     set(text, value) {
       // Defence in depth: a value that passed the quality gate cannot be unfit, but the cache is
       // the one place a bad value would persist across runs, so it refuses one outright.
-      if (badValue(value, text)) { purgedEcho++; return false; }
+      const why = badValue(value, text);
+      if (why) { refused.push(why); return false; }
       byText[normText(text)] = value;
       return true;
     },
