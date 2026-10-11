@@ -10,6 +10,7 @@
 // shrink the stored set drastically is now refused and reported.
 "use strict";
 const fs = require("fs");
+const { promptEchoMatches } = require("./quality.js");
 
 const SHRINK_GUARD = parseFloat(process.env.GT_CACHE_SHRINK_GUARD || "0.5");
 
@@ -18,6 +19,7 @@ const normText = (s) => String(s).replace(/\r\n/g, "\n").replace(/\r/g, "\n").re
 function makeCache(file) {
   const byText = Object.create(null);
   let loadedFromDisk = 0;
+  let purgedEcho = 0;
 
   if (file && fs.existsSync(file)) {
     try {
@@ -26,20 +28,38 @@ function makeCache(file) {
         for (const k of Object.keys(raw.byText)) {
           if (typeof raw.byText[k] === "string") byText[k] = raw.byText[k];
         }
+        // Drop stored instruction echoes rather than trusting them.
+        //
+        // A stored echo is worse than a missing entry: the patch step writes it into the game
+        // (measured: the load-menu label became "每行输出一条译文，不要编号、不要JSON、"), and
+        // because has() then reports the text as cached, no later run ever replaces it. Removing
+        // the entry at load makes the next run re-translate those strings and lets lookup() fall
+        // back to the original text, so the game is not re-poisoned while the repair is pending.
+        for (const k of Object.keys(byText)) {
+          if (promptEchoMatches(byText[k], k)) { delete byText[k]; purgedEcho++; }
+        }
         loadedFromDisk = Object.keys(byText).length;
       }
     } catch (e) {
       console.log("CACHE_UNREADABLE", e.message);
     }
+    if (purgedEcho) console.log("CACHE_PURGED_ECHO", purgedEcho);
   }
 
   return {
     byText,
     get size() { return Object.keys(byText).length; },
     get loaded() { return loadedFromDisk; },
+    get purgedEcho() { return purgedEcho; },
     has(text) { return typeof byText[normText(text)] === "string"; },
     lookup(text) { return byText[normText(text)]; },
-    set(text, value) { byText[normText(text)] = value; },
+    set(text, value) {
+      // Defence in depth: a value that passed the quality gate cannot be an echo, but the cache
+      // is the one place a bad value would persist across runs, so it refuses one outright.
+      if (promptEchoMatches(value, text)) { purgedEcho++; return false; }
+      byText[normText(text)] = value;
+      return true;
+    },
     remove(text) { delete byText[normText(text)]; },
     save() {
       if (!file) return true;

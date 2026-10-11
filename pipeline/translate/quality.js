@@ -36,6 +36,69 @@ function contentLength(s) {
 
 const MIN_RATIO_CHECK = 3;
 
+/**
+ * Instruction text that must never appear in an answer.
+ *
+ * The model sometimes answers with the instruction itself instead of a translation. The batch
+ * parser strips such lines, but it deliberately keeps at least one line (so a reply of a single
+ * good line is not emptied), which left the single-entry case uncovered: a one-line group whose
+ * answer IS the echo was accepted verbatim. Measured on the game that exposed this: five cache
+ * entries held the prompt — "チェストウッド" -> "每行输出一条译文，不要编号、不要JSON、" — and the
+ * patch step wrote them into Tilesets.json and into resources/ja-JP/SystemText.json, where the
+ * load-menu label became the instruction text. Six player-visible strings were affected.
+ *
+ * The list below is the shipped template's wording. A caller that knows its own template should
+ * pass fragments derived from it (promptFragments) so an edited prompt is covered too.
+ */
+const PROMPT_ECHO_MARKERS = [
+  "将下列每行日文", "翻译成简体中文", "禁止翻译成英文", "只输出简体中文",
+  "必须原样保留", "不要增加也不要删除", "行数必须与输入", "每行输出一条译文",
+  "不要编号", "不要JSON", "不要解释",
+];
+
+// Split instruction text into checkable chunks. Punctuation and whitespace both separate chunks,
+// and the backslash is included: the older template names 控制代码 examples, which must not
+// survive into a translation even accidentally.
+const FRAGMENT_SPLIT = /[，。、；：！？…‥\r\n\t ,.;:!?\u3000（）()［］\[\]「」『』<>《》“”‘’"'`~〜～+\-=*&^%$#@|/\\]+/;
+
+/**
+ * Chunks of a prompt template that a translation must not contain.
+ *
+ * Chunks are cut at punctuation; a chunk counts when it is at least four characters long and holds
+ * at least two Han characters, which keeps generic fragments ("颜色", "图标") out while retaining
+ * the phrases that identify the instruction.
+ */
+function promptFragments(template) {
+  const t = String(template == null ? "" : template)
+    .replace(/\{lines\}/g, "\n").replace(/\{numbered\}/g, "\n");
+  const out = new Set();
+  for (const chunk of t.split(FRAGMENT_SPLIT)) {
+    const c = chunk.trim();
+    if (c.length < 4) continue;
+    if ((c.match(/[\u3400-\u9fff]/g) || []).length < 2) continue;
+    out.add(c);
+  }
+  return Array.from(out);
+}
+
+/**
+ * Which instruction fragment does `dst` echo, or "" when it echoes none.
+ *
+ * A fragment the SOURCE itself contains is not an echo: a game may legitimately ship a string that
+ * happens to match, and rejecting it would lose a good translation.
+ */
+function promptEchoMatches(dst, src, fragments) {
+  const d = String(dst == null ? "" : dst);
+  if (!d) return "";
+  const s = String(src == null ? "" : src);
+  const list = fragments && fragments.length ? fragments : PROMPT_ECHO_MARKERS;
+  for (const f of list) {
+    if (!f || s.includes(f)) continue;
+    if (d.includes(f)) return f;
+  }
+  return "";
+}
+
 /** A Japanese source should never come back as English. */
 function looksLikeEnglish(t, source) {
   if (!t || typeof t !== "string") return false;
@@ -77,9 +140,10 @@ function translatableSource(s) {
 
 /**
  * Judge one translation.
+ * @param {object} [opts] `promptFragments` — instruction chunks from the caller's own template.
  * @returns {{fatal: string[], warn: string[]}}
  */
-function qualityCheck(src, dst) {
+function qualityCheck(src, dst, opts) {
   const s = String(src), d = String(dst);
   const fatal = [], warn = [];
 
@@ -160,10 +224,18 @@ function qualityCheck(src, dst) {
     if (same && norm(s) === norm(d)) fatal.push("unchanged");
   }
 
+  // 8) the answer is the instruction, not a translation.
+  //
+  // Last because it is the cheapest to explain and the most damaging to miss: a stored echo is
+  // re-applied on every later run and shows up in the game as menu labels and item names.
+  const echo = promptEchoMatches(d, s, opts && opts.promptFragments);
+  if (echo) fatal.push("prompt-echo:" + echo.slice(0, 10));
+
   return { fatal, warn };
 }
 
 module.exports = {
   qualityCheck, looksLikeEnglish, contentLength, translatableSource,
   longestRepeatedPhrase, MIN_RATIO_CHECK, KANA_ALL, KANA_EVIDENCE, HAN,
+  promptFragments, promptEchoMatches, PROMPT_ECHO_MARKERS,
 };

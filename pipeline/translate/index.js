@@ -57,6 +57,9 @@ async function translate(o) {
   const entries = o.entries || [];
   const port = o.port;
   const template = o.template || DEFAULT_TEMPLATE;
+  // Instruction chunks of THIS template, so an echo is caught even when the user supplied
+  // prompt.txt rather than the built-in wording.
+  const echoFragments = B.promptFragments(template);
   const cache = makeCache(o.cacheFile);
   if (cache.size) console.log("CACHE_LOADED", cache.size);
 
@@ -146,7 +149,7 @@ async function translate(o) {
         // discarded: three requests spent, a good translation produced on the last one,
         // and nothing cached.
         const decorated = B.restoreDecoration(res[i], decoration(e));
-        const q = B.qualityCheck(target.text, res[i]);
+        const q = B.qualityCheck(target.text, res[i], { promptFragments: echoFragments });
         if (q.fatal.length) {
           skip.add(i);
           stats.rejected++;

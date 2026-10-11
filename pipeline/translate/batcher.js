@@ -17,7 +17,8 @@
 //     otherwise re-sent forever (measured: 71 rejections of one line in 210 s, with
 //     the cache frozen and the GPU at 100%).
 "use strict";
-const { contentLength, qualityCheck, looksLikeEnglish, MIN_RATIO_CHECK } = require("./quality.js");
+const { contentLength, qualityCheck, looksLikeEnglish, MIN_RATIO_CHECK,
+  promptFragments, promptEchoMatches } = require("./quality.js");
 const { splitDecoration, restoreDecoration } = require("./decoration.js");
 
 const BATCH = parseInt(process.env.GT_BATCH || "8", 10);
@@ -177,5 +178,6 @@ module.exports = {
   packGroups, buildPrompt, parseResult, cleanOutput, normalizeResult,
   splitLongText, joinParts, normText, contentLength, qualityCheck, looksLikeEnglish,
   splitDecoration, restoreDecoration, MIN_RATIO_CHECK,
+  promptFragments, promptEchoMatches,
   BATCH, BATCH_CHARS, SINGLE_CHARS, MAX_ATTEMPTS,
 };
