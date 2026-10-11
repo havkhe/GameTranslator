@@ -1298,14 +1298,61 @@ namespace GameTranslatorV3
             return g.ProgressDetail;
         }
 
+        /// <summary>
+        /// The work-file stem for a game — the pipeline's own sanitizer (pipeline/index.js).
+        ///
+        /// It has to be the SAME rule. This used to keep every letter, digit and non-ASCII character and
+        /// drop the rest, while the pipeline keeps ASCII alphanumerics and CJK, turns everything else into
+        /// "_" and truncates to 60: "NTR Police ver1.10" became "NTRPolicever110" here and
+        /// "NTR_Police_ver1_10" on disk. The names never matched, so the 进度 column could not read any
+        /// report whatever the pipeline wrote, and with nothing writing the file either it always showed
+        /// nothing at all.
+        /// </summary>
+        private static string WorkStem(string dir)
+        {
+            var name = Path.GetFileName(dir);
+            var sb = new StringBuilder(name.Length);
+            foreach (var c in name)
+            {
+                bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                            (c >= '\u4e00' && c <= '\u9fff');
+                sb.Append(keep ? c : '_');
+            }
+            var s = sb.ToString();
+            return s.Length > 60 ? s.Substring(0, 60) : s;
+        }
+
+        /// <summary>
+        /// A report file belonging to this game, tolerating a future change to the sanitizer: the stem
+        /// must be a prefix of the other's, on either side, and long enough that a match means something.
+        /// </summary>
+        private string FindReportByPrefix(string stem)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(stem) || stem.Length < 8) return null;
+                foreach (var f in Directory.GetFiles(_settings.WorkDir, "*-translate-report.json"))
+                {
+                    var b = Path.GetFileName(f);
+                    var other = b.Substring(0, b.Length - "-translate-report.json".Length);
+                    int n = Math.Min(stem.Length, other.Length);
+                    if (n < 8) continue;
+                    if (string.Compare(stem, 0, other, 0, n, StringComparison.OrdinalIgnoreCase) == 0) return f;
+                }
+            }
+            catch { }
+            return null;
+        }
+
         private bool TryReadProgress(GameItem g, out int entries, out int done)
         {
             entries = 0; done = 0;
             try
             {
-                string safe = new string(Path.GetFileName(g.Dir).Where(c => char.IsLetterOrDigit(c) || c > 127).ToArray());
-                string report = Path.Combine(_settings.WorkDir, safe + "-translate-report.json");
-                if (!File.Exists(report)) return false;
+                string stem = WorkStem(g.Dir);
+                string report = Path.Combine(_settings.WorkDir, stem + "-translate-report.json");
+                if (!File.Exists(report)) report = FindReportByPrefix(stem);
+                if (report == null || !File.Exists(report)) return false;
                 string txt = File.ReadAllText(report, Encoding.UTF8);
                 entries = SimpleJson.GetInt(txt, "entries");
                 done = SimpleJson.GetInt(txt, "translated");

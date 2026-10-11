@@ -266,6 +266,31 @@ namespace GameTranslatorV3.UiCheck
             else if (System.IO.File.Exists(queuePath)) System.IO.File.Delete(queuePath);
 
             Console.WriteLine("");
+            Console.WriteLine("=== 进度列的文件名必须与管线一致 ===");
+            // The pipeline names its work files with its own sanitizer (alnum + CJK kept, everything else
+            // "_", cut at 60). The window must derive the same stem or it can never find the report — it
+            // used to keep every non-ASCII character and drop punctuation, so "NTR Police ver1.10" became
+            // "NTRPolicever110" while the file on disk is "NTR_Police_ver1_10-translate-report.json".
+            {
+                var stemOf = typeof(MainForm).GetMethod("WorkStem", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(stemOf != null, "找到 WorkStem（文件名推导）");
+                if (stemOf != null)
+                {
+                    var cases = new[]
+                    {
+                        new[] { @"J:\game\HGAME\H\NTR Police ver1.10\NTR Police ver1.10", "NTR_Police_ver1_10" },
+                        new[] { @"J:\x\NTR Sisters - Ciella & Luciella", "NTR_Sisters___Ciella___Luciella" },
+                        new[] { @"J:\x\deadbunny_1001", "deadbunny_1001" },
+                    };
+                    foreach (var c in cases)
+                    {
+                        var got = Convert.ToString(stemOf.Invoke(null, new object[] { c[0] }));
+                        Assert(got == c[1], "WorkStem(" + System.IO.Path.GetFileName(c[0]) + ") = " + got + "（应为 " + c[1] + "）");
+                    }
+                }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
             Console.WriteLine("        标题: " + form.Text + "   尺寸: " + form.Size);
             Console.WriteLine("");

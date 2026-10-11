@@ -42,6 +42,30 @@ function isChineseLike(s) {
   return han >= 2 && han * 2 >= t.replace(/\s/g, "").length;
 }
 
+/** Length from which a kana-free CJK string is treated as prose rather than a term. */
+const CHINESE_PROSE_MIN = 12;
+
+/**
+ * May this entry be skipped as "already Chinese"?
+ *
+ * Only when the text is long enough to be prose. The bare `isChineseLike` test is wrong for exactly the
+ * strings Japanese games are full of: short kana-free terms — skill and element names, status names,
+ * enemy names — look Chinese by that rule (`斬撃/必殺技3`, `回復/単体1`, `蘇生1`, `怪人王`, `神父`) but are
+ * Japanese and belong in Chinese as 斩击/必杀技3, 回复/单体1, 复活1, 怪人王, 神父.
+ *
+ * Measured on one batch of five games: every single skipped entry was of that kind — 79/79, 79/79, 62/62
+ * and 97/97 of the `already-chinese` records were ≤ 7 characters with no kana. Skipping them left those
+ * menu terms Japanese while everything around them was translated, and because the verdict was never
+ * cached they were skipped again on every later run.
+ *
+ * A long Chinese sentence is still skipped, which is what this guard was added for: sending Chinese back
+ * through the model makes it refuse and used to cascade into thousands of failures.
+ */
+function mayBeChineseAlready(s) {
+  const t = String(s);
+  return t.length >= CHINESE_PROSE_MIN && isChineseLike(t);
+}
+
 /**
  * Translate a list of entries.
  *
@@ -69,6 +93,16 @@ async function translate(o) {
   const decorationOf = new WeakMap();
   const partState = new WeakMap();   // join buffer for split parts and multi-line entries
 
+  /**
+   * The cache refused a value (echo / degenerate / identity / control-code mismatch). Record it, so an
+   * entry that the gate accepted but the cache would not keep is visible instead of disappearing: without
+   * this it was neither cached nor reported, and it came back as pending on every later run.
+   */
+  const recordRefused = (source) => {
+    stats.refused = (stats.refused || 0) + 1;
+    fails.push({ hash: hashText(source), err: "quality:refused", text: String(source).slice(0, 40) });
+  };
+
   // Count attempts UP from zero.
   //
   // The first version counted DOWN and asked "is it exhausted?" as
@@ -95,8 +129,9 @@ async function translate(o) {
   const decide = async (group) => {
     if (group.every((g) => spent((g.parent || g).text))) return null;
     // Already Chinese: asking the model to translate Chinese into Chinese makes it
-    // refuse, which used to cascade into thousands of failures.
-    if (group.every((g) => isChineseLike((g.parent || g).text))) {
+    // refuse, which used to cascade into thousands of failures. Only prose is skipped —
+    // see mayBeChineseAlready for why short kana-free terms must still be sent.
+    if (group.every((g) => mayBeChineseAlready((g.parent || g).text))) {
       stats.skippedChinese += group.length;
       return group.map(() => null);
     }
@@ -181,8 +216,8 @@ async function translate(o) {
             const joined = st.got.join(e.__multi.breaks[0] !== undefined ? e.__multi.breaks[0] : "\n");
             if (B.contentLength(joined) < B.contentLength(target.text) * 0.25) {
               fails.push({ hash: hashText(target.text), err: "multiline-too-short", text: target.text.slice(0, 40) });
-            } else {
-              cache.set(target.text, joined);
+            } else if (!cache.set(target.text, joined)) {
+              recordRefused(target.text);
             }
           }
         } else if (e.parent) {
@@ -192,12 +227,12 @@ async function translate(o) {
             const joined = st.got.join("");
             if (B.contentLength(joined) < B.contentLength(target.text) * 0.25) {
               fails.push({ hash: hashText(target.text), err: "parts-too-short", text: target.text.slice(0, 40) });
-            } else {
-              cache.set(target.text, joined);
+            } else if (!cache.set(target.text, joined)) {
+              recordRefused(target.text);
             }
           }
-        } else {
-          cache.set(target.text, decorated);
+        } else if (!cache.set(target.text, decorated)) {
+          recordRefused(target.text);
         }
       }
       // retry only the rejected lines, once
@@ -260,4 +295,4 @@ function hashText(s) {
   return h.toString(16);
 }
 
-module.exports = { translate, isChineseLike, hashText, DEFAULT_TEMPLATE };
+module.exports = { translate, isChineseLike, mayBeChineseAlready, CHINESE_PROSE_MIN, hashText, DEFAULT_TEMPLATE };

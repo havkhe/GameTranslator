@@ -20,6 +20,12 @@ const normText = (s) => String(s).replace(/\r\n/g, "\n").replace(/\r/g, "\n").re
 function badValue(value, source) {
   if (promptEchoMatches(value, source)) return "echo";
   if (degenerationMatches(value)) return "degenerate";
+  // Identical to the source is not a translation: it changes nothing on disk, yet it counts as a
+  // replacement in the patch report and hides the string from every later run. Measured on one batch of
+  // five games: 202 / 71 / 5 / 83 / 59 stored values were identical to their source, and one game's patch
+  // report read "replaced 8, files 0" — the replacements were all no-ops. The quality gate rejects these
+  // as `unchanged`; this is the same refusal at the one place a bad value would survive across runs.
+  if (String(value) === String(source)) return "identity";
   // The control codes must be the same multiset as the source's, which is what the quality gate's
   // rules 1 and 6b require before a value is ever cached. Re-checked here because a cache file that
   // already holds a mismatch is never re-validated, and the mismatch is the signature of a value that
@@ -52,6 +58,7 @@ function makeCache(file) {
   let purgedEcho = 0;
   let purgedDegenerate = 0;
   let purgedCodes = 0;
+  let purgedIdentity = 0;
   const refused = [];              // values set() refused; kept for the report, not written
 
   if (file && fs.existsSync(file)) {
@@ -75,6 +82,7 @@ function makeCache(file) {
           delete byText[k];
           if (why === "echo") purgedEcho++;
           else if (why === "degenerate") purgedDegenerate++;
+          else if (why === "identity") purgedIdentity++;
           else purgedCodes++;
         }
         loadedFromDisk = Object.keys(byText).length;
@@ -85,6 +93,7 @@ function makeCache(file) {
     if (purgedEcho) console.log("CACHE_PURGED_ECHO", purgedEcho);
     if (purgedDegenerate) console.log("CACHE_PURGED_DEGENERATE", purgedDegenerate);
     if (purgedCodes) console.log("CACHE_PURGED_CODES", purgedCodes, "（译文与原文的控制代码不一致，视为串行写入，已丢弃待重译）");
+    if (purgedIdentity) console.log("CACHE_PURGED_IDENTITY", purgedIdentity, "（译文与原文完全相同，等于没有翻译，已丢弃待重译）");
   }
 
   return {
@@ -94,6 +103,7 @@ function makeCache(file) {
     get purgedEcho() { return purgedEcho; },
     get purgedDegenerate() { return purgedDegenerate; },
     get purgedCodes() { return purgedCodes; },
+    get purgedIdentity() { return purgedIdentity; },
     get refused() { return refused.length; },
     has(text) { return typeof byText[normText(text)] === "string"; },
     lookup(text) { return byText[normText(text)]; },

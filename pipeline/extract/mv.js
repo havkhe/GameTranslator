@@ -58,7 +58,13 @@ function languageProfile(dir) {
   return { total, kana, chinese, other, chineseLike: total > 0 && chinese / total > 0.5 };
 }
 
-function listJsonFiles(root) {
+/**
+ * Every .json under a root, or only those an `accept(rel, full)` predicate allows.
+ *
+ * The predicate exists for folders that hold more than data: a game's `scenario/` folder can contain the
+ * command-list JSON the walker understands *and* a config file it must not touch (see extract/scenario.js).
+ */
+function listJsonFiles(root, accept) {
   const out = [];
   const walk = (dir, rel) => {
     let ents;
@@ -67,7 +73,10 @@ function listJsonFiles(root) {
       const p = path.join(dir, e.name);
       const r = rel ? rel + "/" + e.name : e.name;
       if (e.isDirectory()) { if (!isIgnoredDir(e.name)) walk(p, r); }
-      else if (/\.json$/i.test(e.name)) out.push({ full: p, rel: r });
+      else if (/\.json$/i.test(e.name)) {
+        if (accept && !accept(r, p)) continue;
+        out.push({ full: p, rel: r });
+      }
     }
   };
   walk(root, "");
@@ -84,9 +93,10 @@ const isIgnoredDir = (name) => IGNORE_DIR_RE.test(name);
  *
  * @param {string} pristineDir  primary source (backup, or the live folder on a first run)
  * @param {string} liveDir      live folder, scanned for additions only
+ * @param {object} [opts]       `accept(rel, full)` — restrict which .json files are read
  * @returns {{entries: Array, skipped: number}}
  */
-function extract(pristineDir, liveDir) {
+function extract(pristineDir, liveDir, opts) {
   const entries = [];
   const seen = new Map();
   let skipped = 0;
@@ -152,7 +162,8 @@ function extract(pristineDir, liveDir) {
 
   const readTree = (root, skipTranslated) => {
     if (!root || !fs.existsSync(root)) return;
-    for (const f of listJsonFiles(root)) {
+    const accept = opts && typeof opts.accept === "function" ? opts.accept : undefined;
+    for (const f of listJsonFiles(root, accept)) {
       let data;
       try { data = JSON.parse(fs.readFileSync(f.full, "utf8")); } catch (e) { continue; }
       const base = path.basename(f.rel).toLowerCase();

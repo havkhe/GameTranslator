@@ -150,5 +150,37 @@ console.log("=== a cache whose value carries the wrong control codes is dropped 
 }
 
 console.log("");
+console.log("=== a stored value identical to its source is dropped ===");
+{
+  // A no-op "translation" changes nothing on disk yet counts as a replacement in the patch report and
+  // hides the string from every later run. Measured on one batch of five games: 202 / 71 / 5 / 83 / 59
+  // stored values were identical to their source, and one game's report read "replaced 8, files 0".
+  // The real pairs below are from that batch (爪/物理 etc. are kana-free Japanese terms).
+  const fs = require("fs");
+  const os = require("os");
+  const C = require("../pipeline/translate/cache.js");
+  const tmp = fs.mkdtempSync(require("path").join(os.tmpdir(), "gt-identity-"));
+  const file = require("path").join(tmp, "cache.json");
+  const identical = "\u722a/\u7269\u7406";                 // 爪/物理
+  const seeded = {
+    version: 3,
+    byText: {
+      [identical]: identical,                                                    // drop
+      "\u30ed\u30fc\u30c9": "\u8bfb\u53d6",                                       // keep
+      "\u6b4c": "\u6b4c\u66f2",                                                   // keep (a real change)
+    },
+  };
+  fs.writeFileSync(file, JSON.stringify(seeded), "utf8");
+  const c = C.makeCache(file);
+  check("one identity entry purged", c.purgedIdentity === 1, "purgedIdentity=" + c.purgedIdentity);
+  check("the identity key is gone", !c.has(identical));
+  check("a real translation survives", c.lookup("\u30ed\u30fc\u30c9") === "\u8bfb\u53d6");
+  check("a one-character change is enough to keep", c.lookup("\u6b4c") === "\u6b4c\u66f2");
+  check("set() refuses an identical value", c.set("\u8352\u5ec3", "\u8352\u5ec3") === false);
+  check("set() accepts a changed value", c.set("\u8352\u5ec3", "\u5e9f\u589f") === true);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("");
 console.log("  pass " + pass + "   fail " + fail);
 process.exit(fail ? 1 : 0);

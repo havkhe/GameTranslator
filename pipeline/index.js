@@ -41,6 +41,7 @@ const mvExtract = require("./extract/mv.js");
 const vxAce = require("./extract/vxace.js");
 const resources = require("./extract/resources.js");
 const text2frame = require("./extract/text2frame.js");
+const scenario = require("./extract/scenario.js");
 const rgssad = require("./archive/rgssad.js");
 const repackGuard = require("./archive/repack-guard.js");
 const { translate } = require("./translate/index.js");
@@ -235,6 +236,22 @@ function ensureDataBackup(engine, gameDir) {
         entries.push(e);
       }
     }
+
+    // Some games keep the WHOLE script in a scenario/ folder of event-command JSON, referenced from the
+    // data only by a plugin parameter. Same schema, so the MV walker reads it once it is pointed there.
+    // Measured on one library game: 2 kana-bearing fields in the data versus 42,757 entries in the file.
+    for (const made of scenario.ensureBackup(GAME_DIR, engine.live)) console.log("BACKUP_CREATED", made);
+    const s = scenario.extract(GAME_DIR, engine.live);
+    if (s.files) {
+      console.log("SCENARIO", s.entries.length, "entries from", s.files, "file(s)",
+        s.skipped ? "SKIPPED_ALREADY_TRANSLATED " + s.skipped : "");
+      const have = new Set(entries.map((e) => e.text));
+      for (const e of s.entries) {
+        if (have.has(e.text)) continue;
+        have.add(e.text);
+        entries.push(e);
+      }
+    }
   }
   fs.writeFileSync(EXTRACT, JSON.stringify(entries, null, 0), "utf8");
   console.log("EXTRACTED", entries.length, skipped ? "SKIPPED_ALREADY_TRANSLATED " + skipped : "");
@@ -266,6 +283,22 @@ function ensureDataBackup(engine, gameDir) {
   // A save can be refused to protect an existing cache; report rather than hide it.
   fs.writeFileSync(FAILURES, JSON.stringify(fails, null, 0), "utf8");
   console.log("TRANSLATED", stats.cached, "FAILURES", fails.length, "REQUESTS", stats.requests);
+
+  // The per-game progress file the window's 进度 column reads (MainForm.ReadProgress).
+  //
+  // Nothing wrote this file before: the column read work\<name>-translate-report.json, so it showed a
+  // stale percentage from an old run, or nothing at all. Measured on a finished batch: three games
+  // displayed "0%" from a report written the day before while their own run had completed, which reads
+  // as "this one did not translate" even though it did. Written here so the number is the run's own.
+  try {
+    fs.writeFileSync(path.join(WORK_DIR, GAME_NAME + "-translate-report.json"), JSON.stringify({
+      entries: entries.length,
+      translated: stats.cached,
+      pendingAtStart: stats.pending,
+      requests: stats.requests,
+      failures: fails.length,
+    }, null, 2), "utf8");
+  } catch (e) { /* a missing progress file is cosmetic; never fail the run for it */ }
 
   // A run whose requests could not be delivered is not a success.
   //
@@ -303,6 +336,11 @@ function ensureDataBackup(engine, gameDir) {
     const tt = text2frame.patch(GAME_DIR, engine.live, cache, PATCH_REPORT.replace(/\.json$/, "-text2frame.json"));
     if (tt.files) {
       console.log("PATCHED_TEXT2FRAME", tt.replaced, "MISSING", tt.missing, "FILES", tt.files);
+    }
+    // The scenario script is rewritten in place, one command list at a time.
+    const ss = scenario.patch(GAME_DIR, engine.live, cache, PATCH_REPORT.replace(/\.json$/, "-scenario.json"));
+    if (ss.files) {
+      console.log("PATCHED_SCENARIO", ss.replaced, "MISSING", ss.missing, "FILES", ss.files);
     }
   } else {
     // VX Ace / VX: Ruby writes the translations back into the .rvdata2 files of the

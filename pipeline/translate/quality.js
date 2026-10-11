@@ -182,13 +182,22 @@ function longestRepeatedPhrase(text, minLen, maxLen) {
   return "";
 }
 
-/** Does this source need translating at all (vs a label that legitimately stays)? */
+/**
+ * Does this source need translating at all (vs a label that legitimately stays)?
+ *
+ * The CJK test is deliberately any CJK rather than kana only. Requiring kana exempted every kana-free
+ * Japanese string from the `unchanged` rule below, and a game's data is full of those: skill, element,
+ * status and enemy names. Measured on one batch: 202 / 71 / 5 / 83 / 59 cached values per game were
+ * identical to their source (`爪/物理 -> 爪/物理`), and those no-op "translations" still counted as
+ * replaced in the patch report — one game reported "replaced 8, files 0", i.e. eight replacements that
+ * changed nothing on disk. With any-CJK, an unchanged answer is rejected as `unchanged` like any other.
+ */
 function translatableSource(s) {
   const t = String(s).trim();
   if (!t) return false;
   if (/\.(png|jpg|jpeg|gif|bmp|webp|rpgmvp|rpgmvo|ogg|m4a|mp3|rvdata2?|rxdata)$/i.test(t)) return false;
   if (/^[A-Za-z0-9_\-./\\%]+$/.test(t)) return false;
-  if (!KANA_EVIDENCE.test(t)) return false;
+  if (!/[\u3040-\u30ff\u3400-\u9fff]/.test(t)) return false;
   return true;
 }
 

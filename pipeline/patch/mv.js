@@ -21,8 +21,9 @@ const { normText, listJsonFiles } = require("../extract/mv.js");
  * @param {string} liveDir  the folder to rewrite (the game's own data dir)
  * @param {object} cache    from translate/cache.js
  * @param {string} reportFile  where to write the JSON report
+ * @param {object} [opts]   `accept(rel, full)` — restrict which .json files are rewritten
  */
-function patch(liveDir, cache, reportFile) {
+function patch(liveDir, cache, reportFile, opts) {
   let replaced = 0;
   let missing = 0;
   const errors = [];
@@ -78,7 +79,8 @@ function patch(liveDir, cache, reportFile) {
     }
   };
 
-  for (const f of listJsonFiles(liveDir)) {
+  const accept = opts && typeof opts.accept === "function" ? opts.accept : undefined;
+  for (const f of listJsonFiles(liveDir, accept)) {
     let data;
     const raw = fs.readFileSync(f.full, "utf8");
     try { data = JSON.parse(raw); } catch (e) {
