@@ -276,14 +276,34 @@ async function translate(o) {
   stats.pending = pending.length;
   console.log("TOTAL", entries.length, "DONE", entries.length - pending.length, "PENDING", pending.length, "REQUESTS", groups.length);
 
+  // Saving and counting after EVERY group is quadratic in a big game, and big games are exactly where it
+  // shows: 15,255 entries over ~2,600 groups means the growing cache file (megabytes) was rewritten ~2,600
+  // times, and `entries.filter(...)` walked all 15,255 entries per group for the progress line — about 40
+  // million normalise-and-lookup calls in one run. Across one day's log four large games died with exit 1
+  // while making progress (`PROGRESS 12755 / 15261`, `PROGRESS 0 / 18926`), and while that crash is not yet
+  // explained the cost is real on its own.
+  //
+  // The cadence below keeps the property the per-group save existed for — "a killed process loses at most
+  // the request in flight" — by bounding it in time rather than in groups: save at least every
+  // SAVE_INTERVAL_MS, and immediately when the game is small. `cache.size` is the count of translated
+  // entries for this game because the cache file is per game, so the per-group progress line no longer
+  // walks the entry list.
+  const SAVE_INTERVAL_MS = 20000;
+  let lastSaveAt = Date.now();
   for (let i = 0; i < groups.length; i++) {
     await run(groups[i], 0);
-    cache.save();
-    stats.cached = entries.filter((e) => cache.has(e.text)).length;
+    const now = Date.now();
+    if (now - lastSaveAt >= SAVE_INTERVAL_MS || i === groups.length - 1) {
+      cache.save();
+      lastSaveAt = now;
+    }
+    stats.cached = cache.size;
     // Progress is reported through the callback only; the caller owns the line format
     // (the UI parses it), so printing here as well produced the line twice.
     if (typeof o.onProgress === "function") o.onProgress(stats);
   }
+  // The exact figure for the report: entries the cache now holds, computed once.
+  cache.save();
   stats.cached = entries.filter((e) => cache.has(e.text)).length;
   return { cache, stats, fails };
 }

@@ -168,16 +168,22 @@ namespace GameTranslatorV3.Core
             {
                 case AttemptResult.TimedOut: return "超过时间预算 " + Format(log.Elapsed) + "，已强制结束";
                 case AttemptResult.Stalled: return "无输出超过阈值，判定卡死并强制结束（最后一行：" + Short(log.LastLine) + "）";
-                case AttemptResult.Failed: return "退出码 " + log.ExitCode + "（最后一行：" + Short(log.LastLine) + "）";
+                case AttemptResult.Failed:
+                    // The stderr tail carries the actual error — the pipeline prints PIPELINE_ERROR with the
+                    // stack there — while LastLine is only the last progress line. Without it the recorded
+                    // failure reads "退出码 1（最后一行：PROGRESS 12755 / 15261 REQUESTS 2620 FAILURES 0）",
+                    // which names no cause at all and cannot be diagnosed after the fact.
+                    string tail = string.IsNullOrEmpty(log.Reason) ? "" : "  stderr：" + Short(log.Reason, 400);
+                    return "退出码 " + log.ExitCode + "（最后一行：" + Short(log.LastLine) + "）" + tail;
                 default: return log.Reason ?? log.Result.ToString();
             }
         }
 
-        private static string Short(string s)
+        private static string Short(string s, int max = 120)
         {
             if (string.IsNullOrEmpty(s)) return "无";
-            s = s.Trim();
-            return s.Length <= 120 ? s : s.Substring(0, 120) + "…";
+            s = s.Replace("\r", " ").Replace("\n", " ").Trim();
+            return s.Length <= max ? s : s.Substring(0, max) + "…";
         }
 
         private static string Format(TimeSpan t)
@@ -333,7 +339,16 @@ namespace GameTranslatorV3.Core
             int code = 0;
             try { code = finished.Task.IsCompleted ? finished.Task.Result : -1; } catch { code = -1; }
             outcome.ExitCode = code;
-            if (outcome.Result != AttemptResult.Stalled && outcome.Result != AttemptResult.TimedOut)
+            if (cancel.IsCancellationRequested)
+            {
+                // The process was killed because the batch was stopped — 终止, or closing the window with
+                // "stop and exit". Its exit code is then non-zero, and this used to be reported as a
+                // FAILURE: one day's log shows four large games "failing" with 退出码 1 while visibly making
+                // progress (PROGRESS 12755 / 15261), every one of them a deliberate stop. A cancellation is
+                // not a failure, and calling it one sends the reader looking for a defect that is not there.
+                outcome.Result = AttemptResult.Cancelled;
+            }
+            else if (outcome.Result != AttemptResult.Stalled && outcome.Result != AttemptResult.TimedOut)
                 outcome.Result = code == 0 ? AttemptResult.Completed : AttemptResult.Failed;
             if (outcome.Result == AttemptResult.Failed && stderr.Length > 0 && string.IsNullOrEmpty(outcome.Reason))
                 outcome.Reason = stderr.ToString().Trim();
