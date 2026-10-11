@@ -54,10 +54,29 @@ function isTranslatable(text) {
  * Event-command codes whose text parameters we translate.
  * Mirrors MTool's coverage of event parameters.
  *   code -> which parameter index holds the text (or a function for list params)
+ *
+ * Code 101 is the one entry that is not simply "the text slot":
+ *
+ *   MV   command101: setFaceImage(params[0], params[1]); setBackground(params[2]); setPositionType(params[3])
+ *   MZ   the same, plus setSpeakerName(params[4])
+ *
+ * So slot 0 is the FACE IMAGE FILE NAME — a resource reference — and slot 4 is the speaker name, which
+ * is the text the name box shows. The table used to say `[0]`, which was a VX Ace reading carried into
+ * the MV/MZ table: in VX Ace, command 101's first parameter really is the message text. Measured across
+ * the library, the consequence was both kinds of error at once:
+ *
+ *   * slot 0 targets a file name. 13 kana face names across 4 games ("ちんぴら", "デフォ顔１", "モブ08"),
+ *     all of them present in img/faces — translating one renames nothing on disk and the face stops
+ *     loading, exactly the damage the audio `name` field caused.
+ *   * slot 4 is missed. 1,777 distinct Japanese speaker names across 19 games ("ダンジョン測量士
+ *     ペーター", "\c[27]カエン"), so an MZ game's dialogue came out Chinese under a Japanese name box.
+ *
+ * MTool extracts slot 4 too (157 keys on the one game whose export is readable), which is how the
+ * mismatch surfaced.
  */
 const EVENT_TEXT_CODES = new Map([
   [401, [0]],        // show text (dialogue body)
-  [101, [0]],        // show text header (speaker name box)
+  [101, [4]],        // show text header: slot 4 is the speaker name; slot 0 is the face file name
   [102, [0]],        // show choices (array of options)
   [402, [1]],        // when [**] (choice branch label)
   [405, [0]],        // scrolling text body
