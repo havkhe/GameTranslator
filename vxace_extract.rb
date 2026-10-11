@@ -28,9 +28,28 @@ end
 # Fields that hold player-visible text. Must stay identical to the list in
 # vxace_patch.rb: a field collected here but not patched there (or vice versa)
 # produces "translated but not written back" or "written back but never shown".
+# MUST stay identical to the list in vxace_patch.rb.
 TEXT_IVARS = %w[@name @nickname @description @profile
                 @message1 @message2 @message3 @message4 @message5
                 @display_name @note]
+
+# Fields that name a file on disk. Some of them sit in an ARRAY - a tileset's sheet list
+# (@tileset_names) is an Array of nine sheet filenames - and a value reached through an Array
+# bypasses TEXT_IVARS entirely, so these must be denied by name instead of by value type.
+#
+# Measured on a real game (LewDemon Academy, VX Ace): the sheet name 運動場 reached the model, came
+# back as 运动场, and was written into the data. The game then asked for
+# Graphics/Tilesets/运动场.png and refused to start with "unable to find file
+# graphics\Tilesets\运动场". The same game's map of the same name was translated too - which is
+# correct, and is exactly why a text-keyed patch cannot tell the two apart: a map name and a sheet
+# filename are the same string. Only the field tells them apart.
+#
+# (@name is NOT denied: on a tileset it is the editor's display name, and translating it is
+# harmless - verified on that game, where the sheets broke and the display names did not.)
+RESOURCE_IVARS = %w[@tileset_names @tileset_name
+                    @face_name @character_name @battler_name
+                    @title_name @battleback1_name @battleback2_name
+                    @animation1_name @animation2_name]
 
 # RPG::AudioFile / BGM / BGS / ME / SE: their @name is a file reference and
 # must never be translated (the on-disk file keeps the original name).
@@ -142,6 +161,7 @@ def main
           next
         else
           node.instance_variables.each do |ivar|
+            next if RESOURCE_IVARS.include?(ivar.to_s)
             v = node.instance_variable_get(ivar)
             if v.is_a?(String)
               if TEXT_IVARS.include?(ivar.to_s) && !(audio_object?(node) && ivar.to_s == "@name")

@@ -23,10 +23,19 @@ def data_files(dir)
      .sort
 end
 
-# Must match vxace_extract.rb exactly (see the comment there).
+# MUST stay identical to the list in vxace_extract.rb.
 TEXT_IVARS = %w[@name @nickname @description @profile
                 @message1 @message2 @message3 @message4 @message5
                 @display_name @note]
+
+# MUST stay identical to the list in vxace_extract.rb (see the long note there). Denying these here
+# is what actually protects the game: the patch is keyed by TEXT, and a map named 運動場 is
+# legitimately translated to 运动场 - without this guard that same dictionary entry would also be
+# written into the tileset's sheet list, and the game would ask for a file that does not exist.
+RESOURCE_IVARS = %w[@tileset_names @tileset_name
+                    @face_name @character_name @battler_name
+                    @title_name @battleback1_name @battleback2_name
+                    @animation1_name @animation2_name]
 
 def audio_object?(node)
   [RPG::AudioFile, RPG::BGM, RPG::BGS, RPG::ME, RPG::SE].any? { |k| node.is_a?(k) }
@@ -156,6 +165,7 @@ def main
           next
         else
           node.instance_variables.each do |ivar|
+            next if RESOURCE_IVARS.include?(ivar.to_s)
             v = node.instance_variable_get(ivar)
             if v.is_a?(String)
               if TEXT_IVARS.include?(ivar.to_s) && !(audio_object?(node) && ivar.to_s == "@name")
