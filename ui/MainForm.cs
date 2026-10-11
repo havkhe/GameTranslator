@@ -55,6 +55,22 @@ namespace GameTranslatorV3
         private Button _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnState, _btnSelectAll, _btnClearSel;
         private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck;
         private Button _btnUninstall, _btnRestore, _btnOpenLog, _btnClearLog, _btnSettings;
+
+        // ---- grouped translation queue -------------------------------------------------------
+        //
+        // The one-shot batch above and this queue are separate paths on purpose: the old buttons keep
+        // working exactly as before, and the queue adds what they cannot do — run several groups one
+        // after another, show which group is running, and accept more tasks while a run is in flight.
+        // The queue only ever writes work\queue.json; game data and every pipeline cache file are
+        // touched by nothing here.
+        private readonly List<TaskGroup> _queue = new List<TaskGroup>();
+        private int _queueGroupIndex = -1;      // group being run, or -1
+        private int _queueTaskIndex = -1;       // task within that group
+        private bool _skipGroupRequested;       // 跳过本组
+        private TreeView _queueTree;
+        private Label _lblQueue;
+        private ComboBox _cmbTargetGroup;
+        private Button _btnNewGroupAddSel, _btnAddSelToGroup, _btnRemoveSel, _btnClearQueue, _btnSkipGroup, _btnStartQueue;
         private CancellationTokenSource _cts;
         private bool _paused, _running;
         private ToolTip _tips;
@@ -84,6 +100,11 @@ namespace GameTranslatorV3
             BuildUi(); tUi = sw.ElapsedMilliseconds;
             RefreshModels(); tModels = sw.ElapsedMilliseconds - tUi;
             LoadGames(); tGames = sw.ElapsedMilliseconds - tUi - tModels;
+            // The queue is restored after the UI and after the game list, so the panel exists to draw
+            // into and a queued task can be matched to its GameItem right away. Only work\queue.json is
+            // read here; no game data and no pipeline cache file is touched.
+            LoadQueue();
+            RefreshQueuePanel();
             Startup.Trace("MainForm 内部耗时：界面 " + tUi + "ms，模型列表 " + tModels + "ms，游戏列表 " +
                 tGames + "ms（" + _games.Count + " 个游戏）");
 
@@ -307,7 +328,350 @@ namespace GameTranslatorV3
             var pane = new Panel { Dock = DockStyle.Fill };
             pane.Controls.Add(_list);
             pane.Controls.Add(bar);
+            // Added last, and docking is resolved from the end of the collection backwards, so this
+            // reserves the top strip above the toolbar: 任务队列 / 工具栏 / 游戏列表.
+            pane.Controls.Add(BuildQueuePane());
             return pane;
+        }
+
+        /// <summary>
+        /// The grouped queue panel: the groups and their members on top, the buttons that build and run
+        /// them at the bottom.
+        ///
+        /// A TreeView rather than a second ListView: the game list is a ListView and the UI check asserts
+        /// there is exactly one (in virtual mode), and a tree is the natural control for "groups that
+        /// expand into their members".
+        /// </summary>
+        private Control BuildQueuePane()
+        {
+            var box = new GroupBox { Dock = DockStyle.Top, Height = 196, Text = "任务队列（按组顺序执行）" };
+
+            _queueTree = new TreeView
+            {
+                Dock = DockStyle.Fill, HideSelection = false, ShowNodeToolTips = true,
+                ShowPlusMinus = true, ShowRootLines = true, BorderStyle = BorderStyle.FixedSingle
+            };
+
+            // Summary line plus the group the 加入 button targets.
+            var top = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2, Padding = new Padding(6, 2, 6, 0)
+            };
+            top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _lblQueue = new Label
+            {
+                Dock = DockStyle.Fill, AutoSize = false, Height = 18,
+                TextAlign = ContentAlignment.MiddleLeft, Text = "队列：空"
+            };
+            _cmbTargetGroup = new ComboBox
+            {
+                Name = "cmbTargetGroup",
+                Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 132, Margin = new Padding(2, 0, 0, 0)
+            };
+            top.Controls.Add(_lblQueue, 0, 0);
+            top.Controls.Add(_cmbTargetGroup, 1, 0);
+
+            var btns = MakeButtonGrid(3);
+            btns.Dock = DockStyle.Bottom;
+            _btnNewGroupAddSel = MakeButton("新建组并加入选中", (s, e) => AddCheckedToNewGroup());
+            _btnAddSelToGroup = MakeButton("加入选中到所选组", (s, e) => AddCheckedToSelectedGroup());
+            _btnRemoveSel = MakeButton("移出选中", (s, e) => RemoveCheckedFromQueue());
+            _btnClearQueue = MakeButton("清空队列", (s, e) => ClearQueue());
+            _btnSkipGroup = MakeButton("跳过本组", (s, e) => SkipCurrentGroup());
+            _btnStartQueue = MakeButton("开始队列", (s, e) => RunQueue());
+            AddToGrid(btns, _btnNewGroupAddSel, _btnAddSelToGroup, _btnRemoveSel,
+                _btnClearQueue, _btnSkipGroup, _btnStartQueue);
+
+            box.Controls.Add(_queueTree);   // Fill
+            box.Controls.Add(btns);         // Bottom
+            box.Controls.Add(top);          // Top
+            return box;
+        }
+
+        // ------------------------------------------------------------- queue model --
+
+        private int QueueTaskCount()
+        {
+            int n = 0;
+            foreach (var g in _queue) n += g.Tasks.Count;
+            return n;
+        }
+
+        /// <summary>Case- and trailing-separator-insensitive directory comparison.</summary>
+        private static bool SameDir(string a, string b)
+        {
+            return string.Equals((a ?? "").TrimEnd('\\', '/'), (b ?? "").TrimEnd('\\', '/'),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>The queue entry for a game, with the group holding it, or null.</summary>
+        private Tuple<QueueTask, TaskGroup> FindTask(string dir)
+        {
+            foreach (var grp in _queue)
+                foreach (var t in grp.Tasks)
+                    if (SameDir(t.Dir, dir)) return Tuple.Create(t, grp);
+            return null;
+        }
+
+        /// <summary>Add games to a group, creating the group when it is new. One game lives in one group.</summary>
+        private void AddTasks(TaskGroup grp, List<GameItem> games)
+        {
+            if (games == null || games.Count == 0) return;
+            if (!_queue.Contains(grp)) _queue.Add(grp);
+            int added = 0, moved = 0;
+            foreach (var g in games)
+            {
+                var at = FindTask(g.Dir);
+                if (at != null)
+                {
+                    if (ReferenceEquals(at.Item2, grp)) continue;     // already here
+                    at.Item2.Tasks.Remove(at.Item1);                  // move it to the requested group
+                    moved++;
+                }
+                grp.Tasks.Add(new QueueTask { Dir = g.Dir, Name = g.Name });
+                added++;
+            }
+            DropEmptyGroups();
+            SaveQueue();
+            RefreshQueuePanel();
+            UpdateButtons();
+            AppendLog("队列：加入 " + added + " 个任务" + (moved > 0 ? "，移动 " + moved + " 个" : "") +
+                "；现有 " + _queue.Count + " 组 / " + QueueTaskCount() + " 个任务");
+        }
+
+        private List<GameItem> CheckedGames()
+        {
+            return _games.Where(g => g.Checked).ToList();
+        }
+
+        private void AddCheckedToNewGroup()
+        {
+            var sel = CheckedGames();
+            if (sel.Count == 0)
+            {
+                MessageBox.Show(this, "请先在列表里勾选要加入队列的游戏。", "没有选中游戏",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            AddTasks(new TaskGroup(), sel);
+        }
+
+        private void AddCheckedToSelectedGroup()
+        {
+            var sel = CheckedGames();
+            if (sel.Count == 0)
+            {
+                MessageBox.Show(this, "请先在列表里勾选要加入队列的游戏。", "没有选中游戏",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (_queue.Count == 0) { AddTasks(new TaskGroup(), sel); return; }
+            int gi = _cmbTargetGroup.SelectedIndex;
+            if (gi < 0 || gi >= _queue.Count) gi = _queue.Count - 1;
+            AddTasks(_queue[gi], sel);
+        }
+
+        private void RemoveCheckedFromQueue()
+        {
+            var sel = CheckedGames();
+            if (sel.Count == 0 || _queue.Count == 0) return;
+            int removed = 0;
+            foreach (var g in sel)
+            {
+                var at = FindTask(g.Dir);
+                if (at == null) continue;
+                at.Item2.Tasks.Remove(at.Item1);
+                removed++;
+            }
+            if (removed == 0) return;
+            DropEmptyGroups();
+            SaveQueue();
+            RefreshQueuePanel();
+            UpdateButtons();
+            AppendLog("队列：移出 " + removed + " 个任务；现有 " + _queue.Count + " 组 / " + QueueTaskCount() + " 个任务");
+        }
+
+        private void ClearQueue()
+        {
+            if (_queue.Count == 0) return;
+            if (MessageBox.Show(this, "确定清空整个队列（" + _queue.Count + " 组 / " + QueueTaskCount() + " 个任务）？\n\n" +
+                    "只清空队列本身，已翻译的成果与游戏数据都不受影响。",
+                    "清空队列", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            _queue.Clear();
+            SaveQueue();
+            RefreshQueuePanel();
+            UpdateButtons();
+            AppendLog("队列：已清空");
+        }
+
+        /// <summary>Groups with no tasks left disappear, so the numbering stays dense.</summary>
+        private void DropEmptyGroups()
+        {
+            for (int i = _queue.Count - 1; i >= 0; i--)
+                if (_queue[i].Tasks.Count == 0) { _queue.RemoveAt(i); if (_queueGroupIndex >= i) _queueGroupIndex = -1; }
+        }
+
+        private void SkipCurrentGroup()
+        {
+            if (!_running) return;
+            _skipGroupRequested = true;
+            AppendLog("⤼ 跳过本组：当前这个游戏跑完就进下一组");
+        }
+
+        /// <summary>Redraw the group tree, the summary line and the target-group list.</summary>
+        private void RefreshQueuePanel()
+        {
+            if (_queueTree == null || _lblQueue == null) return;
+            _queueTree.BeginUpdate();
+            _queueTree.Nodes.Clear();
+            for (int gi = 0; gi < _queue.Count; gi++)
+            {
+                var grp = _queue[gi];
+                int done = grp.Tasks.Count(t => t.Result == "完成");
+                string state = (_running && gi == _queueGroupIndex) ? "运行中" : grp.State;
+                var node = new TreeNode("第 " + (gi + 1) + " 组　[" + state + " " + done + "/" + grp.Tasks.Count + "]")
+                {
+                    Tag = gi,
+                    ToolTipText = "第 " + (gi + 1) + " 组：" + state + "，共 " + grp.Tasks.Count + " 个任务"
+                };
+                for (int ti = 0; ti < grp.Tasks.Count; ti++)
+                {
+                    var t = grp.Tasks[ti];
+                    string mark;
+                    if (t.Result == "完成") mark = "✔";
+                    else if (t.Result == "失败") mark = "✖";
+                    else if (t.Result == "跳过") mark = "⤼";
+                    else if (t.Result == "取消") mark = "■";
+                    else mark = (_running && gi == _queueGroupIndex && ti == _queueTaskIndex) ? "▶" : "·";
+                    string tail = t.Result.Length > 0 ? t.Result : (t.Note.Length > 0 ? t.Note : "等待");
+                    node.Nodes.Add(new TreeNode(mark + " " + t.Name + " — " + tail)
+                    {
+                        Tag = t,
+                        ToolTipText = t.Dir + (t.Note.Length > 0 ? "\n" + t.Note : "")
+                    });
+                }
+                if (grp.Tasks.Count <= 12 || gi == _queueGroupIndex) node.Expand();
+                _queueTree.Nodes.Add(node);
+            }
+            _queueTree.EndUpdate();
+
+            var sb = new StringBuilder();
+            sb.Append(_queue.Count == 0
+                ? "队列：空（勾选游戏后点「新建组并加入选中」）"
+                : "队列：" + _queue.Count + " 组 / " + QueueTaskCount() + " 个任务");
+            if (_running && _queueGroupIndex >= 0 && _queueGroupIndex < _queue.Count)
+            {
+                var grp = _queue[_queueGroupIndex];
+                sb.Append("　当前：第 " + (_queueGroupIndex + 1) + " 组（" +
+                    (_queueTaskIndex >= 0 ? _queueTaskIndex + 1 : 0) + "/" + grp.Tasks.Count + "）");
+            }
+            else if (_queue.Count > 0) sb.Append("　未开始");
+            _lblQueue.Text = sb.ToString();
+
+            int want = _cmbTargetGroup.SelectedIndex;
+            _cmbTargetGroup.Items.Clear();
+            for (int i = 0; i < _queue.Count; i++)
+                _cmbTargetGroup.Items.Add("第 " + (i + 1) + " 组（" + _queue[i].Tasks.Count + " 个）");
+            if (_cmbTargetGroup.Items.Count > 0)
+                _cmbTargetGroup.SelectedIndex =
+                    (want >= 0 && want < _cmbTargetGroup.Items.Count) ? want : _cmbTargetGroup.Items.Count - 1;
+        }
+
+        // --------------------------------------------------------- queue persistence --
+
+        private string QueuePath
+        {
+            get { return Path.Combine(_settings.WorkDir, "queue.json"); }
+        }
+
+        /// <summary>
+        /// Write the queue. This is the only file the queue writes — game data, the scan cache and the
+        /// pipeline's own per-game cache files are never touched from here.
+        ///
+        /// The shape is a flat array of one row per task, with the group's state repeated on each row,
+        /// because SimpleJson only reads a top-level array of flat objects. A group with no tasks
+        /// therefore cannot be represented, which is why creating a group requires a selected game.
+        /// </summary>
+        private void SaveQueue(string path = null)
+        {
+            try
+            {
+                var target = path ?? QueuePath;
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                var sb = new StringBuilder("[");
+                for (int gi = 0; gi < _queue.Count; gi++)
+                {
+                    var grp = _queue[gi];
+                    for (int ti = 0; ti < grp.Tasks.Count; ti++)
+                    {
+                        var t = grp.Tasks[ti];
+                        if (sb.Length > 1) sb.Append(",");
+                        sb.Append("{");
+                        sb.Append("\"Group\":").Append(gi + 1).Append(",");
+                        sb.Append("\"GroupState\":").Append(JsonString(grp.State)).Append(",");
+                        sb.Append("\"Ord\":").Append(ti).Append(",");
+                        sb.Append("\"Dir\":").Append(JsonString(t.Dir)).Append(",");
+                        sb.Append("\"Name\":").Append(JsonString(t.Name)).Append(",");
+                        sb.Append("\"Result\":").Append(JsonString(t.Result)).Append(",");
+                        sb.Append("\"Note\":").Append(JsonString(t.Note));
+                        sb.Append("}");
+                    }
+                }
+                sb.Append("]");
+                File.WriteAllText(target, sb.ToString(), new UTF8Encoding(false));
+            }
+            catch (Exception ex) { AppendLog("保存队列失败：" + ex.Message); }
+        }
+
+        /// <summary>
+        /// Read the queue back. Rows are ordered by group number and then by position, and a group that
+        /// was 运行中 when the app closed comes back as 等待 so it can be resumed.
+        /// </summary>
+        private void LoadQueue(string path = null)
+        {
+            _queue.Clear();
+            _queueGroupIndex = -1;
+            _queueTaskIndex = -1;
+            try
+            {
+                var target = path ?? QueuePath;
+                if (!File.Exists(target)) return;
+                var rows = SimpleJson.Array(File.ReadAllText(target, Encoding.UTF8))
+                    .Where(r => !string.IsNullOrEmpty(SimpleJson.Get(r, "Dir")))
+                    .OrderBy(r => SimpleJson.GetInt(r, "Group"))
+                    .ThenBy(r => SimpleJson.GetInt(r, "Ord"))
+                    .ToList();
+                TaskGroup cur = null;
+                int curGroup = int.MinValue;
+                foreach (var r in rows)
+                {
+                    int gn = SimpleJson.GetInt(r, "Group");
+                    if (cur == null || gn != curGroup)
+                    {
+                        var gs = SimpleJson.Get(r, "GroupState");
+                        cur = new TaskGroup
+                        {
+                            // A run interrupted by closing the window must not look finished.
+                            State = string.IsNullOrEmpty(gs) || gs == "运行中" ? "等待" : gs
+                        };
+                        _queue.Add(cur);
+                        curGroup = gn;
+                    }
+                    cur.Tasks.Add(new QueueTask
+                    {
+                        Dir = SimpleJson.Get(r, "Dir"),
+                        Name = SimpleJson.Get(r, "Name") ?? Path.GetFileName((SimpleJson.Get(r, "Dir") ?? "").TrimEnd('\\', '/')),
+                        Result = SimpleJson.Get(r, "Result") ?? "",
+                        Note = SimpleJson.Get(r, "Note") ?? ""
+                    });
+                }
+                if (_queue.Count > 0)
+                    AppendLog("已读取任务队列：" + _queue.Count + " 组 / " + QueueTaskCount() + " 个任务（work\\queue.json）");
+            }
+            catch (Exception ex) { AppendLog("读取队列失败：" + ex.Message); }
         }
 
         /// <summary>Toggle one row's check by index, and repaint just that row.</summary>
@@ -385,7 +749,7 @@ namespace GameTranslatorV3
             var modelRow = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Padding = new Padding(6, 4, 6, 0) };
             modelRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             modelRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _cmbModel = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cmbModel = new ComboBox { Name = "cmbModel", Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
             _btnModelRefresh = MakeButton("刷新列表", (s, e) => RefreshModels());
             _btnModelStart = MakeButton("启动模型", (s, e) => StartLlama());
             _btnModelStop = MakeButton("停止模型", (s, e) => StopLlama());
@@ -747,6 +1111,28 @@ namespace GameTranslatorV3
             }
         }
 
+        /// <summary>
+        /// One queued game. `Result` is empty while it is still to do, and one of 完成 / 失败 / 跳过 /
+        /// 取消 afterwards, so a run can be stopped and resumed without redoing finished work.
+        /// </summary>
+        private sealed class QueueTask
+        {
+            public string Dir;
+            public string Name;
+            public string Result = "";
+            public string Note = "";
+        }
+
+        /// <summary>
+        /// One translation group: the tasks that run together, in order. Groups run one after another;
+        /// a task appended to a group while it is running is picked up by the same pass.
+        /// </summary>
+        private sealed class TaskGroup
+        {
+            public string State = "等待";      // 等待 / 运行中 / 已完成 / 已跳过 / 已终止
+            public readonly List<QueueTask> Tasks = new List<QueueTask>();
+        }
+
         private sealed class GameItem
         {
             public string Dir;
@@ -1023,6 +1409,23 @@ namespace GameTranslatorV3
             _btnSettings.Enabled = !_running;
             _cmbModel.Enabled = !_running && _cmbModel.Items.Count > 0 && !Convert.ToString(_cmbModel.SelectedItem).StartsWith("（");
             _btnModelRefresh.Enabled = !_running;
+
+            // The queue. Adding to a group stays available during a run on purpose: the running group
+            // re-reads its task list before every game, so a task added now is picked up by the same
+            // pass, and one added to a later group is picked up when that group starts. The buttons
+            // that rewrite the queue's order finish in whatever order the loop chose, so they wait.
+            if (_btnNewGroupAddSel != null)
+            {
+                _btnNewGroupAddSel.Enabled = checkedGames > 0;
+                _btnAddSelToGroup.Enabled = checkedGames > 0;
+                _btnRemoveSel.Enabled = !_running && _queue.Count > 0;
+                _btnClearQueue.Enabled = !_running && _queue.Count > 0;
+                _btnSkipGroup.Enabled = _running;
+                _btnStartQueue.Enabled = !_running && _queue.Count > 0;
+                _cmbTargetGroup.Enabled = _queue.Count > 0 || checkedGames > 0;
+                if (_status != null && _queue.Count > 0)
+                    _status.Text += "；队列 " + _queue.Count + " 组 / " + QueueTaskCount() + " 个任务";
+            }
             UpdateModelState();
         }
 
@@ -1047,6 +1450,18 @@ namespace GameTranslatorV3
             Tip(_btnRestore, "把勾选的那一个游戏切回汉化版（需先勾选恰好一个）。");
             Tip(_btnStop, "停止整个批次。已经完成的译文会保留。");
             Tip(_btnPause, "让当前请求跑完后不再开始下一个游戏。");
+
+            // The queue panel. The two 加入 buttons are the ones that deliberately keep working during
+            // a run, so their tips say so rather than saying "unavailable while running".
+            Tip(_queueTree, "按组顺序执行：第 1 组跑完自动进第 2 组。\n展开一组可以看到其中每个游戏的结果。\n" +
+                            "运行中也能给任意一组加任务——加进正在跑的那组会被本次带上，加进后面的组在它开始时执行。");
+            Tip(_btnNewGroupAddSel, "把勾选的游戏建成新的一组，追加到队列末尾。翻译进行中也可用。");
+            Tip(_btnAddSelToGroup, "把勾选的游戏追加到右边下拉框选中的那一组。翻译进行中也可用。");
+            Tip(_btnRemoveSel, "把勾选的游戏从队列里移出（游戏本身与已翻译的成果不受影响）。翻译进行中不可用。");
+            Tip(_btnClearQueue, "清空整个队列。不会删除任何游戏数据或译文。翻译进行中不可用。");
+            Tip(_btnSkipGroup, "放弃当前组里剩下没跑的任务，直接进入下一组。只在翻译进行中可用。");
+            Tip(_btnStartQueue, "从第一组开始，一组跑完自动进下一组。已经跑完的组会跳过（可续跑）。");
+            Tip(_cmbTargetGroup, "「加入选中到所选组」的目标组。");
         }
 
         // ------------------------------------------------------------ scan / add -----
@@ -1396,6 +1811,12 @@ namespace GameTranslatorV3
             menu.Items.Add(miOpenData);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miCopy);
+            // Single-task entry point: add just this game to the queue, into an existing group or a new
+            // one. The dropdown is rebuilt every time the menu opens, so it always shows the real groups
+            // and their sizes.
+            menu.Items.Add(new ToolStripSeparator());
+            var miQueue = new ToolStripMenuItem("加入队列");
+            menu.Items.Add(miQueue);
             menu.Opening += (s, e) =>
             {
                 var g = CurrentGame();
@@ -1406,6 +1827,24 @@ namespace GameTranslatorV3
                 miOpen.Enabled = has;
                 miOpenData.Enabled = has && GetDataDir(g) != null;
                 miCopy.Enabled = has;
+
+                miQueue.DropDownItems.Clear();
+                miQueue.Enabled = has;
+                if (!has) return;
+                var game = g;
+                var miNew = new ToolStripMenuItem("加入新的组");
+                miNew.Click += (s2, e2) => AddTasks(new TaskGroup(), new List<GameItem> { game });
+                miQueue.DropDownItems.Add(miNew);
+                for (int i = 0; i < _queue.Count; i++)
+                {
+                    int gi = i;
+                    var mi = new ToolStripMenuItem("加入第 " + (i + 1) + " 组（" + _queue[i].Tasks.Count + " 个）");
+                    mi.Click += (s2, e2) =>
+                    {
+                        if (gi < _queue.Count) AddTasks(_queue[gi], new List<GameItem> { game });
+                    };
+                    miQueue.DropDownItems.Add(mi);
+                }
             };
             _list.ContextMenuStrip = menu;
             _list.MouseDown += (s, e) =>
@@ -1496,24 +1935,7 @@ namespace GameTranslatorV3
             }
 
             // The model has to be running; offer to start it rather than failing later.
-            if (!IsPortOpen())
-            {
-                var answer = MessageBox.Show(this,
-                    "翻译模型服务还没有启动。\n\n是否现在启动「" + _settings.Model + "」？\n\n" +
-                    "模型加载需要 30-45 秒，管线会自动等待。",
-                    "需要启动模型", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                if (answer == DialogResult.Cancel) return;
-                if (answer == DialogResult.Yes)
-                {
-                    StartLlama();
-                    for (int i = 0; i < 60 && !IsPortOpen(); i++) await Task.Delay(1000);
-                    if (!IsPortOpen())
-                    {
-                        MessageBox.Show(this, "模型服务启动失败或超时，请查看日志。", "启动失败");
-                        return;
-                    }
-                }
-            }
+            if (!await EnsureModelReadyAsync()) return;
 
             _running = true; _paused = false;
             _cts = new CancellationTokenSource();
@@ -1568,12 +1990,7 @@ namespace GameTranslatorV3
                 RefreshList();
             }
 
-            _running = false;
-            _cts = null;
-            _barBatch.Value = 1000;
-            _lblBatch.Text = "批次：已完成 " + _batchDone + " / " + _batchTotal;
-            _lblCurrent.Text = "当前：空闲";
-            UpdateButtons();
+            EndRun("批次");
 
             var sb = new StringBuilder("批次结束。\n完成 " + _batchDone + " 个");
             if (skipped.Count > 0) sb.Append("，跳过 " + skipped.Count + " 个已是中文");
@@ -1585,6 +2002,215 @@ namespace GameTranslatorV3
             }
             MessageBox.Show(this, sb.ToString(), "翻译批次结果", MessageBoxButtons.OK,
                 failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        }
+
+        /// <summary>
+        /// Common end-of-run state reset, shared by the one-shot batch and the queue. `label` only
+        /// changes the wording of the batch line, so the one-shot batch still reports 批次.
+        /// </summary>
+        private void EndRun(string label)
+        {
+            _running = false;
+            _cts = null;
+            _barBatch.Value = 1000;
+            _lblBatch.Text = label + "：已完成 " + _batchDone + " / " + _batchTotal;
+            _lblCurrent.Text = "当前：空闲";
+            RefreshQueuePanel();
+            UpdateButtons();
+        }
+
+        /// <summary>
+        /// Make sure the translation server is up, offering to start it. Returns false only when the
+        /// user cancels or the start times out — the same contract the batch always had.
+        /// </summary>
+        private async Task<bool> EnsureModelReadyAsync()
+        {
+            if (IsPortOpen()) return true;
+            var answer = MessageBox.Show(this,
+                "翻译模型服务还没有启动。\n\n是否现在启动「" + _settings.Model + "」？\n\n" +
+                "模型加载需要 30-45 秒，管线会自动等待。",
+                "需要启动模型", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (answer == DialogResult.Cancel) return false;
+            if (answer == DialogResult.Yes)
+            {
+                StartLlama();
+                for (int i = 0; i < 60 && !IsPortOpen(); i++) await Task.Delay(1000);
+                if (!IsPortOpen())
+                {
+                    MessageBox.Show(this, "模型服务启动失败或超时，请查看日志。", "启动失败");
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // ------------------------------------------------------- grouped queue run -----
+
+        /// <summary>
+        /// Run the queue: every group in order, every task in a group in order, and the next group
+        /// starts by itself when the current one finishes.
+        ///
+        /// Two properties this relies on, both deliberate:
+        ///
+        ///   * The inner loop re-reads `grp.Tasks.Count` on every pass, so a task appended to the group
+        ///     that is running right now is picked up by the same pass. Adding to a later group is
+        ///     picked up when that group starts.
+        ///   * This is `async void` on the UI thread and nothing uses ConfigureAwait(false), so every
+        ///     continuation resumes on the UI thread. A click handler therefore runs interleaved with
+        ///     this loop at an await point, and mutating the task list from it needs no locking.
+        ///
+        /// Stopping: 终止 cancels the whole queue (the running group is marked 已终止 and the groups not
+        /// yet started stay 等待, so 开始队列 resumes); 跳过本组 only abandons the rest of the current
+        /// group. Nothing here writes to a game or to a pipeline cache — the only file written is
+        /// work\queue.json.
+        /// </summary>
+        private async void RunQueue()
+        {
+            if (_queue.Count == 0)
+            {
+                MessageBox.Show(this, "队列是空的。\n\n先勾选要翻译的游戏，再点「新建组并加入选中」。",
+                    "队列为空", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            bool allDone = _queue.All(g => g.State == "已完成" || g.State == "已跳过" || g.State == "已终止");
+            if (allDone)
+            {
+                if (MessageBox.Show(this, "队列里的组都已经跑过了。\n\n是否清空各项结果并重新跑一遍？",
+                        "队列已完成", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                foreach (var g in _queue)
+                {
+                    g.State = "等待";
+                    foreach (var t in g.Tasks) { t.Result = ""; t.Note = ""; }
+                }
+                SaveQueue();
+                RefreshQueuePanel();
+            }
+
+            if (!await EnsureModelReadyAsync()) return;
+
+            _running = true; _paused = false; _skipGroupRequested = false;
+            _cts = new CancellationTokenSource();
+            ResetProgress();
+            _barGame.Maximum = 1000;
+            _batchTotal = QueueTaskCount();
+            _batchDone = 0;
+            UpdateButtons();
+
+            var completed = new List<string>();
+            var failed = new List<string>();
+            var skipped = new List<string>();
+            bool cancelled = false;
+
+            for (int gi = 0; gi < _queue.Count; gi++)
+            {
+                if (cancelled) break;
+                var grp = _queue[gi];
+                // Resume: a group that already finished is not run again.
+                if (grp.State == "已完成" || grp.State == "已跳过" || grp.State == "已终止") continue;
+
+                grp.State = "运行中";
+                _queueGroupIndex = gi;
+                _queueTaskIndex = -1;
+                SaveQueue();
+                RefreshQueuePanel();
+
+                for (int ti = 0; ti < grp.Tasks.Count; ti++)      // Count re-read: mid-run additions run
+                {
+                    if (_cts.IsCancellationRequested) { cancelled = true; break; }
+                    while (_paused && !_cts.IsCancellationRequested) await Task.Delay(500);
+                    if (_cts.IsCancellationRequested) { cancelled = true; break; }
+                    if (_skipGroupRequested) break;
+
+                    var t = grp.Tasks[ti];
+                    if (t.Result == "完成") continue;             // already done in an earlier pass
+                    _queueTaskIndex = ti;
+                    _lblBatch.Text = QueueBatchLabel(gi) + "，本组 " + (ti + 1) + " / " + grp.Tasks.Count + " 个";
+                    _barBatch.Value = Math.Min(1000, (int)(1000.0 * _batchDone / Math.Max(1, _batchTotal)));
+
+                    var g = _games.FirstOrDefault(x => SameDir(x.Dir, t.Dir));
+                    if (g == null)
+                    {
+                        t.Result = "跳过"; t.Note = "游戏已不在列表中";
+                        skipped.Add(t.Name + "（不在列表）");
+                        _batchDone++;
+                        AppendLog("⤼ 跳过 " + t.Name + "：已不在游戏列表中");
+                        SaveQueue(); RefreshQueuePanel();
+                        continue;
+                    }
+                    if (g.Skip)
+                    {
+                        t.Result = "跳过"; t.Note = "已是中文";
+                        skipped.Add(t.Name + "（已是中文）");
+                        _batchDone++; _skipCount++;
+                        _runner.LogSkip(t.Name + "  已跳过：检测为已是中文");
+                        AppendLog("⤼ 跳过 " + t.Name + "：已是中文");
+                        SaveQueue(); RefreshQueuePanel();
+                        continue;
+                    }
+
+                    _currentGame = t.Name;
+                    _lblCurrent.Text = "当前：" + t.Name + "（第" + (gi + 1) + "组 " + (ti + 1) + "/" + grp.Tasks.Count + "）";
+                    _barGame.Value = 0;
+                    _lastProgressAt = DateTime.MinValue;
+                    _lastProgressCount = 0;
+                    AppendLog("═══ 开始 " + t.Name + "（第" + (gi + 1) + "组）═══");
+
+                    var outcome = await _runner.RunAsync(g.Dir, _settings.PromptFile, _cts.Token);
+                    if (outcome.Succeeded)
+                    {
+                        t.Result = "完成"; t.Note = "";
+                        g.Status = "已完成";
+                        completed.Add(t.Name);
+                        _batchDone++;
+                        AppendLog("✔ " + t.Name + " 完成（尝试 " + outcome.AttemptsUsed + " 次）");
+                    }
+                    else if (outcome.SkipReason == "用户终止")
+                    {
+                        t.Result = "取消"; t.Note = "用户终止";
+                        cancelled = true;
+                    }
+                    else
+                    {
+                        t.Result = "失败"; t.Note = outcome.SkipReason ?? "未知原因";
+                        g.Status = "失败已跳过";
+                        failed.Add(t.Name + "：" + t.Note);
+                        _batchDone++;
+                        AppendLog("✖ " + t.Name + " 已跳过 —— " + t.Note);
+                    }
+                    SaveQueue();
+                    RefreshQueuePanel();
+                    RefreshList();
+                }
+
+                grp.State = cancelled ? "已终止" : (_skipGroupRequested ? "已跳过" : "已完成");
+                _skipGroupRequested = false;
+                SaveQueue();
+                RefreshQueuePanel();
+            }
+
+            _queueGroupIndex = -1;
+            _queueTaskIndex = -1;
+            SaveQueue();
+            EndRun("队列");
+
+            var sb = new StringBuilder("队列结束。\n完成 " + completed.Count + " 个");
+            if (skipped.Count > 0) sb.Append("，跳过 " + skipped.Count + " 个");
+            if (failed.Count > 0)
+            {
+                sb.Append("，失败并跳过 " + failed.Count + " 个：\n");
+                foreach (var f in failed.Take(8)) sb.Append("  · " + f + "\n");
+                sb.Append("\n详细记录见 work\\errors.log 与 work\\skips.log");
+            }
+            if (cancelled) sb.Append("\n\n已终止：没轮到的组仍留在队列里，再次「开始队列」即可续跑。");
+            MessageBox.Show(this, sb.ToString(), "任务队列结果", MessageBoxButtons.OK,
+                failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        }
+
+        /// <summary>Batch line wording for a group: "队列：第 2 / 3 组".</summary>
+        private string QueueBatchLabel(int gi)
+        {
+            return "队列：第 " + (gi + 1) + " / " + _queue.Count + " 组";
         }
 
         private bool IsPortOpen()

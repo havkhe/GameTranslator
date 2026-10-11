@@ -51,7 +51,11 @@ namespace GameTranslatorV3.UiCheck
             Console.WriteLine("=== 模型选择 ===");
             var combos = all.OfType<ComboBox>().ToList();
             Assert(combos.Count >= 1, "存在模型下拉框 (ComboBox) 数量=" + combos.Count);
-            var modelCombo = combos.FirstOrDefault();
+            // The model selector is picked by name, not by position: the queue panel added a second
+            // ComboBox (the target group), and taking the first one in the tree would silently test the
+            // wrong control.
+            var modelCombo = combos.FirstOrDefault(c => c.Name == "cmbModel") ?? combos.FirstOrDefault();
+            Assert(modelCombo != null && modelCombo.Name == "cmbModel", "模型下拉框按名字定位（cmbModel）");
             Assert(modelCombo != null && modelCombo.Items.Count > 0,
                 "模型下拉框已填充：" + (modelCombo == null ? "无" : modelCombo.Items.Count + " 项"));
             if (modelCombo != null && modelCombo.Items.Count > 0)
@@ -151,27 +155,115 @@ namespace GameTranslatorV3.UiCheck
                 }
             }
             Console.WriteLine("");
+            Console.WriteLine("=== 任务队列面板（分组、可追加、可续跑）===");
+            // Shared with the run-state section below: set the flag, then let UpdateButtons decide.
+            var runningField = typeof(MainForm).GetField("_running", BindingFlags.NonPublic | BindingFlags.Instance);
+            var update = typeof(MainForm).GetMethod("UpdateButtons", BindingFlags.NonPublic | BindingFlags.Instance);
+            // The queue writes work\queue.json through its real handlers, so the file is put back
+            // exactly as it was at the end of this section: running the check must not disturb the
+            // user's queue. Nothing else the queue touches is persisted — no game data, no cache.
+            string queuePath = System.IO.Path.Combine(root, "work", "queue.json");
+            bool hadQueue = System.IO.File.Exists(queuePath);
+            byte[] queueBackup = hadQueue ? System.IO.File.ReadAllBytes(queuePath) : null;
+
+            var trees = all.OfType<TreeView>().ToList();
+            Assert(trees.Count == 1, "恰好一个 TreeView（队列的组 → 成员）数量=" + trees.Count);
+            var summaryLabels = all.OfType<Label>().Select(l => l.Text ?? "")
+                .Where(t => t.StartsWith("队列")).ToList();
+            Assert(summaryLabels.Count == 1, "有一行队列摘要：" + (summaryLabels.Count > 0 ? summaryLabels[0] : "无"));
+
+            foreach (var want in new[] { "新建组并加入选中", "加入选中到所选组", "移出选中",
+                                         "清空队列", "跳过本组", "开始队列" })
+                Assert(buttons.Any(t => t.Contains(want)), "队列按钮存在：" + want);
+
+            Assert(byText.ContainsKey("跳过本组") && !byText["跳过本组"].Enabled, "未运行时「跳过本组」为禁用");
+            Assert(byText.ContainsKey("开始队列") && !byText["开始队列"].Enabled, "队列为空时「开始队列」为禁用");
+            Assert(byText.ContainsKey("清空队列") && !byText["清空队列"].Enabled, "队列为空时「清空队列」为禁用");
+
+            var addNewGroup = typeof(MainForm).GetMethod("AddCheckedToNewGroup", BindingFlags.NonPublic | BindingFlags.Instance);
+            var saveQueue = typeof(MainForm).GetMethod("SaveQueue", BindingFlags.NonPublic | BindingFlags.Instance);
+            var loadQueue = typeof(MainForm).GetMethod("LoadQueue", BindingFlags.NonPublic | BindingFlags.Instance);
+            var queueField = typeof(MainForm).GetField("_queue", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert(addNewGroup != null && saveQueue != null && loadQueue != null && queueField != null,
+                "找到队列的私有成员（AddCheckedToNewGroup / SaveQueue / LoadQueue / _queue）");
+            if (addNewGroup != null && saveQueue != null && loadQueue != null && queueField != null)
+            {
+                // Exactly one game is checked at this point (the toggle test above left it that way),
+                // so one group with one member is what the button must produce.
+                int checkedNow = CountChecked(form);
+                Console.WriteLine("        当前已勾选：" + checkedNow + " 个");
+                addNewGroup.Invoke(form, null);
+                var q = (System.Collections.IList)queueField.GetValue(form);
+                Assert(q.Count == 1, "新建组后队列有 1 组（实际 " + q.Count + "）");
+                if (q.Count == 1)
+                {
+                    var grp = q[0];
+                    var tasks = (System.Collections.IList)grp.GetType().GetField("Tasks").GetValue(grp);
+                    Assert(tasks.Count == checkedNow && tasks.Count > 0,
+                        "该组包含勾选的 " + checkedNow + " 个任务（实际 " + tasks.Count + "）");
+                }
+                Assert(trees.Count == 1 && trees[0].Nodes.Count == q.Count,
+                    "树里有 " + q.Count + " 个组节点");
+                if (trees.Count == 1 && trees[0].Nodes.Count > 0)
+                {
+                    Console.WriteLine("        组节点: " + trees[0].Nodes[0].Text);
+                    Assert(trees[0].Nodes[0].Text.Contains("第 1 组"), "组节点标明「第 1 组」：" + trees[0].Nodes[0].Text);
+                    Assert(trees[0].Nodes[0].Nodes.Count == checkedNow, "组节点下挂着成员");
+                }
+                var sumText = all.OfType<Label>().Select(l => l.Text ?? "").FirstOrDefault(t => t.StartsWith("队列")) ?? "";
+                Assert(sumText.Contains("1 组") && sumText.Contains("个任务"), "摘要显示组数与任务数：" + sumText);
+                update.Invoke(form, null);
+                Assert(byText["开始队列"].Enabled, "队列非空后「开始队列」可用");
+                Assert(byText["清空队列"].Enabled, "队列非空后「清空队列」可用");
+
+                // Persistence round trip, on a temporary file so the real queue.json is never written.
+                string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gt-uicheck-queue-" + Guid.NewGuid().ToString("N") + ".json");
+                saveQueue.Invoke(form, new object[] { tmp });
+                Assert(System.IO.File.Exists(tmp), "队列已写出到临时文件");
+                loadQueue.Invoke(form, new object[] { tmp });
+                var q2 = (System.Collections.IList)queueField.GetValue(form);
+                Assert(q2.Count == q.Count, "重新读取后组数一致（" + q2.Count + "）");
+                string raw = System.IO.File.ReadAllText(tmp);
+                Console.WriteLine("        queue.json: " + (raw.Length > 120 ? raw.Substring(0, 120) + "…" : raw));
+                Assert(raw.Contains("\"Group\":1") && raw.Contains("\"GroupState\""), "队列文件字段齐全");
+                System.IO.File.Delete(tmp);
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 运行中左侧仍可操作（模拟 _running=true 后重算按钮）===");
             // The window used to grey out the whole game list and every selection button for the
             // duration of a batch, so it could not be scrolled and nothing could be unchecked.
             // _running is private, so it is set through reflection and UpdateButtons re-run — that
             // exercises the real decision instead of restating it.
-            var runningField = typeof(MainForm).GetField("_running", BindingFlags.NonPublic | BindingFlags.Instance);
-            var update = typeof(MainForm).GetMethod("UpdateButtons", BindingFlags.NonPublic | BindingFlags.Instance);
-            if (runningField == null || update == null) Assert(false, "找到 _running 与 UpdateButtons（反射）");
+            var runningField2 = typeof(MainForm).GetField("_running", BindingFlags.NonPublic | BindingFlags.Instance);
+            var update2 = typeof(MainForm).GetMethod("UpdateButtons", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (runningField2 == null || update2 == null) Assert(false, "找到 _running 与 UpdateButtons（反射）");
             else
             {
-                runningField.SetValue(form, true);
-                update.Invoke(form, null);
+                runningField2.SetValue(form, true);
+                update2.Invoke(form, null);
                 Assert(lists[0].Enabled, "运行中：游戏列表仍可滚动/选择/右键");
                 Assert(byText["全选"].Enabled && byText["取消全选"].Enabled, "运行中：全选/取消全选可用");
                 Assert(byText["终止"].Enabled && byText["暂停"].Enabled, "运行中：终止/暂停可用");
                 Assert(!byText["扫描全部路径"].Enabled && !byText["添加游戏"].Enabled && !byText["刷新状态"].Enabled,
                     "运行中：会改动列表的按钮停用（扫描/添加/刷新状态）");
-                runningField.SetValue(form, false);
-                update.Invoke(form, null);
+                // The queue is the exception on purpose: a running group re-reads its task list before
+                // every game, so a task added now really does run in the same pass. The buttons that
+                // rewrite the queue's order would fight the loop, so those wait.
+                Assert(byText["新建组并加入选中"].Enabled, "运行中：仍可把选中游戏加进新的组");
+                Assert(byText["加入选中到所选组"].Enabled, "运行中：仍可把选中游戏加进所选组");
+                Assert(byText["跳过本组"].Enabled, "运行中：「跳过本组」可用");
+                Assert(!byText["移出选中"].Enabled && !byText["清空队列"].Enabled && !byText["开始队列"].Enabled,
+                    "运行中：移出/清空/开始队列停用（会与循环打架）");
+                runningField2.SetValue(form, false);
+                update2.Invoke(form, null);
                 Assert(!byText["终止"].Enabled, "模拟结束后回到未运行态");
+                Assert(!byText["跳过本组"].Enabled, "模拟结束后「跳过本组」回到禁用");
             }
+
+            // Put the user's queue file back exactly as it was, so running the check is invisible to it.
+            if (hadQueue) System.IO.File.WriteAllBytes(queuePath, queueBackup);
+            else if (System.IO.File.Exists(queuePath)) System.IO.File.Delete(queuePath);
 
             Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
@@ -181,6 +273,19 @@ namespace GameTranslatorV3.UiCheck
 
             form.Dispose();
             return _fail == 0 ? 0 : 1;
+        }
+
+        /// <summary>How many games are ticked, read from the status line the window maintains.</summary>
+        private static int CountChecked(Form form)
+        {
+            var t = GetStatusText(form);
+            int i = t.IndexOf("已勾选 ");
+            if (i < 0) return 0;
+            i += "已勾选 ".Length;
+            int j = i;
+            while (j < t.Length && char.IsDigit(t[j])) j++;
+            int n;
+            return int.TryParse(t.Substring(i, j - i), out n) ? n : 0;
         }
 
         private static IEnumerable<Control> Flatten(Control c)
