@@ -40,6 +40,7 @@ const { isTranslatable } = require("./extract/rules.js");
 const mvExtract = require("./extract/mv.js");
 const vxAce = require("./extract/vxace.js");
 const resources = require("./extract/resources.js");
+const text2frame = require("./extract/text2frame.js");
 const rgssad = require("./archive/rgssad.js");
 const repackGuard = require("./archive/repack-guard.js");
 const { translate } = require("./translate/index.js");
@@ -218,6 +219,22 @@ function ensureDataBackup(engine, gameDir) {
         entries.push(e);
       }
     }
+
+    // Text2Frame keeps the message text in text/*.txt, not in the event data — the event only names a
+    // line. A data-only pass leaves that whole script Japanese, which is how a game reads as partly
+    // translated while its story is untouched. Snapshotted first, so a second run reads the original.
+    for (const made of text2frame.ensureBackup(GAME_DIR, engine.live)) console.log("BACKUP_CREATED", made);
+    const t = text2frame.extract(GAME_DIR, engine.live);
+    if (t.files) {
+      console.log("TEXT2FRAME", t.entries.length, "entries from", t.files, "file(s)",
+        t.skipped ? "SKIPPED_ALREADY_TRANSLATED " + t.skipped : "");
+      const have = new Set(entries.map((e) => e.text));
+      for (const e of t.entries) {
+        if (have.has(e.text)) continue;
+        have.add(e.text);
+        entries.push(e);
+      }
+    }
   }
   fs.writeFileSync(EXTRACT, JSON.stringify(entries, null, 0), "utf8");
   console.log("EXTRACTED", entries.length, skipped ? "SKIPPED_ALREADY_TRANSLATED " + skipped : "");
@@ -280,6 +297,12 @@ function ensureDataBackup(engine, gameDir) {
     const rr = resources.patch(engine.live, cache, PATCH_REPORT.replace(/\.json$/, "-resources.json"));
     if (rr.files) {
       console.log("PATCHED_RESOURCES", rr.replaced, "MISSING", rr.missing, "FILES", rr.files);
+    }
+    // The Text2Frame script is written back line by line, in place, because that is the file the
+    // plugin loads at run time.
+    const tt = text2frame.patch(GAME_DIR, engine.live, cache, PATCH_REPORT.replace(/\.json$/, "-text2frame.json"));
+    if (tt.files) {
+      console.log("PATCHED_TEXT2FRAME", tt.replaced, "MISSING", tt.missing, "FILES", tt.files);
     }
   } else {
     // VX Ace / VX: Ruby writes the translations back into the .rvdata2 files of the

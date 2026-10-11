@@ -20,6 +20,7 @@ const fs = require("fs");
 const path = require("path");
 const mv = require("../pipeline/extract/mv.js");
 const resources = require("../pipeline/extract/resources.js");
+const text2frame = require("../pipeline/extract/text2frame.js");
 const A = require("./audit-lib.js");
 
 const argv = process.argv.slice(2);
@@ -103,8 +104,41 @@ function dialogueCounts(dataDir, backupDataDir) {
   } catch (e) { return null; }
 }
 
-function classify(game) {
-  const loc = locate(game);
+/**
+ * Text2Frame message text: the script of a game that keeps dialogue in text/*.txt.
+ *
+ * The data folder can measure fully translated while every message line is still Japanese, because the
+ * extractor never reads these files. Measured: NTR Gyaru had 24 of 24 translatable data fields in
+ * Chinese and 67 of 67 message lines still Japanese, so the game read as translated and played as
+ * Japanese. Counted here so the state cannot be reported from the data alone.
+ */
+function text2frameCounts(gameDir, dataDir) {
+  const out = { files: 0, lines: 0, kanaPristine: 0, kanaLive: 0 };
+  const count = (dir) => {
+    let kana = 0, lines = 0, files = 0;
+    for (const f of text2frame.textFilesIn(dir)) {
+      files++;
+      let text;
+      try { text = fs.readFileSync(f.full, "utf8"); } catch (e) { continue; }
+      for (const l of text.split(/\r?\n/)) { if (!l.trim()) continue; lines++; if (KANA.test(l)) kana++; }
+    }
+    return { files, lines, kana };
+  };
+  try {
+    for (const root of text2frame.textRoots(gameDir, dataDir)) {
+      const pristine = isDir(root.backup) ? root.backup : root.dir;
+      const src = count(pristine);
+      const live = count(root.dir);
+      out.files += live.files;
+      out.lines += live.lines;
+      out.kanaPristine += src.kana;
+      out.kanaLive += live.kana;
+    }
+  } catch (e) { /* a game we cannot read is reported by the other checks */ }
+  return out;
+}
+
+function classify(game) {  const loc = locate(game);
   if (!loc) return { State: "非 MV/MZ", Note: "无 JSON 数据，本工具不支持", Evidence: {} };
   if (loc.kind === "packed") return { State: "打包归档", Note: loc.archive + "，需先解包", Evidence: {} };
   if (loc.kind === "vxace") return { State: "VX Ace", Note: ".rvdata2，本工具不支持", Evidence: {} };
@@ -114,6 +148,7 @@ function classify(game) {
   const backup = findBackup(game);
   const bakProfile = backup ? profile(backup) : null;
   const dialogue = dialogueCounts(loc.live, backup);
+  const t2f = text2frameCounts(game, loc.live);
   const locales = A.resourceLocaleProfile(loc.live);
   // Fields whose Japanese original became Chinese — the direct evidence that a translation pass ran
   // here, and the only usable coverage figure for games with no dialogue folder.
@@ -130,7 +165,7 @@ function classify(game) {
   const evidence = {
     liveStrings: live ? live.total : 0, liveKanaPct: +liveKanaPct.toFixed(1),
     backup: !!backup, backupStrings: bakProfile ? bakProfile.total : 0, backupKanaPct: +bakKanaPct.toFixed(1),
-    dialogue, locales, dataDiff, installedByUs: installed,
+    dialogue, text2frame: t2f, locales, dataDiff, installedByUs: installed,
   };
 
   if (!live || live.total < 20) return { State: "无文本", Note: "可译文本太少", Evidence: evidence };
@@ -165,18 +200,32 @@ function classify(game) {
     coverage = dataDiff.translated / (dataDiff.translated + dataDiff.remaining);
   } else if (liveKanaPct < 5) coverage = 1;
 
+  // The message text of a Text2Frame game is part of what the player reads, so it caps the verdict:
+  // whatever share of that script is still Japanese is untranslated text, and reporting the data
+  // figure alone would call such a game finished. The weaker of the two measures wins.
+  let t2fNote = "";
+  if (t2f.kanaLive > 0) {
+    const textCov = t2f.kanaPristine > 0 ? 1 - t2f.kanaLive / t2f.kanaPristine : 0;
+    coverage = coverage === null ? textCov : Math.min(coverage, textCov);
+    fromDialogue = false;
+    t2fNote = "（text/*.txt 还有 " + t2f.kanaLive + " 行日文，共 " + t2f.lines + " 行）";
+  }
+
+  // Every verdict carries the gap in the message script, so it is never hidden by a good data figure.
+  const note = (s) => s + t2fNote;
+
   if (zhLocale && !jaIsChinese) {
-    return { State: "自带中文", Note: "resources/" + zhLocale.locale + "（" + zhLocale.hanOnly + " 串中文）", Evidence: evidence };
+    return { State: "自带中文", Note: note("resources/" + zhLocale.locale + "（" + zhLocale.hanOnly + " 串中文）"), Evidence: evidence };
   }
   if (coverage !== null && coverage >= 0.9) {
     // Whose work it is needs evidence, not just coverage: a game whose data is Chinese but which has
     // neither a pristine backup nor our install scripts was already Chinese when it arrived. Without
     // this check every such game was credited to this project (金色complex 慰安騎士 is one: the
     // pipeline itself skips it as 已是中文).
-    if (ours) return { State: "已汉化（本项目）", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
-    return { State: "已是中文", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
+    if (ours) return { State: "已汉化（本项目）", Note: note(noteFrom(coverage, fromDialogue)), Evidence: evidence };
+    return { State: "已是中文", Note: note(noteFrom(coverage, fromDialogue)), Evidence: evidence };
   }
-  if (coverage !== null && coverage >= 0.3) return { State: "部分汉化", Note: noteFrom(coverage, fromDialogue), Evidence: evidence };
+  if (coverage !== null && coverage >= 0.3) return { State: "部分汉化", Note: note(noteFrom(coverage, fromDialogue)), Evidence: evidence };
   // Little or no Chinese found: with a pristine original present, a translation existed here and was
   // uninstalled — the backup and the pipeline's cache still hold the work.
   //
@@ -185,13 +234,16 @@ function classify(game) {
   // data is evidence, and the two disagreeing is worth seeing.
   const mismatch = official ? "（目录名标着官方中文，但数据仍是日文）" : "";
   // Some work exists but it is not yet most of the text: call that 部分汉化 rather than "untouched",
-  // because the difference decides whether translating it again is a small job or a full one.
+  // because the difference decides whether translating it again is a small job or a full one. A single
+  // translated string is enough evidence: the measure is already scoped to what the extractor targets,
+  // so a non-zero figure means a real pass ran here — and a game whose data is done while its message
+  // script is not (NTR Gyaru: 17 of 17 data strings, 0 of 67 message lines) must not read as "restored".
   const pct = Math.round(coverage * 100);
-  if (dataDiff && dataDiff.translated >= 20) {
-    return { State: "部分汉化", Note: (pct >= 1 ? "已译 " + pct + "%" : "已译 " + dataDiff.translated + " 串") + mismatch, Evidence: evidence };
+  if (dataDiff && dataDiff.translated >= 1) {
+    return { State: "部分汉化", Note: note((pct >= 1 ? "已译 " + pct + "%" : "已译 " + dataDiff.translated + " 串") + mismatch), Evidence: evidence };
   }
-  if (backup) return { State: "未汉化（已还原）", Note: "有原版备份与缓存，可快速重译" + mismatch, Evidence: evidence };
-  return { State: "未汉化", Note: mismatch, Evidence: evidence };
+  if (backup) return { State: "未汉化（已还原）", Note: note("有原版备份与缓存，可快速重译" + mismatch), Evidence: evidence };
+  return { State: "未汉化", Note: note(mismatch), Evidence: evidence };
 }
 
 // --- which games -------------------------------------------------------------------------

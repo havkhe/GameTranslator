@@ -25,6 +25,7 @@ const { DEFAULT_TEMPLATE } = require("../pipeline/translate/index.js");
 // The audit and the pipeline must agree on where dialogue lives, so the pipeline's own locator is
 // used rather than a second implementation that can drift from it.
 const { dialogueFiles } = require("../pipeline/extract/resources.js");
+const text2frame = require("../pipeline/extract/text2frame.js");
 
 const KANA = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f]/;
 const BACKUP_NAMES = ["data_原版备份", "Data_原版备份", "www/data_原版备份"];
@@ -295,6 +296,42 @@ function auditDialogue(liveData, backupData, report, fragments) {
   out.total = bakVals.length || liveVals.length;
   out.kanaLive = liveVals.filter((v) => KANA.test(v)).length;
   out.kanaBackup = bakVals.filter((v) => KANA.test(v)).length;
+
+  // Text2Frame message files: dialogue kept in text/*.txt beside the data folder rather than in the
+  // data files or resources/. Without this the audit reports a game whose whole script is Japanese as
+  // having no dialogue at all (measured: NTR Gyaru, 67 of 67 message lines still Japanese, reported as
+  // "files 0 total 0"), so both the counts and the pollution checks cover them here.
+  const t2f = { files: 0, lines: 0, kanaLive: 0, kanaBackup: 0 };
+  const dirExists = (p) => { try { return fs.statSync(p).isDirectory(); } catch (e) { return false; } };
+  try {
+    for (const root of text2frame.textRoots(null, liveData)) {
+      const pristine = dirExists(root.backup) ? root.backup : root.dir;
+      for (const f of text2frame.textFilesIn(root.dir)) {
+        let text;
+        try { text = fs.readFileSync(f.full, "utf8"); } catch (e) { continue; }
+        t2f.files++;
+        for (const line of text.split(/\r?\n/)) {
+          if (!line.trim()) continue;
+          t2f.lines++;
+          if (KANA.test(line)) t2f.kanaLive++;
+          const echo = promptEchoMatches(line, "", fragments);
+          if (echo) report.promptEcho.push({ file: root.rel + "/" + f.rel, key: line.slice(0, 40), echo, value: line.slice(0, 160), text2frame: true });
+          const degen = degenerationMatches(line);
+          if (degen) report.degradation.push({ file: root.rel + "/" + f.rel, key: line.slice(0, 40), bigrams: degen, value: line.slice(0, 160), editorLabel: false, text2frame: true });
+        }
+      }
+      for (const f of text2frame.textFilesIn(pristine)) {
+        let text;
+        try { text = fs.readFileSync(f.full, "utf8"); } catch (e) { continue; }
+        for (const line of text.split(/\r?\n/)) if (line.trim() && KANA.test(line)) t2f.kanaBackup++;
+      }
+    }
+  } catch (e) { /* an unreadable text folder is not itself a defect */ }
+  if (t2f.files) {
+    out.text2frame = t2f;
+    out.kanaLive += t2f.kanaLive;
+    out.kanaBackup += t2f.kanaBackup;
+  }
   return out;
 }
 
@@ -396,41 +433,40 @@ function auditGame(game) {
 /**
  * How much of a game's data was translated, measured against its pristine original.
  *
- * Only fields the pipeline would actually translate are counted: an event command's text parameter
- * or a whitelisted database field (rules.js TEXT_FIELDS / EVENT_TEXT_CODES). Without that filter the
- * denominator is dominated by script and plugin blobs the extractor never targets, and a game that
- * is 95 % translated measures about 50 % — which is exactly what happened before this filter.
+ * Both sides are produced by the extractor itself, so this cannot measure something the pipeline would
+ * not translate. The earlier version decided by field name — any `...parameters[N]` counted as text
+ * whatever the command code — and that counted fields the extractor never targets and must never
+ * translate: a show-picture name (code 231 slot 1, a file on disk), a jump label (118 / 119), and the
+ * argument lines of plugin commands (357 / 657), which are `key = value` pairs mixing text with image
+ * names. Measured on one game: 13,564 of 13,614 kana-bearing fields were of that kind, so its coverage
+ * was reported as a fraction of a number that had little to do with its text.
  *
- *   translated  the original carried kana and the current value does not
- *   remaining   both still carry kana (still Japanese)
- *   changed     every field that differs, which also moves when a code or filename is altered
+ * The measure is by unique source text, which is also how the pipeline keys its cache: a Japanese
+ * source string still present verbatim in the live data has not been translated, and one that is no
+ * longer there was replaced.
+ *
+ *   translated  a Japanese source string that is no longer present in the live data
+ *   remaining   a Japanese source string still present verbatim
+ *   comparable  the distinct Japanese source strings the extractor found, i.e. the denominator
  */
 function translatedCount(liveDir, backupDir) {
-  let translated = 0, remaining = 0, changed = 0, comparable = 0;
-  const rules = require("../pipeline/extract/rules.js");
-  const isTextKey = (k) => {
-    if (/\.parameters\[\d+\]$/.test(k)) return true;
-    const last = k.split(".").pop() || "";
-    return rules.TEXT_FIELDS.has(last);
-  };
-  for (const name of jsonNames(backupDir)) {
-    let L, B;
-    try { L = parseJson(readTextInside(liveDir, child(liveDir, name))); } catch (e) { continue; }
-    try { B = parseJson(readTextInside(backupDir, child(backupDir, name))); } catch (e) { continue; }
-    const lm = flatten(L, "", new Map()), bm = flatten(B, "", new Map());
-    for (const [k, bv] of bm) {
-      const lv = lm.get(k);
-      if (lv === undefined) continue;
-      if (bv.startsWith("<") || lv.startsWith("<")) continue;
-      comparable++;
-      if (lv === bv) { if (KANA.test(bv) && isTextKey(k)) remaining++; continue; }
-      changed++;
-      if (!isTextKey(k)) continue;
-      if (KANA.test(bv) && !KANA.test(String(lv))) translated++;
-      else if (KANA.test(bv)) remaining++;
-    }
+  const mv = require("../pipeline/extract/mv.js");
+  const norm = (s) => String(s).replace(/\r\n|\n|\r/g, " ").replace(/\\n/g, " ");
+  let src, cur;
+  try { src = mv.extract(backupDir, backupDir); } catch (e) { return null; }
+  try { cur = mv.extract(liveDir, liveDir); } catch (e) { return null; }
+  const liveKeys = new Set(cur.entries.map((e) => norm(e.text)));
+  const seen = new Set();
+  let translated = 0, remaining = 0, comparable = 0;
+  for (const e of src.entries) {
+    const k = norm(e.text);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (!KANA.test(e.text)) continue;      // the source carries no kana, so nothing to translate
+    comparable++;
+    if (liveKeys.has(k)) remaining++; else translated++;
   }
-  return { translated, remaining, changed, comparable };
+  return { translated, remaining, comparable };
 }
 
 /**
