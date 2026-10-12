@@ -100,6 +100,10 @@ namespace GameTranslatorV3.UiCheck
                 Assert(lv.ShowItemToolTips, "列表启用悬停提示（列宽装不下的全文靠它读）");
                 Assert(lv.Columns.Count >= 5, "列表列数=" + lv.Columns.Count);
                 Console.WriteLine("        列: " + string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)));
+                // The progress column reads as a workload, not as a verdict: 已译条数/需译条数.
+                var progCol = lv.Columns.Cast<ColumnHeader>().FirstOrDefault(c => c.Text == "翻译进度");
+                Assert(progCol != null, "第三列是「翻译进度」（实际：" +
+                    string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)) + "）");
                 Console.WriteLine("        行数: " + lv.VirtualListSize + "（来自 work\\games-cache.json）");
                 Assert(lv.VirtualListSize >= 0, "行数已发布：" + lv.VirtualListSize);
                 // The columns must fit inside the list, or the last one is the text that gets cut —
@@ -308,6 +312,65 @@ namespace GameTranslatorV3.UiCheck
                         var got = Convert.ToString(stemOf.Invoke(null, new object[] { c[0] }));
                         Assert(got == c[1], "WorkStem(" + System.IO.Path.GetFileName(c[0]) + ") = " + got + "（应为 " + c[1] + "）");
                     }
+                }
+            }
+
+            Console.WriteLine("");
+            Console.WriteLine("=== 翻译进度列：已译条数/需译条数 ===");
+            {
+                var fmt = typeof(MainForm).GetMethod("FormatProgress", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(fmt != null, "找到 FormatProgress（进度格式）");
+                if (fmt != null)
+                {
+                    var cases = new[]
+                    {
+                        new object[] { 975, 9946, "975/9946" },     // the counts, verbatim
+                        new object[] { 0, 9946, "0/9946" },         // nothing translated yet — the workload is still visible
+                        new object[] { 9946, 9946, "9946/9946" },
+                        new object[] { 0, 0, "" },                  // no total yet: the cell stays empty rather than claiming 0%
+                        new object[] { 5, 0, "" },
+                        new object[] { -3, 100, "0/100" },          // never negative
+                        new object[] { 120, 100, "100/100" },       // never over the total
+                    };
+                    foreach (var c in cases)
+                    {
+                        // Convert.ToString on BOTH sides: c[2] is a boxed object, and `string == object` is
+                        // reference equality in C# — the two "" cases passed only because "" is interned.
+                        var got = Convert.ToString(fmt.Invoke(null, new object[] { c[0], c[1] }));
+                        var want = Convert.ToString(c[2]);
+                        Assert(got == want, "FormatProgress(" + c[0] + ", " + c[1] + ") = 「" + got + "」（应为「" + want + "」）");
+                    }
+                }
+                // The denominator is the extract's entry count when the extract is the newer file, so the
+                // counter has to agree with the pipeline's own array (one object per entry, each starting
+                // with {"id":).
+                var count = typeof(MainForm).GetMethod("CountExtractEntries", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(count != null, "找到 CountExtractEntries（需译条数）");
+                if (count != null)
+                {
+                    var tmp = Path.Combine(Path.GetTempPath(), "gt-uicheck-extract-" + Environment.TickCount.ToString() + ".json");
+                    File.WriteAllText(tmp, "[{\"id\":0,\"file\":\"A.json\",\"path\":\"$\",\"text\":\"x\"}," +
+                        "{\"id\":1,\"file\":\"A.json\",\"path\":\"$\",\"text\":\"y\"}," +
+                        "{\"id\":2,\"file\":\"B.json\",\"path\":\"$\",\"text\":\"z\"}]");
+                    Assert(Convert.ToInt32(count.Invoke(null, new object[] { tmp })) == 3, "抽取文件里的 3 条被数成 3");
+                    File.WriteAllText(tmp, "[]");
+                    Assert(Convert.ToInt32(count.Invoke(null, new object[] { tmp })) == 0, "空抽取文件为 0");
+                    Assert(Convert.ToInt32(count.Invoke(null, new object[] { tmp + ".missing" })) == 0, "文件不存在为 0（不抛异常）");
+                    try { File.Delete(tmp); } catch { }
+                }
+                // A skipped game has no workload, so its cell stays empty rather than showing the stale
+                // extract of a game the pipeline will never queue.
+                var shows = typeof(MainForm).GetMethod("ShowsProgress", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(shows != null, "找到 ShowsProgress（哪些游戏显示工作量）");
+                if (shows != null)
+                {
+                    Assert(Convert.ToBoolean(shows.Invoke(null, new object[] { "未汉化（英文原版）" })), "未汉化（英文原版）显示进度");
+                    Assert(Convert.ToBoolean(shows.Invoke(null, new object[] { "未汉化" })), "未汉化显示进度");
+                    Assert(Convert.ToBoolean(shows.Invoke(null, new object[] { "部分汉化" })), "部分汉化显示进度");
+                    Assert(Convert.ToBoolean(shows.Invoke(null, new object[] { "已汉化（本项目）" })), "已汉化（本项目）显示进度");
+                    Assert(!Convert.ToBoolean(shows.Invoke(null, new object[] { "已是中文" })), "已是中文不显示进度（我们跳过它）");
+                    Assert(!Convert.ToBoolean(shows.Invoke(null, new object[] { "自带中文" })), "自带中文不显示进度（我们跳过它）");
+                    Assert(!Convert.ToBoolean(shows.Invoke(null, new object[] { "" })), "状态未知时不显示");
                 }
             }
 

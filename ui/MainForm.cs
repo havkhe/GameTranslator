@@ -342,7 +342,7 @@ namespace GameTranslatorV3
             _list.Columns.Add("选", 34);             // 0  the check character
             _list.Columns.Add("游戏", 300);          // 1  game name (absorbs the slack)
             _list.Columns.Add("引擎", 60);           // 2  engine
-            _list.Columns.Add("进度", 150);          // 3  progress
+            _list.Columns.Add("翻译进度", 150);       // 3  已译条数 / 需译条数
             _list.Columns.Add("状态", 170);          // 4  state
             // Columns are sized to the pane, not to the window. At 200 % display scaling the pane is
             // narrower than the fixed widths added up, and that is what cut the 状态 text off
@@ -1920,24 +1920,62 @@ namespace GameTranslatorV3
             if (!g.ProgressLoaded)
             {
                 g.ProgressLoaded = true;
-                // The report describes OUR last run. Showing its percentage next to a game whose data
-                // is Japanese (未汉化 / 未汉化（已还原）) or that someone else translated (已是中文 /
-                // 自带中文) made the list claim work that is not in the game — measured: 12 games read
-                // "已译 100%" while their data was byte-identical to the pristine original. The state
-                // has to say the work is ours before the number is shown.
-                bool ours = g.Status.StartsWith("已汉化", StringComparison.Ordinal) ||
-                            g.Status.StartsWith("部分汉化", StringComparison.Ordinal);
-                if (ours)
+                if (!ShowsProgress(g.Status)) return g.ProgressText;
+                // The two counts, not a percentage: 已译条数 / 需译条数 (e.g. 975/9946). The report is the
+                // one our own last run wrote, so this is a statement about what this tool has done for the
+                // game — whether the game's data actually holds it is what the 状态 column says, and the
+                // tooltip repeats both. (It used to print "已译 100%" and was gated to games the state
+                // called ours, because a percentage next to 未汉化 read as a claim about the game; a pair of
+                // counts reads as a measurement instead, and the user asked to see the workload size — a
+                // never-translated game shows 0/9946, which a percentage could not.)
+                int entries, done;
+                if (TryReadProgress(g, out entries, out done) && entries > 0)
                 {
-                    int entries, done;
-                    if (TryReadProgress(g, out entries, out done) && entries > 0)
-                    {
-                        g.ProgressText = ((int)Math.Round(100.0 * done / entries)) >= 100 ? "已译完" : (int)Math.Round(100.0 * done / entries) + "%";
-                        g.ProgressDetail = done + " / " + entries + " 条（" + Math.Round(100.0 * done / entries) + "%）";
-                    }
+                    g.ProgressText = FormatProgress(done, entries);
+                    var pct = done >= entries ? "100%" : done <= 0 ? "0%" : (int)Math.Round(100.0 * done / entries) + "%";
+                    // 已译条数 comes from the last COMPLETED run's report; 需译条数 is whichever file was
+                    // written last (see TryReadProgress). Saying so keeps the pair from reading as one
+                    // measurement when a run was interrupted — the game's own state is the 状态 column.
+                    g.ProgressDetail = done + " / " + entries + " 条（" + pct + "）"
+                        + (ShowsProgressAgainstState(g.Status) ? "" : "　已译条数取自上一轮完成的运行");
                 }
             }
             return g.ProgressText;
+        }
+
+        /// <summary>
+        /// Does this game get a workload figure in the 翻译进度 column?
+        ///
+        /// A game the window skips — 已是中文 / 自带中文: someone else's translation, or the game arrived
+        /// Chinese — has nothing for this tool to translate, so a count beside it would describe work that
+        /// does not exist. Measured: 【御光盟国汉化组】露出女子校生2 is skipped as 自带中文, and its stale
+        /// extract would have read 0/9098, the opposite of what that row means.
+        /// </summary>
+        private static bool ShowsProgress(string status)
+        {
+            if (string.IsNullOrEmpty(status)) return false;
+            return !(status.StartsWith("已是中文", StringComparison.Ordinal) || status.StartsWith("自带中文", StringComparison.Ordinal));
+        }
+
+        /// <summary>Is the state one where the report's own figures are the game's truth (our own work)?</summary>
+        private static bool ShowsProgressAgainstState(string status)
+        {
+            if (string.IsNullOrEmpty(status)) return false;
+            return status.StartsWith("已汉化", StringComparison.Ordinal) || status.StartsWith("部分汉化", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// The progress cell: "已译条数/需译条数", or empty when the pipeline has not reported for this game.
+        ///
+        /// Its own method so the format is a thing that can be checked (tools/UiCheck.cs) rather than a
+        /// string built inline in a paint path.
+        /// </summary>
+        private static string FormatProgress(int done, int entries)
+        {
+            if (entries <= 0) return "";
+            if (done < 0) done = 0;
+            if (done > entries) done = entries;
+            return done + "/" + entries;
         }
 
         /// <summary>The same figures written out, for the row tooltip.</summary>
@@ -2001,13 +2039,68 @@ namespace GameTranslatorV3
                 string stem = WorkStem(g.Dir);
                 string report = Path.Combine(_settings.WorkDir, stem + "-translate-report.json");
                 if (!File.Exists(report)) report = FindReportByPrefix(stem);
-                if (report == null || !File.Exists(report)) return false;
-                string txt = File.ReadAllText(report, Encoding.UTF8);
-                entries = SimpleJson.GetInt(txt, "entries");
-                done = SimpleJson.GetInt(txt, "translated");
-                return true;
+                string extract = Path.Combine(_settings.WorkDir, stem + "-extract.json");
+                if (!File.Exists(extract)) extract = FindByPrefix(stem, "-extract.json");
+
+                int reportEntries = 0;
+                bool haveReport = report != null && File.Exists(report);
+                if (haveReport)
+                {
+                    string txt = File.ReadAllText(report, Encoding.UTF8);
+                    reportEntries = SimpleJson.GetInt(txt, "entries");
+                    done = SimpleJson.GetInt(txt, "translated");
+                }
+                int extractCount = CountExtractEntries(extract);
+                // Which of the two defines "需译条数": whichever was written LAST. A run that is interrupted
+                // after its extraction refreshes the extract and never writes a report, and the report on
+                // disk then belongs to an earlier run whose entry set was a different size — measured on
+                // Detective Girl of the Steam City, whose report says 1,052 entries while the extract on
+                // disk holds 9,946. The number shown has to be the workload, so the newer file wins.
+                bool useExtract = extractCount > 0 &&
+                    (!haveReport || File.GetLastWriteTimeUtc(extract) >= File.GetLastWriteTimeUtc(report));
+                entries = useExtract ? extractCount : reportEntries;
+                return entries > 0 || done > 0;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// How many entries a game's extract holds — "全部需要翻译条数".
+        ///
+        /// The file is one compact JSON array of `{id,file,path,text}` objects (pipeline/index.js), and every
+        /// entry starts with `{"id":`, so counting that marker answers the question. Parsing a 1.2 MB document
+        /// with the flat reader this window has would be slower and no more exact.
+        /// </summary>
+        private static int CountExtractEntries(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return 0;
+                string txt = File.ReadAllText(path, Encoding.UTF8);
+                int n = 0, i = 0;
+                while ((i = txt.IndexOf("{\"id\":", i, StringComparison.Ordinal)) >= 0) { n++; i += 6; }
+                return n;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>A per-game work file whose stem may differ from ours by the sanitizer's tail.</summary>
+        private string FindByPrefix(string stem, string suffix)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(stem) || stem.Length < 8) return null;
+                foreach (var f in Directory.GetFiles(_settings.WorkDir, "*" + suffix))
+                {
+                    var b = Path.GetFileName(f);
+                    var other = b.Substring(0, b.Length - suffix.Length);
+                    int n = Math.Min(stem.Length, other.Length);
+                    if (n < 8) continue;
+                    if (string.Compare(stem, 0, other, 0, n, StringComparison.OrdinalIgnoreCase) == 0) return f;
+                }
+            }
+            catch { }
+            return null;
         }
 
         /// <summary>
