@@ -1704,7 +1704,8 @@ namespace GameTranslatorV3
 
             _lblCounts.Text = "请求：" + _reqCount + "    失败：" + _failCount + "    跳过：" + _skipCount;
             // The backend is part of "which model is running": the same exe with a different ggml DLL beside it
-            // is a different device (CUDA needs sm_70+, Vulkan also drives Pascal/AMD/Intel).
+            // is a different device (CUDA and Vulkan both drive Pascal; CUDA is the usual pick from Turing up,
+            // Vulkan is also what AMD/Intel use).
             _lblModelNow.Text = "模型：" + (_settings.Model ?? "—") + "    端口：" + _settings.Port +
                 "    后端：" + _settings.LlamaBackend + BackendHealthNote();
             UpdateModelState();
@@ -3890,15 +3891,20 @@ namespace GameTranslatorV3
                 if (r0 == DialogResult.Yes) DownloadBackendAsync(next);
                 return;
             }
-            if (next == "cuda12" && !CudaLooksUsable())
+            if (next == "cuda12" && !CudaIsUsuallyFasterOnThisGpu())
             {
-                // A CUDA 12 build carries kernels for sm_70+ only; on an older card llama.cpp quietly falls
-                // back to the CPU, which looks like "the GPU did nothing". Say it before switching.
+                // Pascal (GTX 10 系, sm_61) IS in the CUDA build shipped here — its fatbin carries
+                // sm_50/61/70/75/80/90 and it was measured running on a GTX 1060. What varies is the speed:
+                // CUDA wins prompt processing by 2-4x, but for the 4B K-quant models the decode step (which is
+                // what produces the translation) is ~30-50% slower than Vulkan. So this warns instead of
+                // refusing, and says which way it usually goes.
                 var r1 = MessageBox.Show(this,
-                    "没检测到算力 sm_70 及以上的 NVIDIA 显卡（GTX 10 系等 Pascal 显卡不在支持范围内）。\n\n" +
-                    "切到 CUDA 版后 llama.cpp 会静默退回 CPU 运行，翻译会明显变慢。\n" +
+                    "没检测到 RTX 20 系及以上的 NVIDIA 显卡。\n\n" +
+                    "CUDA 版在 GTX 10 系（Pascal）上**能跑**，只是不一定更快：它在读入（预填充）上快 2~4 倍，\n" +
+                    "而出译文（生成）这一步比 Vulkan 慢——实测 4B 的 K 量化模型慢三成到五成。\n\n" +
+                    "建议先用 Vulkan；想自己比就切过去跑一局，看界面上的 tok/s 与条/分。\n\n" +
                     "确定要切换吗？",
-                    "这张显卡可能用不了 CUDA 版", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    "CUDA 在这张卡上不一定更快", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
                 if (r1 != DialogResult.Yes) return;
             }
 
@@ -3928,27 +3934,50 @@ namespace GameTranslatorV3
             _btnBackend.Text = "后端：" + (b == "cuda12" ? "CUDA 12" : "Vulkan");
             var installed = GameTranslatorV3.Core.Settings.DetectBackendIn(_settings.LlamaDirFor(b));
             Tip(_btnBackend, "点一下切换 llama.cpp 的运行后端（Vulkan ↔ CUDA 12），有服务在跑时会自动重启它。\n" +
-                "Vulkan：GTX 10 系等老 NVIDIA、AMD、Intel 都能用；CUDA 12：需要 sm_70 及以上（RTX 20 系起）。\n" +
+                "Vulkan：GTX 10 系等老 NVIDIA、AMD、Intel 都能用。\n" +
+                "CUDA 12：RTX 20 系及以上通常更快；GTX 10 系（Pascal）也能跑——读入更快、出译文反而慢，建议实测。\n" +
                 "两套分别放在 llama\\vulkan 与 llama\\cuda12；缺哪个就用这个按钮下载。" +
                 (installed.Length > 0 ? "\n所选后端的目录里实际是：" + installed : "\n所选后端的目录里没有 ggml 后端 DLL。"));
         }
 
-        /// <summary>Is there an NVIDIA GPU of the generations a CUDA 12 build supports (sm_70+)?</summary>
-        private bool CudaLooksUsable()
+        /// <summary>
+        /// Does this machine have an NVIDIA card of the generations where CUDA is normally the faster pick
+        /// (Turing sm_75 and up: RTX 20/30/40/50, GTX 16 系, T4/V100, A/L/H series)? Pascal (GTX 10 系, sm_61)
+        /// is supported too, it is just usually not the faster backend for generation, so it falls in here.
+        /// </summary>
+        private bool CudaIsUsuallyFasterOnThisGpu()
         {
             try
             {
                 var q = new System.Management.ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");
                 foreach (System.Management.ManagementBaseObject o in q.Get())
                 {
-                    var name = Convert.ToString(o["Name"]) ?? "";
-                    if (System.Text.RegularExpressions.Regex.IsMatch(name,
-                        @"(RTX\s*(20|30|40|50)\d0|T4\b|A\d{2,4}\b|L4\b|L40\b|H100\b|V100\b|Quadro\s*RTX)",
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return true;
+                    if (NameLooksLikeModernNvidia(Convert.ToString(o["Name"]) ?? "")) return true;
                 }
             }
             catch { }
             return false;
+        }
+
+        /// <summary>Is this the name of an NVIDIA GPU at all? (Any of them can run the CUDA build.)</summary>
+        internal static bool NameLooksLikeNvidia(string name)
+        {
+            return System.Text.RegularExpressions.Regex.IsMatch(name ?? "",
+                @"(GeForce|Quadro|Tesla|Titan|\bRTX\b|\bGTX\b|\bMX\d|\bT4\b|\bV100\b|A\d{2,4}\s|L4\b|L40\b|H100\b)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
+        /// <summary>
+        /// The pure half of the check above, so the classification can be asserted without hardware.
+        /// A name that is not NVIDIA is not "modern NVIDIA"; Pascal and older are NVIDIA but not this.
+        /// </summary>
+        internal static bool NameLooksLikeModernNvidia(string name)
+        {
+            if (!NameLooksLikeNvidia(name)) return false;
+            // RTX 20/30/40/50 = Turing/Ampere/Ada/Blackwell; GTX 16 系 = Turing; the rest are datacentre parts.
+            return System.Text.RegularExpressions.Regex.IsMatch(name ?? "",
+                @"(RTX\s*(20|30|40|50)\d0|GTX\s*16\d0|\bT4\b|\bV100\b|\bA\d{2,4}\b|\bL4\b|\bL40\b|H100\b|Titan\s*(V|RTX))",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 
         /// <summary>

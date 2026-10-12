@@ -45,4 +45,4 @@ if ($Backend -eq "cuda12") {
     if ($cudart -eq 0) { Write-Host "WARNING: no cudart64*.dll next to llama-server.exe - the CUDA build needs it." }
     else { Write-Host "CUDA runtime: $cudart cudart64*.dll present" }
 }
-Write-Host "Backend: $Backend (vulkan works on older NVIDIA/AMD/Intel GPUs; cuda12 requires sm_70+)"
+Write-Host "Backend: $Backend (Vulkan drives older NVIDIA/AMD/Intel; CUDA 12 also works on GTX 10 series - sm_50/61/70/75/80/90 - but which is faster depends on the model: CUDA wins prompt processing, Vulkan usually wins generation for 4B K-quants)"

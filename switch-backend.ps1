@@ -40,7 +40,9 @@ function Show-State {
     $flat = Join-Path (Join-Path $root 'llama') 'llama-server.exe'
     if (Test-Path -LiteralPath $flat) { Write-Output ("  llama\      : installed (single-build layout, still supported)") }
     Write-Output ""
-    Write-Output "Vulkan works on GTX 10 series / AMD / Intel; CUDA 12 needs sm_70+ (RTX 20 series and newer)."
+    Write-Output "Vulkan works on GTX 10 series / AMD / Intel. CUDA 12 works on GTX 10 series too (sm_61 is in the build),"
+    Write-Output "but which is faster depends on the model: CUDA wins prompt processing, and for 4B K-quants (Q4_K/Q6_K)"
+    Write-Output "Vulkan is usually faster at generation. Measure with the tok/s and lines-per-minute the window shows."
     Write-Output "Close the program before switching, or use the Backend button inside it."
 }
 

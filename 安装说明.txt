@@ -11,7 +11,7 @@ GameTranslator v3.0 —— 安装说明 / Installation
 
 二、显卡后端：Vulkan（默认）与 CUDA 12，一键切换
   包内两套都在：`llama\vulkan\`（默认，GTX 10 系 / AMD / Intel 都能用）与
-  `llama\cuda12\`（RTX 20 系及以上更快，已自带 CUDA 运行库与 cuBLAS）。
+  `llama\cuda12\`（已自带 CUDA 运行库与 cuBLAS，**GTX 10 系也能跑**——它的内核含 sm_50/61/70/75/80/90）。
   选哪一套只改一个设置、重启模型服务，**离线即可，不用重下载**：
 
     * 程序里：模型那一行最右边有「后端：Vulkan / 后端：CUDA 12」按钮，点一下就切，空闲时
@@ -26,7 +26,23 @@ GameTranslator v3.0 —— 安装说明 / Installation
 
   （万一把某一套删掉了，程序里的「后端：…」按钮也能把它重新下载回来。）
   两套各在自己的文件夹里，互不覆盖；当前用的是哪一套，程序状态行（「模型：… 端口：…」那一行）
-  末尾会写出来。注意 CUDA 12 的预编译包**不支持 GTX 10 系（Pascal / sm_61）**，会静默退回 CPU。
+  末尾会写出来。
+
+  **到底哪个快：取决于模型与量化，建议实测**（界面上有 tok/s 与条/分，跑一局就知道）。
+  在一张 GTX 1060 6GB 上实测的对照：
+
+      模型                后端      读入(预填充)     生成(出译文)
+      Hy-MT2 1.8B Q8_0    CUDA      1451 t/s        46.3 t/s   ← CUDA 明显更快
+      Hy-MT2 1.8B Q8_0    Vulkan     367 t/s        28.3 t/s
+      Galtransl-v4 4B Q6_K CUDA       601 t/s        25.5 t/s
+      Galtransl-v4 4B Q6_K Vulkan     257 t/s        38.2 t/s   ← 4B 的 K 量化反而 Vulkan 更快
+      Qwen3.5 4B Q4_K_M   CUDA       595 t/s        27.1 t/s
+      Qwen3.5 4B Q4_K_M   Vulkan     276 t/s        37.3 t/s
+
+  规律：**CUDA 读入（预填充）快 2~4 倍；生成这一步，Q8_0 这类量化 CUDA 占优，而 4B 的
+  K 量化（Q4_K/Q6_K）在 Pascal 上不如 Vulkan**（Pascal 没有 tensor core、FP16 只有 1/64 速率，
+  跑 K 量化要反量化；Vulkan 那边用的是整数点积）。译文越多、批越大，生成占比越高，就越偏向 Vulkan；
+  反之输入长、输出短时 CUDA 更占便宜。
 
 三、第一次使用
   1) 点【扫描文件夹】或【扫描全部路径】，把游戏目录加进来（多个根目录用分号分隔，可设扫描深度）；

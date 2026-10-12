@@ -20,7 +20,13 @@
     上游：<https://github.com/ggml-org/llama.cpp/releases/tag/b11571>），可直接对上游校验和核对。
   - 想更新到更新的 llama.cpp 版本：`.\download-llama.ps1 -Dest .\llama\vulkan -Backend vulkan`
     （CUDA 版同理，`-Backend cuda12`，两个包必须同版本）。
-  - 注意 **CUDA 12 的预编译包不支持 GTX 10 系（Pascal / sm_61）**，在那种卡上会静默退回 CPU。
+  - **哪个更快看模型，建议实测**（界面有 tok/s 与条/分）。在 GTX 1060 6GB 上实测：CUDA 的**读入
+    （预填充）快 2~4 倍**；**生成（出译文）这一步**，`Hy-MT2 1.8B Q8_0` 用 CUDA **46.3 vs 28.3 t/s
+    （CUDA 更快）**，而 `Galtransl-v4 4B Q6_K` 用 CUDA **25.5 vs 38.2 t/s（Vulkan 更快）**、
+    `Qwen3.5 4B Q4_K_M` 是 **27.1 vs 37.3 t/s**。原因：Pascal 没有 tensor core、FP16 只有 1/64 速率，
+    4B 的 K 量化在 CUDA 上要走反量化，而 Vulkan 那边用的是整数点积。
+  - **GTX 10 系（Pascal / sm_61）两套都能跑**：包内 CUDA 构建的内核含 sm_50/61/70/75/80/90，
+    实测在 GTX 1060 上可直接以 CUDA 运行（旧版本说明书里"CUDA 不支持 10 系、会退回 CPU"的说法是错的，已更正）。
 - 模型 `.gguf` 需另行取得（放到设置里的「模型目录」）。4B 级（如 Galtransl-v4）质量更好，1.8B 级（如 Hy-MT2）显存占用更小。
 - 覆盖升级即可，**设置与密钥不会丢**：`ui-settings.ini`、`api-config.json`、`work\` 都不在包里。
 
