@@ -57,6 +57,8 @@ namespace GameTranslatorV3
         private string _currentGame = "";
         private DateTime _lastProgressAt = DateTime.MinValue;
         private int _lastProgressCount, _gameTotal;
+        /// <summary>Cached 总需翻译条数 for the running run, and the figure it was computed from.</summary>
+        private int _runTotalCache = -1, _runUnknownCache, _runTotalKey = -1;
 
         private Button _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnState, _btnSelectAll, _btnClearSel;
         private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck;
@@ -1560,15 +1562,67 @@ namespace GameTranslatorV3
             UpdateModelState();
         }
 
-        private void ResetProgress()
+        /// <summary>
+        /// 总需翻译条数 for this run: the entry count of every game the run was given.
+        ///
+        /// For the game running now it takes the live progress line's figure — that is the extract of THIS
+        /// run and therefore fresher than any report on disk — and for the others their own work files. The
+        /// answer is cached because it reads up to a megabyte of extract per game and it cannot change while
+        /// a game runs; it is rebuilt when the current game's figure changes.
+        ///
+        /// A game with no figures at all counts as unknown, never as zero. That is the same choice the
+        /// estimate below makes, and a denominator that quietly leaves out half the run reads as a smaller
+        /// job than it is.
+        /// </summary>
+        private int RunWorkload(out int unknown)
         {
-            _runStarted = DateTime.Now;
+            unknown = 0;
+            if (_runTotalCache >= 0 && _runTotalKey == _gameTotal)
+            {
+                unknown = _runUnknownCache;
+                return _runTotalCache;
+            }
+            int total = 0, missing = 0;
+            foreach (var g in _runGames)
+            {
+                // The game running now: the live figure wins when there is one.
+                if (ReferenceEquals(g, _currentItem) && _gameTotal > 0) { total += _gameTotal; continue; }
+                int e, d;
+                if (TryReadProgress(g, out e, out d) && e > 0) total += e;
+                else missing++;
+            }
+            _runTotalCache = total;
+            _runUnknownCache = missing;
+            _runTotalKey = _gameTotal;
+            unknown = missing;
+            return total;
+        }
+
+        /// <summary>
+        /// The 已译/需译 pair on the speed row: 目前已翻译条数 / 总需翻译条数, e.g. 「已译 1234/15261 条」.
+        ///
+        /// Its own method so the wording is a thing the check can verify (tools/UiCheck.cs) rather than a
+        /// string assembled in a timer. No clamping of done against total: if a run's own count ever exceeds
+        /// the sum of its games' entry sets, the two sources disagree and that is worth seeing.
+        /// </summary>
+        private static string FormatTranslated(int done, int total, int unknown)
+        {
+            if (done < 0) done = 0;
+            string tail = unknown > 0 ? "（另有 " + unknown + " 个游戏条数未知）" : "";
+            if (total <= 0) return "已译 " + done + " 条" + (unknown > 0 ? "（需译条数未知）" : "");
+            return "已译 " + done + "/" + total + " 条" + tail;
+        }
+
+        private void ResetProgress()
+        {            _runStarted = DateTime.Now;
             _reqCount = _failCount = _skipCount = 0;
             _batchTotal = _batchDone = 0;
             _currentGame = "";
             _lastProgressAt = DateTime.MinValue;
             _lastProgressCount = 0;
             _gameTotal = 0;
+            _runTotalCache = -1;
+            _runTotalKey = -1;
             _barBatch.Value = 0;
             _barGame.Value = 0;
             _lblBatch.Text = "批次：准备中…";
@@ -1628,12 +1682,17 @@ namespace GameTranslatorV3
             }
 
             string window = "近 " + RateWindowSeconds + " 秒";
+            // 目前已翻译条数 / 总需翻译条数 in place of the old "已知已译 N 条": the run's own progress against
+            // the size of the job it was asked to do.
+            int unknownGames;
+            int runTotal = RunWorkload(out unknownGames);
+            string translated = FormatTranslated(entriesNow, runTotal, unknownGames);
             // A hosted endpoint keeps no local token counter, so that half is simply absent rather than a
             // permanent "0.0 tok/s" that looks like a stall.
             _lblRate.Text = _settings.UseApi
-                ? "速度：" + _entriesPerMin.ToString("0.0") + " 条/分（" + window + "，云端模式无 token 计数）    已知已译 " + entriesNow + " 条"
+                ? "速度：" + _entriesPerMin.ToString("0.0") + " 条/分（" + window + "，云端模式无 token 计数）    " + translated
                 : "速度：" + _tokPerSec.ToString("0.0") + " tok/s（" + window + "）    " +
-                  _entriesPerMin.ToString("0.0") + " 条/分    已知已译 " + entriesNow + " 条";
+                  _entriesPerMin.ToString("0.0") + " 条/分    " + translated;
 
             // ---- estimate -------------------------------------------------------------------------
             double perSec = _entriesPerMin / 60.0;

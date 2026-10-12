@@ -372,6 +372,29 @@ namespace GameTranslatorV3.UiCheck
                     Assert(!Convert.ToBoolean(shows.Invoke(null, new object[] { "自带中文" })), "自带中文不显示进度（我们跳过它）");
                     Assert(!Convert.ToBoolean(shows.Invoke(null, new object[] { "" })), "状态未知时不显示");
                 }
+
+                // 任务进度栏的速度行：「已知已译 N 条」改为 目前已翻译条数/总需翻译条数。
+                var ft = typeof(MainForm).GetMethod("FormatTranslated", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(ft != null, "找到 FormatTranslated（速度行的已译/需译）");
+                if (ft != null)
+                {
+                    var cases = new[]
+                    {
+                        new object[] { 1234, 15261, 0, "已译 1234/15261 条" },
+                        new object[] { 0, 15261, 0, "已译 0/15261 条" },
+                        new object[] { 15261, 15261, 0, "已译 15261/15261 条" },
+                        new object[] { 1234, 0, 0, "已译 1234 条" },                                  // 需译条数还不知道
+                        new object[] { 1234, 0, 2, "已译 1234 条（需译条数未知）" },
+                        new object[] { 1234, 15261, 3, "已译 1234/15261 条（另有 3 个游戏条数未知）" },
+                        new object[] { -5, 100, 0, "已译 0/100 条" },
+                    };
+                    foreach (var c in cases)
+                    {
+                        var got = Convert.ToString(ft.Invoke(null, new object[] { c[0], c[1], c[2] }));
+                        var want = Convert.ToString(c[3]);
+                        Assert(got == want, "FormatTranslated(" + c[0] + ", " + c[1] + ", " + c[2] + ") = 「" + got + "」（应为「" + want + "」）");
+                    }
+                }
             }
 
             Console.WriteLine("");
