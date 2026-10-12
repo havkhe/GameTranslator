@@ -2329,6 +2329,10 @@ namespace GameTranslatorV3
                 _settings.AddScanRoot(dlg.SelectedPath);
                 _settings.Save(_root);
                 ScanPath(dlg.SelectedPath);
+                // Same finish as the whole-roots scan: the games it found have to reach the list and the
+                // cache, or a single-folder scan looks like it did nothing and its finds vanish on restart.
+                SaveGamesCache();
+                RefreshList();
             }
         }
 
@@ -2360,18 +2364,22 @@ namespace GameTranslatorV3
                     AppendLog("跳过不存在的扫描路径：" + root);
                     continue;
                 }
-                // A root already covered by the remembered games needs no rescan unless
-                // asked. "Covered" means its record exists and nothing there is new, which
-                // is checked cheaply by counting the games we already hold under it.
-                var under = _games.Count(g => g.Dir.StartsWith(root.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
-                if (!force && under > 0)
+                // A root already walked IN THIS SESSION needs no second walk unless asked. The check used to
+                // be "does the list already hold games under this root", which broke the opposite way: a game
+                // missing from the list stayed missing forever, because its root was "covered" by the others
+                // — measured on [151231][アンコクマリモカン] SNEAK IN DESPERADA, which the walk finds (my
+                // reproduction of it does, and so does the old code) but which never reached the list for
+                // that reason. A session set keeps the cheap re-press while making the first press a real
+                // walk after a restart.
+                if (!force && _scannedRootsThisSession.Contains(root))
                 {
                     skipped++;
-                    AppendLog("已扫描过，跳过：" + root + "（" + under + " 个游戏）");
+                    AppendLog("本次已扫描过，跳过：" + root + "（已行走过一遍；要重扫请用「重新扫描全部」）");
                     continue;
                 }
                 scanned++;
                 ScanPath(root, quiet: roots.Count > 1);
+                _scannedRootsThisSession.Add(root);
             }
 
             SaveGamesCache();
@@ -2477,6 +2485,9 @@ namespace GameTranslatorV3
         }
 
         private int MaxScanDepth { get { return Math.Max(1, _settings.ScanDepth); } }
+
+        /// <summary>Roots walked in this session, so a second press of 扫描全部路径 costs nothing.</summary>
+        private readonly HashSet<string> _scannedRootsThisSession = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Children never worth descending into: they are data, not games.</summary>
         private static bool IsBoringDir(string name)
@@ -2614,7 +2625,12 @@ namespace GameTranslatorV3
             try
             {
                 if (File.Exists(Path.Combine(dir, "Game.exe"))) return true;
+                // Any of the three archives marks a game too: a packed VX or VX Ace release may ship without
+                // a launcher literally named Game.exe, and the data is inside the archive either way.
+                // (Measured on [151231][アンコクマリモカン] SNEAK IN DESPERADA: Game.rgss2a is the whole game.)
                 if (File.Exists(Path.Combine(dir, "Game.rgss3a"))) return true;
+                if (File.Exists(Path.Combine(dir, "Game.rgss2a"))) return true;
+                if (File.Exists(Path.Combine(dir, "Game.rgssad"))) return true;
                 if (Directory.Exists(Path.Combine(dir, "www", "data"))) return true;
                 return false;
             }

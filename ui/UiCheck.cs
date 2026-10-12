@@ -446,6 +446,27 @@ namespace GameTranslatorV3.UiCheck
                         var none = Path.Combine(tmp, "empty"); Directory.CreateDirectory(none);
                         Assert(Convert.ToString(det.Invoke(null, new object[] { none })) == "?", "空目录 → ?（不猜）");
                     }
+                    // A packed VX / VX Ace release may have no Game.exe at all — the archive IS the game.
+                    // Measured: [151231][アンコクマリモカン] SNEAK IN DESPERADA is Game.rgss2a + Game.exe, and
+                    // the walk must accept either.
+                    var isGame = typeof(MainForm).GetMethod("IsGameDir", BindingFlags.NonPublic | BindingFlags.Static);
+                    Assert(isGame != null, "找到 IsGameDir（反射）");
+                    if (isGame != null)
+                    {
+                        var g2 = Path.Combine(tmp, "only-rgss2a"); Directory.CreateDirectory(g2);
+                        File.WriteAllText(Path.Combine(g2, "Game.rgss2a"), "x");
+                        Assert(Convert.ToBoolean(isGame.Invoke(null, new object[] { g2 })), "只有 Game.rgss2a 也算游戏（VX 归档）");
+
+                        var ga = Path.Combine(tmp, "only-rgssad"); Directory.CreateDirectory(ga);
+                        File.WriteAllText(Path.Combine(ga, "Game.rgssad"), "x");
+                        Assert(Convert.ToBoolean(isGame.Invoke(null, new object[] { ga })), "只有 Game.rgssad 也算游戏");
+
+                        var gw = Path.Combine(tmp, "only-wwwdata"); Directory.CreateDirectory(Path.Combine(gw, "www", "data"));
+                        Assert(Convert.ToBoolean(isGame.Invoke(null, new object[] { gw })), "只有 www\\data 也算游戏（MV/MZ）");
+
+                        Assert(!Convert.ToBoolean(isGame.Invoke(null, new object[] { Path.Combine(tmp, "empty") })),
+                            "什么都没有的目录不算游戏");
+                    }
                     if (bonus != null)
                     {
                         foreach (var s in new[] { "bonus", "Bonus Game", "おまけ", "特典", "Yutaka Gaiden外传", "extras" })
