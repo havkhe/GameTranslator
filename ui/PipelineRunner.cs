@@ -73,6 +73,13 @@ namespace GameTranslatorV3.Core
         public TimeSpan GameBudget = TimeSpan.FromHours(3);
         public TimeSpan StalledAfter = TimeSpan.FromMinutes(10);
 
+        /// <summary>
+        /// Extra environment for the pipeline process. Cloud mode puts GT_API_BASE / GT_API_KEY /
+        /// GT_API_MODEL here, which is how the client learns to use a hosted endpoint instead of a local
+        /// llama-server — the key travels in the environment, not in the command line or a tracked file.
+        /// </summary>
+        public readonly Dictionary<string, string> ExtraEnv = new Dictionary<string, string>();
+
         public event Action<string> Output;                  // one line of pipeline output
         public event Action<string, string> AttemptFailed;   // game, reason
 
@@ -264,6 +271,12 @@ namespace GameTranslatorV3.Core
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
             };
+            // Cloud mode passes its endpoint and key down through the environment: the key is never an
+            // argument (visible in a process list) and never a file the repository tracks.
+            foreach (var kv in ExtraEnv)
+            {
+                try { psi.EnvironmentVariables[kv.Key] = kv.Value; } catch { }
+            }
 
             Process proc;
             try { proc = Process.Start(psi); }

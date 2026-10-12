@@ -1081,6 +1081,7 @@ namespace GameTranslatorV3
         /// </summary>
         private void RefreshModels()
         {
+            if (_settings.UseApi) { RefreshApiModels(); return; }
             var previous = _settings.Model;
             _cmbModel.Items.Clear();
             var dir = _settings.ModelDir;
@@ -1108,6 +1109,102 @@ namespace GameTranslatorV3
                 _runner.Model = _settings.Model;
             }
             UpdateModelState();
+        }
+
+        /// <summary>
+        /// Fill the model dropdown from the cloud endpoint itself (GET {base}/models).
+        ///
+        /// This is the "auto-detect the models" half of cloud mode: a hosted key usually carries quota on
+        /// several models, and which ones exist is the endpoint's business, not something to hardcode.
+        /// On failure the dropdown says why instead of showing a stale list.
+        /// </summary>
+        private void RefreshApiModels()
+        {
+            var previous = string.IsNullOrEmpty(_settings.ApiModel) ? "" : _settings.ApiModel;
+            _cmbModel.Items.Clear();
+            var key = Settings.LoadApiKey(_root);
+            List<string> models = null;
+            string error = "";
+            if (string.IsNullOrEmpty(key)) error = "还没有填 API Key（设置… → 翻译接口）";
+            else if (string.IsNullOrEmpty(_settings.ApiBaseUrl)) error = "还没有填接口地址";
+            else
+            {
+                try
+                {
+                    var body = HttpGetUrl(_settings.ApiBaseUrl.TrimEnd('/') + "/models", key, 8000);
+                    models = ParseModelIds(body);
+                    if (models.Count == 0) error = "接口没有返回模型列表";
+                }
+                catch (Exception ex) { error = "取模型列表失败：" + ex.Message; }
+            }
+
+            if (models == null || models.Count == 0)
+            {
+                _cmbModel.Items.Add("（云端：" + error + "）");
+                _cmbModel.SelectedIndex = 0;
+                _cmbModel.Enabled = false;
+                AppendLog("云端模型列表未取到：" + error);
+            }
+            else
+            {
+                foreach (var m in models) _cmbModel.Items.Add(m);
+                _cmbModel.Enabled = true;
+                int idx = previous.Length > 0 ? _cmbModel.Items.IndexOf(previous) : -1;
+                _cmbModel.SelectedIndex = idx >= 0 ? idx : 0;
+                _settings.ApiModel = Convert.ToString(_cmbModel.SelectedItem);
+                AppendLog("云端模型列表：" + models.Count + " 个，已选 " + _settings.ApiModel);
+            }
+            UpdateModelState();
+        }
+
+        /// <summary>
+        /// The fallback chain handed to the pipeline: the selected model first, then the listed ones.
+        ///
+        /// A spent free tier moves the chain on (403 AllocationQuota.FreeTierOnly) and the SAME line is
+        /// asked again, so a quota running out mid-batch costs time, not entries.
+        /// </summary>
+        private string BuildModelChain()
+        {
+            var chain = new List<string>();
+            var first = (_settings.ApiModel ?? "").Trim();
+            if (first.Length > 0) chain.Add(first);
+            foreach (var m in (_settings.ApiModels ?? "").Split(','))
+            {
+                var t = m.Trim();
+                if (t.Length > 0 && !chain.Contains(t)) chain.Add(t);
+            }
+            return string.Join(",", chain.ToArray());
+        }
+
+        /// <summary>The ids out of an OpenAI-compatible /models body: {"data":[{"id":"..."}]}.</summary>
+        private static List<string> ParseModelIds(string body)
+        {
+            var outList = new List<string>();
+            try
+            {
+                var arr = SimpleJson.Array(body);
+                foreach (var item in arr)
+                {
+                    var id = SimpleJson.Get(item, "id");
+                    if (string.IsNullOrEmpty(id)) id = SimpleJson.Get(item, "name");
+                    if (!string.IsNullOrEmpty(id) && !outList.Contains(id)) outList.Add(id);
+                }
+            }
+            catch { }
+            return outList;
+        }
+
+        /// <summary>A GET against any URL, with an optional bearer token. Used for the cloud model list.</summary>
+        private static string HttpGetUrl(string url, string bearer, int timeoutMs)
+        {
+            var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+            req.Timeout = timeoutMs;
+            req.ReadWriteTimeout = timeoutMs;
+            req.Method = "GET";
+            if (!string.IsNullOrEmpty(bearer)) req.Headers["Authorization"] = "Bearer " + bearer;
+            using (var resp = req.GetResponse())
+            using (var sr = new System.IO.StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                return sr.ReadToEnd();
         }
 
         /// <summary>
@@ -1155,6 +1252,8 @@ namespace GameTranslatorV3
 
         private void UpdateModelState()
         {
+            // In cloud mode there is nothing on the local port to probe: report from the configuration.
+            if (_settings.UseApi) { ApplyModelState(); return; }
             // Refresh the reading in the background; never on this thread.
             if (!_modelProbeBusy && (DateTime.Now - _modelProbeAt).TotalSeconds > 3)
             {
@@ -1260,6 +1359,23 @@ namespace GameTranslatorV3
         private void ApplyModelState()
         {
             if (_lblModelState == null) return;
+            if (_settings.UseApi)
+            {
+                // Cloud mode has no local server to interrogate; report the configuration instead.
+                bool hasKey = !string.IsNullOrEmpty(Settings.LoadApiKey(_root));
+                string apiModel = string.IsNullOrEmpty(_settings.ApiModel) ? "（未选模型）" : _settings.ApiModel;
+                _lblModelState.Text = hasKey
+                    ? "状态：云端 API（" + apiModel + "）"
+                    : "状态：云端 API 未配置（缺 API Key）";
+                _lblModelState.ForeColor = hasKey ? Color.SeaGreen : Color.FromArgb(200, 90, 0);
+                _modelMismatch = !hasKey;
+                Tip(_lblModelState, "翻译走云端接口：" + _settings.ApiBaseUrl + "，模型 " + apiModel + "。\n" +
+                    "本地 llama 不参与，所以「启动模型 / 停止模型」在云端模式下不可用。\n" +
+                    "密钥来自 api-config.json 或环境变量 GT_API_KEY。");
+                if (_btnModelStart != null) _btnModelStart.Enabled = false;
+                if (_btnModelStop != null) _btnModelStop.Enabled = false;
+                return;
+            }
             string selected = _settings.Model ?? "";
             if (!_modelUp)
             {
@@ -1399,8 +1515,12 @@ namespace GameTranslatorV3
             }
 
             string window = "近 " + RateWindowSeconds + " 秒";
-            _lblRate.Text = "速度：" + _tokPerSec.ToString("0.0") + " tok/s（" + window + "）    " +
-                _entriesPerMin.ToString("0.0") + " 条/分    已知已译 " + entriesNow + " 条";
+            // A hosted endpoint keeps no local token counter, so that half is simply absent rather than a
+            // permanent "0.0 tok/s" that looks like a stall.
+            _lblRate.Text = _settings.UseApi
+                ? "速度：" + _entriesPerMin.ToString("0.0") + " 条/分（" + window + "，云端模式无 token 计数）    已知已译 " + entriesNow + " 条"
+                : "速度：" + _tokPerSec.ToString("0.0") + " tok/s（" + window + "）    " +
+                  _entriesPerMin.ToString("0.0") + " 条/分    已知已译 " + entriesNow + " 条";
 
             // ---- estimate -------------------------------------------------------------------------
             double perSec = _entriesPerMin / 60.0;
@@ -2499,6 +2619,39 @@ namespace GameTranslatorV3
         /// </summary>
         private async Task<bool> EnsureModelReadyAsync()
         {
+            if (_settings.UseApi)
+            {
+                // Cloud mode: there is no local server to wait for. Check the configuration instead, and
+                // hand the pipeline its endpoint through the environment — the key is read from
+                // api-config.json / GT_API_KEY and never stored in the source or in the settings file.
+                var key = Settings.LoadApiKey(_root);
+                if (string.IsNullOrEmpty(key))
+                {
+                    MessageBox.Show(this,
+                        "云端模式已开启，但没有读到 API Key。\n\n请在【设置…】→ 翻译接口 里填写并保存（写入 api-config.json，不纳入版本管理），" +
+                        "或设置环境变量 GT_API_KEY。",
+                        "缺少 API Key", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                if (string.IsNullOrEmpty(_settings.ApiBaseUrl) || string.IsNullOrEmpty(_settings.ApiModel))
+                {
+                    MessageBox.Show(this, "云端模式需要接口地址与模型名，请在【设置…】→ 翻译接口 里补全。",
+                        "云端配置不完整", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                _runner.ExtraEnv["GT_API_BASE"] = _settings.ApiBaseUrl;
+                _runner.ExtraEnv["GT_API_KEY"] = key;
+                _runner.ExtraEnv["GT_API_MODEL"] = _settings.ApiModel;
+                // The chain: the selected model first, then whatever the user listed, then the rest of the
+                // discovered list — a spent free tier moves down it instead of failing the line.
+                _runner.ExtraEnv["GT_API_MODELS"] = BuildModelChain();
+                AppendLog("云端模式：" + _settings.ApiBaseUrl + "  模型链 " + _runner.ExtraEnv["GT_API_MODELS"] + "（本地 llama 不参与）");
+                return true;
+            }
+            _runner.ExtraEnv.Remove("GT_API_BASE");
+            _runner.ExtraEnv.Remove("GT_API_KEY");
+            _runner.ExtraEnv.Remove("GT_API_MODEL");
+            _runner.ExtraEnv.Remove("GT_API_MODELS");
             if (IsPortOpen()) return true;
             var answer = MessageBox.Show(this,
                 "翻译模型服务还没有启动。\n\n是否现在启动「" + _settings.Model + "」？\n\n" +
@@ -2840,6 +2993,14 @@ namespace GameTranslatorV3
 
         private void StartLlama()
         {
+            if (_settings.UseApi)
+            {
+                MessageBox.Show(this,
+                    "当前是云端 API 模式，翻译不经过本地 llama，所以不需要启动模型。\n\n" +
+                    "要改用本地模型：设置… → 取消「使用云端 API」。",
+                    "云端模式", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             try
             {
                 string exe = Path.Combine(_settings.LlamaDir ?? "", "llama-server.exe");
@@ -3084,6 +3245,23 @@ namespace GameTranslatorV3
                 dirRow.Controls.Add(bPick);
                 t.Controls.Add(dirRow, 1, r++);
 
+                // ---- cloud API -----------------------------------------------------
+                // The endpoint and the model chain are ordinary settings; only the key lives elsewhere
+                // (api-config.json, or the GT_API_KEY environment variable) so no credential is ever
+                // written into a file the repository tracks.
+                var chkApi = new CheckBox { Text = "使用云端 API（不再用本地 llama）", Checked = _settings.UseApi, Height = 24, AutoSize = true };
+                var txtApiBase = new TextBox { Width = 380, Text = _settings.ApiBaseUrl };
+                var txtApiKey = new TextBox { Width = 380, UseSystemPasswordChar = true, Text = Settings.LoadApiKey(_root) };
+                var txtApiModels = new TextBox { Width = 380, Text = _settings.ApiModels };
+                t.Controls.Add(new Label { Text = "云端 API", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(chkApi, 1, r++);
+                t.Controls.Add(new Label { Text = "接口地址", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtApiBase, 1, r++);
+                t.Controls.Add(new Label { Text = "API Key", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtApiKey, 1, r++);
+                t.Controls.Add(new Label { Text = "模型链", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtApiModels, 1, r++);
+
                 t.Controls.Add(new Label { Text = "llama 目录", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
                 var llamaRow = new FlowLayoutPanel { WrapContents = false, Height = 30 };
                 llamaRow.Controls.Add(txtLlama);
@@ -3185,6 +3363,21 @@ namespace GameTranslatorV3
                 var rootList2 = new List<string>();
                 foreach (var o in rootList.Items) rootList2.Add(Convert.ToString(o));
                 _settings.ScanRoots = rootList2;
+
+                // Cloud mode: endpoint and chain are plain settings, the key goes to api-config.json.
+                _settings.UseApi = chkApi.Checked;
+                if (txtApiBase.Text.Trim().Length > 0) _settings.ApiBaseUrl = txtApiBase.Text.Trim();
+                if (txtApiModels.Text.Trim().Length > 0) _settings.ApiModels = txtApiModels.Text.Trim();
+                if (chkApi.Checked)
+                {
+                    // The dropdown may hold an API model name (or the placeholder when the list could not
+                    // be fetched): only accept a real name.
+                    var sel = Convert.ToString(_cmbModel.SelectedItem) ?? "";
+                    if (sel.Length > 0 && !sel.StartsWith("（")) _settings.ApiModel = sel;
+                    if (!Settings.SaveApiKey(_root, txtApiKey.Text.Trim()))
+                        MessageBox.Show(this, "API Key 没能写入 api-config.json（目录只读？）。\n" +
+                            "也可以改用环境变量 GT_API_KEY。", "密钥未保存", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
 
                 _settings.Save(_root);
 

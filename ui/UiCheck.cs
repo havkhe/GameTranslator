@@ -411,6 +411,51 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 云端 API 模式（密钥不入库、模型链、状态显示）===");
+            {
+                var settingsField = typeof(MainForm).GetField("_settings", BindingFlags.NonPublic | BindingFlags.Instance);
+                var applyState = typeof(MainForm).GetMethod("ApplyModelState", BindingFlags.NonPublic | BindingFlags.Instance);
+                var chainMethod = typeof(MainForm).GetMethod("BuildModelChain", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(settingsField != null && applyState != null && chainMethod != null,
+                    "找到 _settings / ApplyModelState / BuildModelChain（反射）");
+                var settings = settingsField == null ? null : settingsField.GetValue(form) as GameTranslatorV3.Core.Settings;
+                Assert(settings != null, "取到设置对象");
+                if (settings != null && chainMethod != null && applyState != null)
+                {
+                    bool oldUse = settings.UseApi;
+                    string oldModel = settings.ApiModel;
+                    string oldChain = settings.ApiModels;
+                    settings.ApiModel = "alpha";
+                    settings.ApiModels = "alpha, beta ,alpha,gamma";
+                    var chain = Convert.ToString(chainMethod.Invoke(form, null));
+                    Assert(chain == "alpha,beta,gamma", "模型链：选中项在前、去重去空格 → " + chain);
+
+                    settings.UseApi = true;
+                    applyState.Invoke(form, null);
+                    var apiState = Flatten(form).OfType<Label>().FirstOrDefault(l => (l.Text ?? "").StartsWith("状态："));
+                    Assert(apiState != null && apiState.Text.Contains("云端 API"),
+                        "云端模式的状态显示：" + (apiState == null ? "无" : apiState.Text));
+
+                    settings.UseApi = oldUse; settings.ApiModel = oldModel; settings.ApiModels = oldChain;
+                    applyState.Invoke(form, null);
+                    Assert(Flatten(form).OfType<Label>().Any(l => (l.Text ?? "").StartsWith("状态：")), "恢复本地模式后状态行仍在");
+                }
+
+                // The key lives in its own file (gitignored), never in the settings file or the source.
+                var tmpDir = Path.Combine(Path.GetTempPath(), "gt-uicheck-api-" + Environment.TickCount.ToString());
+                Directory.CreateDirectory(tmpDir);
+                var savedOk = GameTranslatorV3.Core.Settings.SaveApiKey(tmpDir, "unit-test-placeholder");
+                var readBack = GameTranslatorV3.Core.Settings.LoadApiKey(tmpDir);
+                Assert(savedOk, "API Key 能写入 api-config.json");
+                Assert(readBack == "unit-test-placeholder", "读回来一致（实际 " + readBack + "）");
+                Assert(GameTranslatorV3.Core.Settings.ApiConfigPath(tmpDir).EndsWith("api-config.json", StringComparison.OrdinalIgnoreCase),
+                    "密钥文件名是 api-config.json（.gitignore 已忽略，不进版本库）");
+                var ini = File.Exists(Path.Combine(tmpDir, "ui-settings.ini"));
+                Assert(!ini, "设置文件里没有密钥（此目录还没有 ini）");
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 模型状态必须反映服务器实际加载的模型 ===");
             // The label used to show whatever the dropdown said. Measured on this machine: two llama-server
             // processes can hold the same port (llama.cpp sets SO_REUSEADDR and Windows allows the second
