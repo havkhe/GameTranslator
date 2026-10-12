@@ -237,6 +237,28 @@ namespace GameTranslatorV3.UiCheck
                 var sumText = all.OfType<Label>().Select(l => l.Text ?? "").FirstOrDefault(t => t.StartsWith("队列")) ?? "";
                 Assert(sumText.Contains(q.Count + " 组") && sumText.Contains("个任务"),
                     "摘要显示组数与任务数：" + sumText);
+                // The target-group drop-down doubles as the queue overview: each line carries the group's
+                // state, its progress and its members, and 第 1 组 is what it shows by default.
+                var targetCombo = all.OfType<ComboBox>().FirstOrDefault(c => c.Name == "cmbTargetGroup");
+                Assert(targetCombo != null && targetCombo.Items.Count == q.Count,
+                    "下拉框里每组一行（" + (targetCombo == null ? "无控件" : targetCombo.Items.Count + " 行 / " + q.Count + " 组") + "）");
+                if (targetCombo != null && targetCombo.Items.Count > 0)
+                {
+                    var first = Convert.ToString(targetCombo.Items[0]);
+                    Console.WriteLine("        下拉第一行: " + first);
+                    Assert(first.StartsWith("第 1 组 [", StringComparison.Ordinal), "第一行是第 1 组的总览：" + first);
+                    Assert(first.Contains("/"), "总览里带完成/总数：" + first);
+                    Assert(targetCombo.SelectedIndex == 0, "默认选中的是第 1 组（实际 " + targetCombo.SelectedIndex + "）");
+                    Assert(targetCombo.DropDownWidth > targetCombo.Width, "下拉比输入框宽，总览不会被截断：" +
+                        targetCombo.DropDownWidth + " > " + targetCombo.Width);
+                    var detail = typeof(MainForm).GetMethod("GroupDetail", BindingFlags.NonPublic | BindingFlags.Instance);
+                    Assert(detail != null, "找到 GroupDetail（下拉的悬停详情）");
+                    if (detail != null)
+                    {
+                        var txt = Convert.ToString(detail.Invoke(form, new object[] { 0 }));
+                        Assert(txt.Contains("第 1 组") && txt.Contains("个任务"), "悬停详情写明第一组：" + txt.Split('\n')[0]);
+                    }
+                }
                 update.Invoke(form, null);
                 Assert(byText["开始队列"].Enabled, "队列非空后「开始队列」可用");
                 Assert(byText["清空队列"].Enabled, "队列非空后「清空队列」可用");

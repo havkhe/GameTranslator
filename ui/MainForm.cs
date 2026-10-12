@@ -442,10 +442,15 @@ namespace GameTranslatorV3
             {
                 Name = "cmbTargetGroup",
                 Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 132, Margin = new Padding(2, 0, 0, 0)
+                Width = 132, Margin = new Padding(2, 0, 0, 0),
+                // The list is also the queue's overview, and a summary line is much wider than the 132 px box,
+                // so the drop-down is drawn wide enough to read instead of being clipped.
+                DropDownWidth = 520
             };
             top.Controls.Add(_lblQueue, 0, 0);
             top.Controls.Add(_cmbTargetGroup, 1, 0);
+            // Picking another group updates the tooltip, so the drop-down always describes the line it shows.
+            _cmbTargetGroup.SelectedIndexChanged += (s, e) => UpdateTargetGroupTip();
 
             var btns = MakeButtonGrid(3);
             btns.Dock = DockStyle.Bottom;
@@ -644,13 +649,71 @@ namespace GameTranslatorV3
             else if (_queue.Count > 0) sb.Append("　未开始");
             _lblQueue.Text = sb.ToString();
 
+            // The target-group list doubles as the queue's overview: opening it shows every group's state, its
+            // progress and what is inside it, so "what is in group 1" is one click away without touching the
+            // tree above. The selected line is echoed in the combo's tooltip in full, since a drop-down line
+            // is always cut somewhere.
             int want = _cmbTargetGroup.SelectedIndex;
             _cmbTargetGroup.Items.Clear();
-            for (int i = 0; i < _queue.Count; i++)
-                _cmbTargetGroup.Items.Add("第 " + (i + 1) + " 组（" + _queue[i].Tasks.Count + " 个）");
+            for (int i = 0; i < _queue.Count; i++) _cmbTargetGroup.Items.Add(GroupSummaryLine(i));
             if (_cmbTargetGroup.Items.Count > 0)
+            {
+                // 第 1 组 by default rather than the last one: the panel is read from the top, and the group
+                // the user asked about first is the first one.
                 _cmbTargetGroup.SelectedIndex =
-                    (want >= 0 && want < _cmbTargetGroup.Items.Count) ? want : _cmbTargetGroup.Items.Count - 1;
+                    (want >= 0 && want < _cmbTargetGroup.Items.Count) ? want : 0;
+                UpdateTargetGroupTip();
+            }
+        }
+
+        /// <summary>The drop-down's tooltip: what this control is for, then the selected group in full.</summary>
+        private void UpdateTargetGroupTip()
+        {
+            if (_cmbTargetGroup == null) return;
+            Tip(_cmbTargetGroup, "「加入选中到所选组」的目标组；展开下拉可以看到每一组的状态、进度和成员。\n" +
+                GroupDetail(_cmbTargetGroup.SelectedIndex));
+        }
+
+        /// <summary>
+        /// One line of the target-group list: 第 N 组 [状态 完成/总数]　成员名…
+        ///
+        /// This is the queue seen from the drop-down: state, progress and membership in a single line. A long
+        /// member list is cut, and the tooltip (GroupDetail) plus the tree above carry the whole thing.
+        /// </summary>
+        private string GroupSummaryLine(int gi)
+        {
+            if (gi < 0 || gi >= _queue.Count) return "";
+            var grp = _queue[gi];
+            int done = grp.Tasks.Count(t => t.Result == "完成");
+            int failed = grp.Tasks.Count(t => t.Result == "失败");
+            int skipped = grp.Tasks.Count(t => t.Result == "跳过");
+            string state = (_running && gi == _queueGroupIndex) ? "运行中" : grp.State;
+            var names = new List<string>();
+            foreach (var t in grp.Tasks) names.Add(t.Name);
+            string list = string.Join("、", names.ToArray());
+            if (list.Length > 52) list = list.Substring(0, 52) + "…";
+            return "第 " + (gi + 1) + " 组 [" + state + " " + done + "/" + grp.Tasks.Count + "]" +
+                (failed > 0 ? " 失败" + failed : "") + (skipped > 0 ? " 跳过" + skipped : "") +
+                (list.Length > 0 ? "　" + list : "");
+        }
+
+        /// <summary>The selected group written out, one task per line, for the drop-down's tooltip.</summary>
+        private string GroupDetail(int gi)
+        {
+            if (gi < 0 || gi >= _queue.Count) return "「加入选中到所选组」的目标组。展开可以看到每一组的成员。";
+            var grp = _queue[gi];
+            var sb = new StringBuilder();
+            sb.Append("第 " + (gi + 1) + " 组（" + grp.State + "，共 " + grp.Tasks.Count + " 个任务）：");
+            for (int ti = 0; ti < grp.Tasks.Count && ti < 12; ti++)
+            {
+                var t = grp.Tasks[ti];
+                sb.Append("\n· ").Append(t.Name);
+                if (t.Result.Length > 0) sb.Append(" — ").Append(t.Result);
+                if (t.Note.Length > 0) sb.Append("（").Append(t.Note).Append("）");
+            }
+            if (grp.Tasks.Count > 12) sb.Append("\n…（其余 " + (grp.Tasks.Count - 12) + " 个）");
+            if (grp.Tasks.Count == 0) sb.Append("\n（这一组还是空的）");
+            return sb.ToString();
         }
 
         // --------------------------------------------------------- queue persistence --
@@ -2478,7 +2541,9 @@ namespace GameTranslatorV3
             Tip(_btnClearQueue, "清空整个队列。不会删除任何游戏数据或译文。翻译进行中不可用。");
             Tip(_btnSkipGroup, "放弃当前组里剩下没跑的任务，直接进入下一组。只在翻译进行中可用。");
             Tip(_btnStartQueue, "从第一组开始，一组跑完自动进下一组。已经跑完的组会跳过（可续跑）。");
-            Tip(_cmbTargetGroup, "「加入选中到所选组」的目标组。");
+            // The dynamic form, not a fixed sentence: it also lists the selected group's tasks, which is the
+            // "what is in group 1" answer without opening anything.
+            UpdateTargetGroupTip();
         }
 
         // ------------------------------------------------------------ scan / add -----
