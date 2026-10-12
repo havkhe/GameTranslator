@@ -13,11 +13,12 @@
     含 CUDA 运行库），之后一键切换；不想联网也可以另行下载 CUDA 包放进该目录。
   - **两套并存、离线切换**：切换只改一个设置并重启模型服务，不用重下一遍。
     同一个入口在根目录也有：双击 `切换显卡后端.bat`，或 `.\switch-backend.ps1 -Backend vulkan|cuda12`。
-  - **CUDA 版不由本包直接分发**（两个包合计约 630 MB，对老卡用户是白下载）。如果不想用程序里的一键
-    下载，也可以自己从 llama.cpp 官方发行版取这两个文件，解压进 `llama\cuda12\`（两包解到同一目录）：
-      `llama-b11571-bin-win-cuda-12.4-x64.zip` 与 `cudart-llama-bin-win-cuda-12.4-x64.zip`
-    （来自 <https://github.com/ggml-org/llama.cpp/releases/tag/b11571>；换更新的 bXXXX 版本同理，
-    注意两个包必须同一个版本）。
+  - **CUDA 版不塞进主包**（两个文件合计 626 MB，老卡用户不必陪跑这 626 MB）。想手动部署就从
+    llama.cpp 官方发行版取这两个文件，解压进 `llama\cuda12\`（两包解到同一目录即可）：
+      `llama-b11571-bin-win-cuda-12.4-x64.zip`（252.9 MB）
+      `cudart-llama-bin-win-cuda-12.4-x64.zip`（373.3 MB）
+    上游页面：<https://github.com/ggml-org/llama.cpp/releases/tag/b11571>（换更新的 `bXXXX` 版本同理，
+    注意两个包**必须同一个版本**）。
   - 想更新到更新的 llama.cpp 版本：`.\download-llama.ps1 -Dest .\llama\vulkan -Backend vulkan`
     （CUDA 版同理，`-Backend cuda12`）。
   - 注意 **CUDA 12 的预编译包不支持 GTX 10 系（Pascal / sm_61）**，在那种卡上会静默退回 CPU。
