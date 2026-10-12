@@ -44,7 +44,13 @@ function stub(mode) {
         res.end(s);
       };
       if (req.url.endsWith("/models")) {
-        return reply(200, { data: [{ id: "model-a" }, { id: "model-b" }, { id: "model-c" }] });
+        // A realistic catalogue: text LLMs mixed with embeddings, a reranker, vision, speech and image.
+        return reply(200, { data: [
+          { id: "qwen-mt-plus" }, { id: "qwen-plus" }, { id: "qwen-vl-max" },
+          { id: "text-embedding-v3" }, { id: "gte-rerank-v2" }, { id: "cosyvoice-v1" },
+          { id: "paraformer-realtime-v2" }, { id: "sambert-zhide-v1" }, { id: "wanx-v1" },
+          { id: "deepseek-v3" },
+        ] });
       }
       const usage = { prompt_tokens: 120, completion_tokens: 8, total_tokens: 128 };
       if (mode === "quota-first") {
@@ -56,6 +62,16 @@ function stub(mode) {
       }
       if (mode === "quota-all") {
         return reply(403, { error: { code: "AllocationQuota.FreeTierOnly", message: "free quota exhausted" } });
+      }
+      if (mode === "model-unknown") {
+        // The endpoint does not know the first name (a stale local .gguf name, in practice).
+        if (parsed.model === "model-a") {
+          return reply(404, { error: { code: "InvalidParameter", message: "The model `model-a` does not exist." } });
+        }
+        return reply(200, { choices: [{ message: { content: "译文来自 " + parsed.model } }], usage: usage });
+      }
+      if (mode === "bad-key") {
+        return reply(401, { error: { code: "InvalidApiKey", message: "Invalid API-key provided." } });
       }
       if (mode === "rate-limit-once") {
         if (seen.filter((x) => x.url.endsWith("/chat/completions")).length === 1) {
@@ -132,6 +148,45 @@ globalThis.__gtTestDone = (async () => {
   }
 
   console.log("");
+  console.log("=== 端点不认识这个模型名 → 也换到链上的下一个 ===");
+  {
+    const s = await stub("model-unknown");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a,model-b",
+      GT_API_BACKOFF_MS: "10",
+      GT_API_RETRIES: "0",
+    });
+    const out = await c.ask({ port: 1, prompt: "1. hello", maxTokens: 64 });
+    check("模型名无效时换到下一个并成功", out, "译文来自 model-b");
+    const calls = s.seen.filter((x) => x.url.endsWith("/chat/completions"));
+    check("先试了第一个模型", calls[0].model, "model-a");
+    check("落到第二个模型", calls[calls.length - 1].model, "model-b");
+    s.server.close();
+  }
+
+  console.log("");
+  console.log("=== 鉴权失败（401）不换模型、不重试 ===");
+  {
+    const s = await stub("bad-key");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a,model-b",
+      GT_API_BACKOFF_MS: "10",
+      GT_API_RETRIES: "2",
+    });
+    let err = "";
+    try { await c.ask({ port: 1, prompt: "x", maxTokens: 64 }); } catch (e) { err = String(e.message); }
+    const calls = s.seen.filter((x) => x.url.endsWith("/chat/completions"));
+    check("请求失败", err.length > 0, true);
+    check("只试了一次（没有无谓重试）", calls.length, 1);
+    check("key 没被误判成模型不可用", c.isModelUnavailable(401, "Invalid API-key provided."), false);
+    s.server.close();
+  }
+
+  console.log("");
   console.log("=== 限流（429）重试，而不是把这一批拆掉 ===");
   {
     const s = await stub("rate-limit-once");
@@ -170,12 +225,25 @@ globalThis.__gtTestDone = (async () => {
   }
 
   console.log("");
-  console.log("=== 模型列表（自动识别模型）===");
+  console.log("=== 模型列表：只保留大语言模型 ===");
   {
+    const CHAT = ["qwen-mt-plus", "qwen-mt-turbo", "qwen-plus", "qwen-max", "qwen-turbo", "qwen-long",
+      "qwen3-max", "qwen2.5-72b-instruct", "qwq-plus", "deepseek-v3", "deepseek-r1", "glm-4-plus",
+      "moonshot-v1-8k", "llama3.1-70b-instruct", "qwen3-coder-plus"];
+    const NOT_CHAT = ["text-embedding-v3", "text-embedding-v2", "gte-rerank-v2", "qwen-vl-max",
+      "qwen2.5-vl-7b-instruct", "qwen-vl-plus", "cosyvoice-v1", "paraformer-realtime-v2",
+      "sambert-zhide-v1", "sensevoice-v1", "whisper-large-v3", "wanx-v1", "wanx2.1-t2i-turbo",
+      "stable-diffusion-xl", "flux-schnell", "kling-v1", "qwen-tts", "qwen-audio-turbo",
+      "qwen-image-edit", "bge-m3"];
+    const wronglyKept = NOT_CHAT.filter((m) => c.isTextModel(m));
+    const wronglyDropped = CHAT.filter((m) => !c.isTextModel(m));
+    check("非大语言模型全部被排除（" + NOT_CHAT.length + " 个）", wronglyKept.join(","), "");
+    check("大语言模型一个不误伤（" + CHAT.length + " 个）", wronglyDropped.join(","), "");
+
     const s = await stub("ok");
     useEnv({});
     const ids = await c.listModels({ base: "http://127.0.0.1:" + s.port, key: PLACEHOLDER }, 4000);
-    check("解析出 3 个模型", ids.join("|"), "model-a|model-b|model-c");
+    check("接口列表里只回大语言模型", ids.join("|"), "qwen-mt-plus|qwen-plus|deepseek-v3");
     check("请求带 key", s.seen.find((x) => x.url.endsWith("/models")).auth, "Bearer " + PLACEHOLDER);
     s.server.close();
   }

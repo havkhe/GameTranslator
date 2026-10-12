@@ -438,7 +438,28 @@ namespace GameTranslatorV3.UiCheck
 
                     settings.UseApi = oldUse; settings.ApiModel = oldModel; settings.ApiModels = oldChain;
                     applyState.Invoke(form, null);
-                    Assert(Flatten(form).OfType<Label>().Any(l => (l.Text ?? "").StartsWith("状态：")), "恢复本地模式后状态行仍在");
+                    Assert(Flatten(form).OfType<Label>().Any(l => (l.Text ?? "").StartsWith("状态：")), "恢复后状态行仍在");
+                    // Leave LOCAL mode on for the sections below: they assert the local readout
+                    // (未启动 / 已就绪 / 实际≠所选), and a deployment that has cloud mode switched on would
+                    // otherwise answer every one of them with the cloud line.
+                    settings.UseApi = false;
+                    applyState.Invoke(form, null);
+                }
+
+                // The cloud catalogue mixes non-LLMs in; the dropdown must only offer text models.
+                var parseIds = typeof(MainForm).GetMethod("ParseModelIds", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(parseIds != null, "找到 ParseModelIds（反射）");
+                if (parseIds != null)
+                {
+                    var body = "{\"data\":[{\"id\":\"qwen-mt-plus\"},{\"id\":\"qwen-plus\"},{\"id\":\"qwen-vl-max\"}," +
+                               "{\"id\":\"text-embedding-v3\"},{\"id\":\"gte-rerank-v2\"},{\"id\":\"cosyvoice-v1\"}," +
+                               "{\"id\":\"wanx-v1\"},{\"id\":\"deepseek-v3\"}]}";
+                    var ids = parseIds.Invoke(null, new object[] { body }) as List<string>;
+                    Assert(ids != null && ids.Count == 3 && ids.Contains("qwen-mt-plus") && ids.Contains("qwen-plus") && ids.Contains("deepseek-v3"),
+                        "云端列表只留大语言模型：" + (ids == null ? "null" : string.Join(",", ids.ToArray())));
+                    Assert(ids != null && !ids.Contains("qwen-vl-max") && !ids.Contains("text-embedding-v3") &&
+                        !ids.Contains("gte-rerank-v2") && !ids.Contains("cosyvoice-v1") && !ids.Contains("wanx-v1"),
+                        "视觉 / 向量 / 重排 / 语音 / 图像模型不出现在列表里");
                 }
 
                 // The key lives in its own file (gitignored), never in the settings file or the source.

@@ -245,6 +245,14 @@ namespace GameTranslatorV3.Core
                         case "StalledAfterMinutes": if (int.TryParse(val, out n) && n >= 1) s.StalledAfterMinutes = n; break;
                     }
                 }
+                // A local .gguf name can end up in ApiModel: it is what the dropdown held when cloud mode
+                // was switched on. A hosted endpoint does not know that name, so every request would come
+                // back "model not found". Fall back to the first entry of the chain instead.
+                if (s.ApiModel.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+                {
+                    var first = s.ApiModels.Split(',').Select((x) => x.Trim()).FirstOrDefault((x) => x.Length > 0);
+                    s.ApiModel = !string.IsNullOrEmpty(first) ? first : "qwen-mt-plus";
+                }
             }
             catch { /* defaults are always usable */ }
             return s;

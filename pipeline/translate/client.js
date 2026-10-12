@@ -86,6 +86,38 @@ function isQuotaExhausted(status, body) {
   return /AllocationQuota|FreeTierOnly|free\s*tier|quota/i.test(String(body || ""));
 }
 
+/**
+ * Does this response say the ENDPOINT does not know that model name?
+ *
+ * Also a reason to move down the chain rather than to fail: a stale name — measured in a real install,
+ * where cloud mode was switched on while the dropdown still held a local .gguf name — would otherwise
+ * fail every line of every game. A rejected KEY is different and must fail loudly, so it is not here.
+ */
+function isModelUnavailable(status, body) {
+  if (status !== 404 && status !== 400) return false;
+  const b = String(body || "");
+  if (/api[_\s-]?key|unauthor|invalid[_\s-]?token|permission/i.test(b)) return false;
+  return /model|模型/i.test(b) && /(not\s*found|does\s*not\s*exist|unknown|invalid|不支持|不存在|没有|无效)/i.test(b);
+}
+
+/**
+ * Which ids from an endpoint's /models are NOT text LLMs.
+ *
+ * A hosted catalogue mixes everything: embeddings, rerankers, vision-language, speech synthesis and
+ * recognition, image and video generators. None of them can translate a line of text, and offering them
+ * in the dropdown only invites a failed run — measured on the Model Studio catalogue, where the list
+ * beside qwen-mt-plus/qwen-plus/qwen-turbo holds text-embedding-v3, gte-rerank-v2, qwen-vl-max,
+ * cosyvoice-v1, paraformer-realtime-v2, sambert-zhide-v1, wanx-v1 and friends.
+ *
+ * Kept in step with MainForm.IsCloudTextModel in ui/MainForm.cs (the window filters the same list; it
+ * cannot call this file).
+ */
+const NON_CHAT_MODEL =
+  /(embed|rerank|gte-|bge-|clip|whisper|sensevoice|paraformer|cosyvoice|sambert|\btts\b|\basr\b|\bvl\b|vision|ocr|wanx|stable-diffusion|sdxl|flux|kling|image|avatar|speech|voice|audio)/i;
+
+/** Is this model id a text LLM (the only kind this tool can use)? */
+function isTextModel(id) { return !NON_CHAT_MODEL.test(String(id || "")); }
+
 /** List the models an OpenAI-compatible endpoint offers (used to fill the window's dropdown). */
 function listModels({ base, key }, timeoutMs) {
   return new Promise((resolve) => {
@@ -101,7 +133,7 @@ function listModels({ base, key }, timeoutMs) {
         try {
           const j = JSON.parse(d);
           const list = Array.isArray(j.data) ? j.data : (Array.isArray(j.models) ? j.models : []);
-          resolve(list.map((m) => String(m.id || m.name || "")).filter(Boolean));
+          resolve(list.map((m) => String(m.id || m.name || "")).filter((id) => id && isTextModel(id)));
         } catch (e) { resolve([]); }
       });
     });
@@ -211,13 +243,15 @@ function ask({ port, prompt, maxTokens, onStall }) {
           res.on("end", () => {
             if (stallTimer) clearTimeout(stallTimer);
             // Free tier spent (403 AllocationQuota.FreeTierOnly on Model Studio, and the same shape on
-            // other hosts): move to the next model in the chain and ask again — the SAME line, so nothing
-            // about the batch is lost and no entry is recorded as failed because a quota ran out.
-            if (isApi && isQuotaExhausted(res.statusCode, data)) {
+            // other hosts), or the endpoint does not know this model name at all: move to the next model
+            // in the chain and ask again — the SAME line, so nothing about the batch is lost and no entry
+            // is recorded as failed because of a quota or a stale name.
+            if (isApi && (isQuotaExhausted(res.statusCode, data) || isModelUnavailable(res.statusCode, data))) {
               const from = modelOf();
               const to = nextModel(ep);
               if (to) {
-                console.log("API_MODEL_SWITCH " + from + " -> " + to + "   （" + from + " 免费额度已用完，继续用 " + to + " 翻译）");
+                console.log("API_MODEL_SWITCH " + from + " -> " + to + "   （" + from +
+                  (isQuotaExhausted(res.statusCode, data) ? " 免费额度已用完" : " 该端点不认识这个模型名") + "，继续用 " + to + " 翻译）");
                 attempt = 0;
                 return setTimeout(send, 500);
               }
@@ -275,7 +309,8 @@ function ask({ port, prompt, maxTokens, onStall }) {
 }
 
 module.exports = {
-  ask, waitForServer, eraseSlot, endpoint, listModels, isQuotaExhausted, usage,
+  ask, waitForServer, eraseSlot, endpoint, listModels, isQuotaExhausted, isModelUnavailable,
+  usage, isTextModel,
   resetApiModel: function () { apiModelIndex = 0; },
   SYSTEM_PROMPT, DEFAULT_PORT, MAX_OUTPUT_TOKENS, STALL_MS,
 };

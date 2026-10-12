@@ -1176,6 +1176,25 @@ namespace GameTranslatorV3
             return string.Join(",", chain.ToArray());
         }
 
+        /// <summary>
+        /// Which ids from a cloud catalogue are NOT text LLMs.
+        ///
+        /// A hosted endpoint lists everything it serves — embeddings, rerankers, vision-language, speech
+        /// synthesis and recognition, image and video generation. None of those can translate a line of
+        /// text; leaving them in the dropdown only invites a run that fails on every request. Measured on
+        /// the Model Studio catalogue: beside qwen-mt-plus / qwen-plus / qwen-turbo sit text-embedding-v3,
+        /// gte-rerank-v2, qwen-vl-max, cosyvoice-v1, paraformer-realtime-v2, sambert-zhide-v1, wanx-v1.
+        ///
+        /// Kept in step with NON_CHAT_MODEL in pipeline/translate/client.js, which filters the same list
+        /// for the pipeline's own callers.
+        /// </summary>
+        private static readonly System.Text.RegularExpressions.Regex NonChatModel =
+            new System.Text.RegularExpressions.Regex(
+                @"(embed|rerank|gte-|bge-|clip|whisper|sensevoice|paraformer|cosyvoice|sambert|\btts\b|\basr\b|\bvl\b|vision|ocr|wanx|stable-diffusion|sdxl|flux|kling|image|avatar|speech|voice|audio)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static bool IsCloudTextModel(string id) { return !NonChatModel.IsMatch(id ?? ""); }
+
         /// <summary>The ids out of an OpenAI-compatible /models body: {"data":[{"id":"..."}]}.</summary>
         private static List<string> ParseModelIds(string body)
         {
@@ -1187,7 +1206,8 @@ namespace GameTranslatorV3
                 {
                     var id = SimpleJson.Get(item, "id");
                     if (string.IsNullOrEmpty(id)) id = SimpleJson.Get(item, "name");
-                    if (!string.IsNullOrEmpty(id) && !outList.Contains(id)) outList.Add(id);
+                    if (string.IsNullOrEmpty(id) || !IsCloudTextModel(id)) continue;
+                    if (!outList.Contains(id)) outList.Add(id);
                 }
             }
             catch { }
@@ -3370,10 +3390,14 @@ namespace GameTranslatorV3
                 if (txtApiModels.Text.Trim().Length > 0) _settings.ApiModels = txtApiModels.Text.Trim();
                 if (chkApi.Checked)
                 {
-                    // The dropdown may hold an API model name (or the placeholder when the list could not
-                    // be fetched): only accept a real name.
+                    // The dropdown may hold an API model name, the "not fetched" placeholder, or a local
+                    // .gguf name (when cloud mode was just switched on) — only a real cloud name is taken.
                     var sel = Convert.ToString(_cmbModel.SelectedItem) ?? "";
-                    if (sel.Length > 0 && !sel.StartsWith("（")) _settings.ApiModel = sel;
+                    if (sel.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+                        MessageBox.Show(this, "云端模式不能用本地 gguf 文件（" + sel + "）。\n" +
+                            "请在「刷新列表」后从云端模型里选一个；模型名仍保留为 " + _settings.ApiModel + "。",
+                            "这不是云端模型", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    else if (sel.Length > 0 && !sel.StartsWith("（")) _settings.ApiModel = sel;
                     if (!Settings.SaveApiKey(_root, txtApiKey.Text.Trim()))
                         MessageBox.Show(this, "API Key 没能写入 api-config.json（目录只读？）。\n" +
                             "也可以改用环境变量 GT_API_KEY。", "密钥未保存", MessageBoxButtons.OK, MessageBoxIcon.Warning);
