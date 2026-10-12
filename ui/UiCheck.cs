@@ -101,10 +101,10 @@ namespace GameTranslatorV3.UiCheck
                 Assert(lv.Columns.Count >= 5, "列表列数=" + lv.Columns.Count);
                 Console.WriteLine("        列: " + string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)));
                 // The progress column reads as a workload, not as a verdict: 已译条数/需译条数.
-                var progCol = lv.Columns.Cast<ColumnHeader>().FirstOrDefault(c => c.Text == "翻译进度");
+                // StartsWith, because a sorted column carries an arrow after its name (see SortByColumn).
+                var progCol = lv.Columns.Cast<ColumnHeader>().FirstOrDefault(c => c.Text.StartsWith("翻译进度", StringComparison.Ordinal));
                 Assert(progCol != null, "第三列是「翻译进度」（实际：" +
-                    string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)) + "）");
-                Console.WriteLine("        行数: " + lv.VirtualListSize + "（来自 work\\games-cache.json）");
+                    string.Join(" | ", lv.Columns.Cast<ColumnHeader>().Select(c => c.Text)) + "）");                Console.WriteLine("        行数: " + lv.VirtualListSize + "（来自 work\\games-cache.json）");
                 Assert(lv.VirtualListSize >= 0, "行数已发布：" + lv.VirtualListSize);
                 // The columns must fit inside the list, or the last one is the text that gets cut —
                 // which is exactly what 「未汉化（已还原）（有原…」 was.
@@ -358,6 +358,62 @@ namespace GameTranslatorV3.UiCheck
                     Assert(Convert.ToInt32(count.Invoke(null, new object[] { tmp + ".missing" })) == 0, "文件不存在为 0（不抛异常）");
                     try { File.Delete(tmp); } catch { }
                 }
+                // Clicking a header sorts by that column, and the model is sorted (the list order is also the
+                // batch order). The whole library is sorted here and put back afterwards, exactly as it was.
+                var sortBy = typeof(MainForm).GetMethod("SortByColumn", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(sortBy != null, "找到 SortByColumn（点列标题排序）");
+                var sortList = Flatten(form).OfType<ListView>().FirstOrDefault(x => x.VirtualMode);
+                var sortGamesField = typeof(MainForm).GetField("_games", BindingFlags.NonPublic | BindingFlags.Instance);
+                var sortGames = sortGamesField == null ? null : (System.Collections.IList)sortGamesField.GetValue(form);
+                Assert(sortList != null && sortGames != null, "取到列表与 _games 用于排序检查");
+                if (sortBy != null && sortList != null && sortGames != null && sortGames.Count > 1)
+                {
+                    var before = sortGames.Cast<object>().ToArray();
+                    // Read the fields by reflection: GameItem is a private nested class, so the C# dynamic
+                    // binder cannot see its members ("object does not contain a definition for Name").
+                    Func<object, string> field = (o) => o == null ? "" : Convert.ToString(o.GetType().GetField("Name").GetValue(o));
+                    Func<object, string> statusOf = (o) => o == null ? "" : Convert.ToString(o.GetType().GetField("Status").GetValue(o));
+                    try
+                    {
+                        sortBy.Invoke(form, new object[] { 1 });          // 游戏, ascending
+                        var namesAsc = sortGames.Cast<object>().Select(field).ToList();
+                        bool okAsc = true;
+                        for (int i = 1; i < namesAsc.Count; i++)
+                            if (string.Compare(namesAsc[i - 1], namesAsc[i], StringComparison.CurrentCultureIgnoreCase) > 0) { okAsc = false; break; }
+                        Assert(okAsc, "按「游戏」升序：名字有序（" + namesAsc.Count + " 行）");
+                        Assert(sortList.Columns[1].Text.EndsWith("▲", StringComparison.Ordinal), "升序列头带 ▲（" + sortList.Columns[1].Text + "）");
+
+                        sortBy.Invoke(form, new object[] { 1 });          // same column again = descending
+                        var namesDesc = sortGames.Cast<object>().Select(field).ToList();
+                        bool okDesc = true;
+                        for (int i = 1; i < namesDesc.Count; i++)
+                            if (string.Compare(namesDesc[i - 1], namesDesc[i], StringComparison.CurrentCultureIgnoreCase) < 0) { okDesc = false; break; }
+                        Assert(okDesc, "再点一次反向：降序");
+                        Assert(sortList.Columns[1].Text.EndsWith("▼", StringComparison.Ordinal), "降序列头带 ▼（" + sortList.Columns[1].Text + "）");
+
+                        sortBy.Invoke(form, new object[] { 4 });          // 状态: groups the same states together
+                        var states = sortGames.Cast<object>().Select(statusOf).ToList();
+                        bool okState = true;
+                        for (int i = 1; i < states.Count; i++)
+                            if (string.Compare(states[i - 1], states[i], StringComparison.CurrentCultureIgnoreCase) > 0) { okState = false; break; }
+                        Assert(okState, "按「状态」排序：同类相邻");
+                        Assert(sortList.Columns[4].Text.EndsWith("▲", StringComparison.Ordinal) && sortList.Columns[1].Text == "游戏",
+                            "箭头只留在当前排序列：" + string.Join(" | ", sortList.Columns.Cast<ColumnHeader>().Select(c => c.Text)));
+                    }
+                    finally
+                    {
+                        sortGames.Clear();
+                        foreach (var o in before) sortGames.Add(o);
+                        var refresh2 = typeof(MainForm).GetMethod("RefreshList", BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (refresh2 != null) refresh2.Invoke(form, null);
+                        // Sorting saves the cache (the saved order follows the shown order), so the restore has
+                        // to be written back too — otherwise running this check would leave games-cache.json in
+                        // whatever order the check happened to sort it into.
+                        var saveCache = typeof(MainForm).GetMethod("SaveGamesCache", BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (saveCache != null) saveCache.Invoke(form, null);
+                    }
+                }
+
                 // A skipped game has no workload, so its cell stays empty rather than showing the stale
                 // extract of a game the pipeline will never queue.
                 var shows = typeof(MainForm).GetMethod("ShowsProgress", BindingFlags.NonPublic | BindingFlags.Static);

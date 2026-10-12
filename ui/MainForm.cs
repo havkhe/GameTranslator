@@ -63,6 +63,9 @@ namespace GameTranslatorV3
         private Button _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnState, _btnSelectAll, _btnClearSel;
         private TextBox _txtSearch;
         private Label _lblSearchInfo;
+        /// <summary>Which column the list is sorted by (1 name / 2 engine / 3 progress / 4 state; 0 = as scanned).</summary>
+        private int _sortColumn;
+        private bool _sortAscending = true;
         /// <summary>
         /// The games the list is currently SHOWING — all of them, or the ones matching the search box.
         ///
@@ -357,6 +360,9 @@ namespace GameTranslatorV3
             _list.Columns.Add("引擎", 60);           // 2  engine
             _list.Columns.Add("翻译进度", 150);       // 3  已译条数 / 需译条数
             _list.Columns.Add("状态", 170);          // 4  state
+            // Clicking a header sorts by that column; clicking it again reverses. The arrow is what says
+            // which column and which way, and it is also what makes the ability discoverable at all.
+            _list.ColumnClick += (s, e) => SortByColumn(e.Column);
             // Columns are sized to the pane, not to the window. At 200 % display scaling the pane is
             // narrower than the fixed widths added up, and that is what cut the 状态 text off
             // ("未汉化（已还原）（有原…"). The name column absorbs whatever is left, and 条目 moved
@@ -390,10 +396,11 @@ namespace GameTranslatorV3
             // 任务队列 / 工具栏 / 游戏列表 / 任务控制 / 日志.
             pane.Controls.Add(BuildTaskControlBox());
             pane.Controls.Add(BuildLogBox());
-            // Added before the toolbar, so docking (resolved backwards through the collection) puts the
-            // search strip below it and directly above the list.
-            pane.Controls.Add(BuildSearchRow());
             pane.Controls.Add(bar);
+            // Added after the toolbar, so docking (resolved backwards from the end of the collection) puts
+            // the search strip ABOVE it: 搜索 / 任务队列 / 工具栏 / 游戏列表. The first row of the pane is
+            // where the eye lands, and the row below the toolbar was reported as "I cannot find it".
+            pane.Controls.Add(BuildSearchRow());
             // Added last, and docking is resolved from the end of the collection backwards, so this
             // reserves the top strip above the toolbar: 任务队列 / 工具栏 / 游戏列表.
             pane.Controls.Add(BuildQueuePane());
@@ -774,10 +781,12 @@ namespace GameTranslatorV3
         /// </summary>
         private Control BuildSearchRow()
         {
-            var row = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(6, 3, 6, 1) };
-            var lbl = new Label { Text = "搜索游戏名：", Dock = DockStyle.Left, Width = 82, TextAlign = ContentAlignment.MiddleLeft };
-            var clear = new Button { Text = "清除", Dock = DockStyle.Right, Width = 54, Height = 24 };
-            _lblSearchInfo = new Label { Dock = DockStyle.Right, Width = 110, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray, Text = "" };
+            // The first row of the left pane, and bordered, because the row below the toolbar was reported
+            // as "I cannot find it": it is the thing you reach for most when the list is long.
+            var row = new Panel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(6, 4, 6, 3), BorderStyle = BorderStyle.FixedSingle };
+            var lbl = new Label { Text = "搜索游戏名：", Dock = DockStyle.Left, Width = 86, TextAlign = ContentAlignment.MiddleLeft };
+            var clear = new Button { Text = "清除", Dock = DockStyle.Right, Width = 56, Height = 24 };
+            _lblSearchInfo = new Label { Dock = DockStyle.Right, Width = 118, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray, Text = "" };
             _txtSearch = new TextBox { Dock = DockStyle.Fill, Name = "txtSearch" };
             _txtSearch.TextChanged += (s, e) => RefreshList();
             _txtSearch.KeyDown += (s, e) =>
@@ -792,7 +801,7 @@ namespace GameTranslatorV3
             row.Controls.Add(lbl);
             Tip(_txtSearch, "按游戏名筛选列表：不区分大小写，空格分隔多个词则要求全部命中（例如「ntr sisters」）。\n" +
                 "只影响显示，不影响要跑哪些游戏 —— 跑的是所有已勾选的游戏，计数行会一直显示勾选总数。\n" +
-                "Esc 或「清除」清空。");
+                "Esc 或「清除」清空。\n点击列标题可以排序（再点一次反向）。");
             return row;
         }
 
@@ -1906,6 +1915,8 @@ namespace GameTranslatorV3
             // Progress is read from the pipeline's report file once per game, not per repaint.
             public bool ProgressLoaded;
             public string ProgressText = "";
+            /// <summary>The two counts behind ProgressText, kept for sorting the 翻译进度 column (-1 = unknown).</summary>
+            public int ProgressDone = -1, ProgressEntries = -1;
             public string ProgressDetail = "";
             public string Exe;
             public string OpenDir;
@@ -2001,6 +2012,75 @@ namespace GameTranslatorV3
         /// In virtual mode there are no rows to add: the control asks for a row when it needs one, so
         /// this only publishes the count. Nothing here can block, whatever the library size.
         /// </summary>
+        /// <summary>
+        /// Sort the list by a clicked column, reversing when the same one is clicked again.
+        ///
+        /// The MODEL is sorted, not a display copy: the order of the list is also the order a batch runs its
+        /// games in, and having the visible order and the run order disagree would be a trap. Sorting is
+        /// safe during a run — the batch took a snapshot of the ticked games when it started (see
+        /// StartTranslation), so reordering the list cannot change what is being translated. A sort only
+        /// reorders the same GameItem objects, so ticks, cached progress and the queue (which stores paths,
+        /// not items) all follow their game.
+        ///
+        /// 翻译进度 sorts by how much of the workload is done (done/entries), with the games that have no
+        /// figures at all last: an unknown ratio is not 0 %, and putting it at the top would bury the
+        /// finished games under the ones nobody has run yet.
+        /// </summary>
+        private void SortByColumn(int column)
+        {
+            if (column < 1 || column > 4) return;              // 选 column carries no order
+            if (_sortColumn == column) _sortAscending = !_sortAscending;
+            else { _sortColumn = column; _sortAscending = true; }
+
+            // The progress column needs both numbers for every game, and reading them means touching the
+            // work folder; do it once here (the reads are cached on the item, so a second sort is free).
+            if (column == 3) foreach (var g in _games) ReadProgress(g);
+
+            Comparison<GameItem> cmp;
+            switch (column)
+            {
+                case 2: cmp = (a, b) => string.Compare(a.Engine ?? "", b.Engine ?? "", StringComparison.OrdinalIgnoreCase); break;
+                case 3:
+                    cmp = (a, b) =>
+                    {
+                        double ra = a.ProgressEntries > 0 ? (double)a.ProgressDone / a.ProgressEntries : -1;
+                        double rb = b.ProgressEntries > 0 ? (double)b.ProgressDone / b.ProgressEntries : -1;
+                        int c = ra.CompareTo(rb);
+                        if (c != 0) return c;
+                        // Same ratio (or both unknown): the bigger job first, so the sort is still stable
+                        // and meaningful — 0/9946 is a different thing from 0/190.
+                        return b.ProgressEntries.CompareTo(a.ProgressEntries);
+                    };
+                    break;
+                case 4: cmp = (a, b) => string.Compare(a.Status ?? "", b.Status ?? "", StringComparison.CurrentCultureIgnoreCase); break;
+                default: cmp = (a, b) => string.Compare(a.Name ?? "", b.Name ?? "", StringComparison.CurrentCultureIgnoreCase); break;
+            }
+
+            _games.Sort((a, b) => _sortAscending ? cmp(a, b) : cmp(b, a));
+            UpdateSortArrows();
+            SaveGamesCache();                                   // the saved order follows the shown order
+            RefreshList();
+        }
+
+        /// <summary>Put ▲/▼ on the sorted column's header and clear it from the others.</summary>
+        private void UpdateSortArrows()
+        {
+            if (_list == null || _list.Columns.Count < 5) return;
+            var plain = new[] { "选", "游戏", "引擎", "翻译进度", "状态" };
+            for (int i = 1; i < 5; i++)
+                _list.Columns[i].Text = _sortColumn == i
+                    ? plain[i] + (_sortAscending ? " ▲" : " ▼")
+                    : plain[i];
+        }
+
+        /// <summary>The order the list is in, for the status line.</summary>
+        private string SortDescription()
+        {
+            var names = new[] { "", "游戏", "引擎", "翻译进度", "状态" };
+            if (_sortColumn < 1 || _sortColumn > 4) return "";
+            return "；排序：" + names[_sortColumn] + (_sortAscending ? " ▲" : " ▼");
+        }
+
         private void RefreshList()
         {
             // The search box shortens what is shown, not what exists: _view is what the list draws from.
@@ -2059,6 +2139,8 @@ namespace GameTranslatorV3
                 int entries, done;
                 if (TryReadProgress(g, out entries, out done) && entries > 0)
                 {
+                    g.ProgressEntries = entries;
+                    g.ProgressDone = done;
                     g.ProgressText = FormatProgress(done, entries);
                     var pct = done >= entries ? "100%" : done <= 0 ? "0%" : (int)Math.Round(100.0 * done / entries) + "%";
                     // 已译条数 comes from the last COMPLETED run's report; 需译条数 is whichever file was
@@ -2306,6 +2388,7 @@ namespace GameTranslatorV3
                 var filtering = _txtSearch != null && _txtSearch.Text.Trim().Length > 0;
                 _status.Text = "共 " + _games.Count + " 个游戏，已勾选 " + checkedGames + " 个" +
                     (filtering ? "（筛选显示 " + _view.Count + " 个）" : "") +
+                    SortDescription() +
                     (_running ? "（翻译进行中：取消勾选的游戏不会被开始）" : "");
             }
             _btnStartSel.Enabled = !_running && checkedGames > 0;
