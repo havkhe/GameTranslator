@@ -12,6 +12,20 @@ const R = require("./rules.js");
 
 const normText = (s) => String(s).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/^\s+|\s+$/g, "");
 
+/**
+ * Read a game JSON file, tolerating a leading UTF-8 BOM.
+ *
+ * RPG Maker MV writes some of its own data files with a BOM — measured: `System.json` in one game starts
+ * with EF BB BF — and `JSON.parse` refuses that ("Unexpected token '\uFEFF'"). Every read site used to
+ * swallow the error and skip the file, so `System.json` was neither extracted nor patched: the entire
+ * terms block (menu labels, the messages for 保存/读档, the names of skill types and elements) stayed
+ * English while the run reported "244 strings missing" with no reason given. One reader, used by the
+ * extractor and the patcher both, so the two can never disagree about which files are readable.
+ */
+function readJsonFile(full) {
+  return JSON.parse(fs.readFileSync(full, "utf8").replace(/^\uFEFF/, ""));
+}
+
 /** Refuse to queue text that is already Chinese (kanji-dominant, no kana). */
 function isChineseLike(s) {
   const t = String(s);
@@ -53,7 +67,7 @@ function languageProfile(dir) {
   };
 
   for (const f of listJsonFiles(dir)) {
-    try { walk(JSON.parse(fs.readFileSync(f.full, "utf8"))); } catch (e) { }
+    try { walk(readJsonFile(f.full)); } catch (e) { }
   }
   return { total, kana, chinese, other, chineseLike: total > 0 && chinese / total > 0.5 };
 }
@@ -177,7 +191,7 @@ function extract(pristineDir, liveDir, opts) {
     const accept = opts && typeof opts.accept === "function" ? opts.accept : undefined;
     for (const f of listJsonFiles(root, accept)) {
       let data;
-      try { data = JSON.parse(fs.readFileSync(f.full, "utf8")); } catch (e) { continue; }
+      try { data = readJsonFile(f.full); } catch (e) { continue; }
       const base = path.basename(f.rel).toLowerCase();
       // System.json terms live in one place and are display text.
       if (base === "system.json" && data && data.terms && typeof data.terms === "object") {
@@ -197,4 +211,4 @@ function extract(pristineDir, liveDir, opts) {
   return { entries, skipped };
 }
 
-module.exports = { extract, isChineseLike, normText, listJsonFiles, languageProfile };
+module.exports = { extract, isChineseLike, normText, listJsonFiles, languageProfile, readJsonFile };

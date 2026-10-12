@@ -89,14 +89,21 @@ function findBackup(game) {
 const profile = (dir) => { try { return mv.languageProfile(dir); } catch (e) { return null; } };
 
 /**
- * Kana vs Han over the raw bytes of a folder.
+ * Kana vs Han vs Latin over the raw bytes of a folder.
  *
  * For VX/VX Ace (`.rvdata2`, Ruby Marshal) and for an unpacked archive there is no JSON to parse, and
  * loading them needs the portable Ruby. Counting the UTF-8 characters directly is crude but enough to
  * tell "this data is Japanese" from "this data is Chinese", which is the question the state answers.
+ *
+ * `latin` is counted for a different reason: the CJK share is a ratio INSIDE the CJK characters, so on a
+ * game whose text is English it is a ratio of a handful of characters against 6.4 million Latin letters
+ * and means nothing at all. Measured on Detective Girl of the Steam City (an English release): 6,605 kana
+ * and 13,531 Han against 6,413,398 Latin letters — kana was 32.8 % of the CJK and the game was read as
+ * 自带中文 (the pristine copy judged Chinese), so the window skipped a game whose 13,900 dialogue lines
+ * were 100 % English. `latinPct` is what says "this folder is not CJK text at all".
  */
 function byteProfile(dir, exts) {
-  let kana = 0, han = 0, files = 0;
+  let kana = 0, han = 0, latin = 0, files = 0;
   let names;
   try { names = fs.readdirSync(dir); } catch (e) { return null; }
   for (const n of names) {
@@ -109,18 +116,30 @@ function byteProfile(dir, exts) {
       const cp = ch.codePointAt(0);
       if ((cp >= 0x3040 && cp <= 0x30ff) || cp === 0x30fc) kana++;
       else if (cp >= 0x3400 && cp <= 0x9fff) han++;
+      else if ((cp >= 65 && cp <= 90) || (cp >= 97 && cp <= 122)) latin++;
     }
   }
   const total = kana + han;
-  return { files: files, kana: kana, han: han, total: total, kanaPct: total ? 100 * kana / total : 0 };
+  const letters = total + latin;
+  return { files: files, kana: kana, han: han, latin: latin, total: total, letters: letters,
+    kanaPct: total ? 100 * kana / total : 0,
+    latinPct: letters ? 100 * latin / letters : 0 };
 }
 
 // A data folder that is already Chinese still carries kana in names and sfx; raw Japanese sits at
 // 60-80 % of all CJK characters, a translated one at 5-30 %. These are the byte-scale cut-offs
 // (measured: 莉娜的金钱探索's archive 22.1 % and still Chinese; びたみんクエスト 73 % and raw Japanese).
 const CN_MAX = 35, JP_MIN = 55;
+// A folder that is this much Latin letters is not CJK text, whatever its kana-vs-Han ratio says.
+const LATIN_TEXT_PCT = 70;
+// Below this many CJK characters the ratio is noise rather than a measurement: 22 characters can sit at
+// any percentage at all. Both the 自带中文 verdict and its refutation rest on the ratio, so both need it.
+const CJK_MIN = 200;
 const RV_EXT = /\.(rvdata2?|rxdata)$/i;
 const JSON_EXT = /\.json$/i;
+
+/** Is this folder English/another Latin script, rather than Chinese or Japanese? */
+function isLatinText(p) { return !!p && p.letters >= CJK_MIN && p.latinPct >= LATIN_TEXT_PCT; }
 
 /** Did this project leave artifacts for the game (its cache or a run report)? */
 function ourArtifacts(gameDir) {
@@ -234,19 +253,34 @@ function verdictFromBytes(game, live, backup, kind, archiveName, looseProf, viaA
   const label = kind === "packed"
     ? (archiveName + (viaArchive === false ? " 归档读不出，按松散数据判断" : " 归档"))
     : (kind === "vxace" ? "VX Ace" : "VX");
-  if (!live || live.total < 20) {
+  if (!live || live.letters < 20) {
     return { State: "无文本", Note: label + "（数据读不出来或文本太少）", Evidence: {} };
   }
   const ours = ourArtifacts(game);
   const bakPct = backup && backup.total > 20 ? backup.kanaPct : null;
   const evidence = { liveKanaPct: +live.kanaPct.toFixed(1), backupKanaPct: bakPct === null ? null : +bakPct.toFixed(1),
-    liveHan: live.han, liveKana: live.kana, engine: label, ours: ours };
+    liveHan: live.han, liveKana: live.kana, liveLatin: live.latin, liveLatinPct: +live.latinPct.toFixed(1),
+    engine: label, ours: ours };
   const loose = looseProf && looseProf.total > 20
     ? "；同目录松散数据假名 " + looseProf.kanaPct.toFixed(1) + "%（游戏读的是归档）" : "";
   const fig = "假名占比 " + (bakPct === null ? "" : bakPct.toFixed(1) + "% → ") + live.kanaPct.toFixed(1) + "%" + loose;
 
+  // An English (or other Latin-script) release. The kana figure above is a ratio inside the CJK characters
+  // only, so on a game whose text is Latin it compares a minority against millions of letters and cannot
+  // say anything about Chinese. Measured on Detective Girl of the Steam City: 99.7 % of its letters are
+  // Latin while that ratio read 32.8 % — under CN_MAX — which declared the pristine copy Chinese and made
+  // the window skip a game whose 13,900 dialogue lines were 100 % English. Latin is decisive on its own.
+  if (isLatinText(live)) {
+    return { State: "未汉化（英文原版）", Note: label + "，原版是英文（拉丁字母 " + live.latinPct.toFixed(1) +
+      "%，" + live.latin + " 个；" + fig + " 只是 CJK 内部比例）" + (ours ? "，本工具曾处理过" : ""), Evidence: evidence };
+  }
+
   // The pristine copy is Chinese too: the game shipped Chinese (a 汉化组 release, or the folder claim).
-  if (bakPct !== null && bakPct < CN_MAX) return { State: "自带中文", Note: label + "，原版数据即中文（" + fig + "）", Evidence: evidence };
+  // Guarded by the same CJK-population test as everything else here: a handful of CJK characters cannot
+  // decide that a game is Chinese.
+  if (bakPct !== null && bakPct < CN_MAX && !isLatinText(backup)) {
+    return { State: "自带中文", Note: label + "，原版数据即中文（" + fig + "）", Evidence: evidence };
+  }
   if (live.kanaPct < CN_MAX) {
     if (ours) return { State: "已汉化（本项目）", Note: label + "，" + fig, Evidence: evidence };
     return { State: "已是中文", Note: label + "，外置汉化（非本项目所译；" + fig + "）", Evidence: evidence };
@@ -313,15 +347,23 @@ function classify(game) {  const loc = locate(game);
   // （正确反映"游戏本身是中文的"）。
   const liveBytes = byteProfile(loc.live, JSON_EXT);
   const bakBytesDirs = backup ? byteProfile(backup, JSON_EXT) : null;
-  const liveBytePct = liveBytes && liveBytes.total > 20 ? liveBytes.kanaPct : null;
-  const bakBytePct = bakBytesDirs && bakBytesDirs.total > 20 ? bakBytesDirs.kanaPct : null;
+  // CJK_MIN, not 20: see the byteProfile note. A ratio computed from 22 characters is noise, and both the
+  // 自带中文 verdict and its refutation are ratios.
+  const liveBytePct = liveBytes && liveBytes.total >= CJK_MIN ? liveBytes.kanaPct : null;
+  const bakBytePct = bakBytesDirs && bakBytesDirs.total >= CJK_MIN ? bakBytesDirs.kanaPct : null;
   const evidence = {
     liveStrings: live ? live.total : 0, liveKanaPct: +liveKanaPct.toFixed(1),
     backup: !!backup, backupStrings: bakProfile ? bakProfile.total : 0, backupKanaPct: +bakKanaPct.toFixed(1),
     dialogue, text2frame: t2f, locales, dataDiff, installedByUs: installed,
+    liveLatinPct: liveBytes ? +liveBytes.latinPct.toFixed(1) : null,
+    backupLatinPct: bakBytesDirs ? +bakBytesDirs.latinPct.toFixed(1) : null,
   };
 
-  if (!live || live.total < 20) return { State: "无文本", Note: "可译文本太少", Evidence: evidence };
+  if (!live || live.total < 20) {
+    // Not 无文本 if the folder is full of Latin letters: that is an English release, and "too little text"
+    // would be a lie about a game with millions of characters in it.
+    if (!isLatinText(liveBytes)) return { State: "无文本", Note: "可译文本太少", Evidence: evidence };
+  }
 
   // A Chinese release ships Chinese in its own locale folder while ja-JP stays Japanese, so that is
   // checked before anything is said about the ja-JP text.
@@ -330,10 +372,26 @@ function classify(game) {  const loc = locate(game);
   const jaLocale = locales.find((l) => /^ja/i.test(l.locale));
   const jaIsChinese = jaLocale && jaLocale.strings > 20 && jaLocale.kana < jaLocale.strings * 0.1;
 
+  // An English (or other Latin-script) release, same reasoning as in verdictFromBytes: the kana share of
+  // the CJK characters is a ratio of a minority, not a statement about the language of the game. Checked
+  // after the locale folder (that is direct evidence of a Chinese release) and before every CJK-ratio
+  // verdict, so no ratio can call an English game Chinese.
+  // (Placed after `ours` below, which its note needs.)
+
   // Whose work it is: a pristine backup we made, or a cache/report we left. The 一键还原汉化前.bat
   // scripts do NOT count — those ship with other people's 汉化 releases (御光盟国汉化组 ships one), so
   // counting them credited their work to this project.
   const ours = !!backup || ourArtifacts(game);
+
+  // An English (or other Latin-script) release. Same reasoning as in verdictFromBytes, and the reason this
+  // redesign exists: two of the branches below decide "Chinese" from a kana-vs-Han ratio, which on a game
+  // written in Latin letters compares a minority (20k CJK) against millions of letters and produced
+  // 自带中文 for a game with 13,900 untranslated English dialogue lines. This is checked after the locale
+  // folder, which is direct evidence of a Chinese release, and before every ratio-based verdict.
+  if (isLatinText(liveBytes)) {
+    return { State: "未汉化（英文原版）", Note: "原版是英文（拉丁字母 " + liveBytes.latinPct.toFixed(1) +
+      "%，" + liveBytes.latin + " 个；假名占比只是 CJK 内部比例）" + (ours ? "，本工具曾处理过" : ""), Evidence: evidence };
+  }
   // "对话" only when the figure really comes from the dialogue folder; otherwise it is the share of
   // translatable data fields that became Chinese.
   const noteFrom = (pct, fromDialogue) => {
@@ -376,7 +434,12 @@ function classify(game) {  const loc = locate(game);
   // The pristine copy is Chinese too: the game arrived translated (a 汉化 release, or the folder's
   // own claim), so nothing here was translated by this project and nothing needs translating.
   // Measured over ALL characters, not over the strings the extractor targets — see liveBytes above.
-  if (bakBytePct !== null && bakBytePct < CN_MAX) {
+  //
+  // The `!isLatinText(backup)` guard is the one that matters: on an English release the pristine copy
+  // carries millions of Latin letters and a kana share of 32.8 %, which is under CN_MAX and used to be
+  // read as "the original was already Chinese". That verdict is what made the window skip Detective Girl
+  // of the Steam City — 13,900 dialogue lines, all English, never translated.
+  if (bakBytePct !== null && bakBytePct < CN_MAX && !isLatinText(bakBytesDirs)) {
     return { State: "自带中文", Note: note("原版数据即中文（假名占比 " + bakBytePct.toFixed(1) + "% → " + (liveBytePct === null ? "?" : liveBytePct.toFixed(1)) + "%）"
       + (installed ? "，含其他汉化组的还原脚本" : "")), Evidence: evidence };
   }
@@ -384,7 +447,7 @@ function classify(game) {  const loc = locate(game);
   // an external translation (MTool etc.) or a 汉化 patch applied before this tool ever saw the game.
   // The state name stays exactly 已是中文 because the window skips those games (Skip = 已是中文/自带中文);
   // "外置汉化" belongs in the note, not in the name.
-  if (liveBytePct !== null && liveBytePct < CN_MAX && !ours && !backup) {
+  if (liveBytePct !== null && liveBytePct < CN_MAX && !ours && !backup && !isLatinText(liveBytes)) {
     return { State: "已是中文", Note: note("外置汉化（非本项目所译；假名占比 " + liveBytePct.toFixed(1) + "%）"
       + (installed ? "，含汉化组的还原脚本" : "")), Evidence: evidence };
   }
@@ -418,64 +481,72 @@ function classify(game) {  const loc = locate(game);
   return { State: "未汉化", Note: note(mismatch), Evidence: evidence };
 }
 
+// The measurement and the verdicts are exported so they can be tested on synthetic data
+// (tools/unit-game-state.js) — the whole point of the redesign is a judgement about language, and that has
+// to be checkable without a library of games on disk. The CLI below only runs when this file IS the entry
+// point, so requiring it in a test does not start a scan of J:\game.
+module.exports = { classify, byteProfile, isLatinText, verdictFromBytes, locate, findBackup, CN_MAX, JP_MIN, LATIN_TEXT_PCT, CJK_MIN };
+
 // --- which games -------------------------------------------------------------------------
-const games = [];
-if (cacheFile) {
-  try {
-    const arr = JSON.parse(A.readTextInside(path.dirname(path.resolve(cacheFile)), path.basename(cacheFile)));
-    for (const g of arr) {
-      const d = g.Dir || g.dir;
-      if (d) games.push(d);
-    }
-  } catch (e) { console.error("读取 games-cache.json 失败：" + e.message); }
-}
-if (!games.length) {
-  if (!roots.length) roots = ["J:\\game"];
-  const looksLikeGame = (dir) => {
-    for (const rel of ["data", "Data", path.join("www", "data")]) {
-      const d = path.join(dir, rel);
-      try { if (fs.readdirSync(d).some((f) => /\.(json|rvdata2?|rxdata)$/i.test(f))) return true; } catch (e) { }
-    }
-    return ["Game.rgss3a", "Game.rgss2a", "Game.rgssad"].some((n) => fs.existsSync(path.join(dir, n)));
-  };
-  const scan = (dir, remaining) => {
-    if (remaining < 0) return;
-    if (looksLikeGame(dir)) { games.push(dir); return; }
-    let ents;
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-    for (const e of ents) {
-      if (!e.isDirectory() || /^\$RECYCLE|^System Volume Information/i.test(e.name)) continue;
-      scan(path.join(dir, e.name), remaining - 1);
-    }
-  };
-  for (const r of roots) scan(path.resolve(r), depth);
-}
+if (require.main === module) {
+  const games = [];
+  if (cacheFile) {
+    try {
+      const arr = JSON.parse(A.readTextInside(path.dirname(path.resolve(cacheFile)), path.basename(cacheFile)));
+      for (const g of arr) {
+        const d = g.Dir || g.dir;
+        if (d) games.push(d);
+      }
+    } catch (e) { console.error("读取 games-cache.json 失败：" + e.message); }
+  }
+  if (!games.length) {
+    if (!roots.length) roots = ["J:\\game"];
+    const looksLikeGame = (dir) => {
+      for (const rel of ["data", "Data", path.join("www", "data")]) {
+        const d = path.join(dir, rel);
+        try { if (fs.readdirSync(d).some((f) => /\.(json|rvdata2?|rxdata)$/i.test(f))) return true; } catch (e) { }
+      }
+      return ["Game.rgss3a", "Game.rgss2a", "Game.rgssad"].some((n) => fs.existsSync(path.join(dir, n)));
+    };
+    const scan = (dir, remaining) => {
+      if (remaining < 0) return;
+      if (looksLikeGame(dir)) { games.push(dir); return; }
+      let ents;
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const e of ents) {
+        if (!e.isDirectory() || /^\$RECYCLE|^System Volume Information/i.test(e.name)) continue;
+        scan(path.join(dir, e.name), remaining - 1);
+      }
+    };
+    for (const r of roots) scan(path.resolve(r), depth);
+  }
 
-// --- classify ---------------------------------------------------------------------------
-const rows = [];
-for (let i = 0; i < games.length; i++) {
-  const g = games[i];
-  let r;
-  try { r = classify(g); } catch (e) { r = { State: "读取失败", Note: String(e.message).slice(0, 60), Evidence: {} }; }
-  rows.push({ Dir: g, Name: path.basename(g), State: r.State, Note: r.Note, Evidence: r.Evidence });
-  if (!quiet) console.log(String(i + 1).padStart(3) + "/" + games.length + "  " + r.State.padEnd(14) +
-    (r.Note || "").padEnd(22) + path.basename(g).slice(0, 60));
-}
+  // --- classify ---------------------------------------------------------------------------
+  const rows = [];
+  for (let i = 0; i < games.length; i++) {
+    const g = games[i];
+    let r;
+    try { r = classify(g); } catch (e) { r = { State: "读取失败", Note: String(e.message).slice(0, 60), Evidence: {} }; }
+    rows.push({ Dir: g, Name: path.basename(g), State: r.State, Note: r.Note, Evidence: r.Evidence });
+    if (!quiet) console.log(String(i + 1).padStart(3) + "/" + games.length + "  " + r.State.padEnd(14) +
+      (r.Note || "").padEnd(22) + path.basename(g).slice(0, 60));
+  }
 
-const tally = new Map();
-for (const r of rows) tally.set(r.State, (tally.get(r.State) || 0) + 1);
-console.log("");
-console.log("=== 汇总（" + rows.length + " 个游戏）===");
-for (const [k, n] of [...tally.entries()].sort((a, b) => b[1] - a[1])) console.log("  " + String(n).padStart(4) + "  " + k);
+  const tally = new Map();
+  for (const r of rows) tally.set(r.State, (tally.get(r.State) || 0) + 1);
+  console.log("");
+  console.log("=== 汇总（" + rows.length + " 个游戏）===");
+  for (const [k, n] of [...tally.entries()].sort((a, b) => b[1] - a[1])) console.log("  " + String(n).padStart(4) + "  " + k);
 
-if (outDir && outName) {
-  try {
-    const target = A.writeJsonInside(outDir, outName, JSON.stringify(rows, null, 1));
-    console.log("");
-    console.log("已写出 " + target);
-  } catch (e) {
-    // One readable line rather than a Node stack trace in the UI log.
-    console.error("写出状态文件失败：" + (e && e.message ? e.message : e));
-    process.exit(1);
+  if (outDir && outName) {
+    try {
+      const target = A.writeJsonInside(outDir, outName, JSON.stringify(rows, null, 1));
+      console.log("");
+      console.log("已写出 " + target);
+    } catch (e) {
+      // One readable line rather than a Node stack trace in the UI log.
+      console.error("写出状态文件失败：" + (e && e.message ? e.message : e));
+      process.exit(1);
+    }
   }
 }

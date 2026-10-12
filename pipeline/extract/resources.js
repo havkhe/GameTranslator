@@ -16,6 +16,10 @@
 const fs = require("fs");
 const path = require("path");
 const R = require("./rules.js");
+// One BOM-tolerant reader for game JSON, shared with the MV extractor and patcher: a file that starts
+// with a UTF-8 BOM is valid to RPG Maker and to people, but JSON.parse refuses it, and the old code
+// skipped the whole file without saying so.
+const { readJsonFile } = require("./mv.js");
 
 /**
  * Locale folder holding the Japanese source text.
@@ -78,7 +82,7 @@ function extract(pristineData, liveData) {
     for (const f of dialogueFiles(dataDir)) {
       files++;
       let data;
-      try { data = JSON.parse(fs.readFileSync(f.full, "utf8")); } catch (e) { continue; }
+      try { data = readJsonFile(f.full); } catch (e) { continue; }
       for (const [key, value] of Object.entries(data)) {
         if (META_KEYS.has(key)) continue;
         if (typeof value !== "string") continue;
@@ -128,7 +132,8 @@ function patch(liveData, cache, reportFile) {
   for (const f of dialogueFiles(liveData)) {
     let data;
     const raw = fs.readFileSync(f.full, "utf8");
-    try { data = JSON.parse(raw); } catch (e) { continue; }
+    const bom = raw.charCodeAt(0) === 0xFEFF;
+    try { data = JSON.parse(bom ? raw.slice(1) : raw); } catch (e) { continue; }
     let changed = 0;
     for (const [key, value] of Object.entries(data)) {
       if (META_KEYS.has(key) || typeof value !== "string" || !value.trim()) continue;
@@ -152,7 +157,7 @@ function patch(liveData, cache, reportFile) {
       // Keep the file's own formatting: these are pretty-printed with 4 spaces, and matching that
       // keeps a diff readable if one is ever taken.
       const indent = /\n\s{4}"/.test(raw) ? 4 : (/\n\s{2}"/.test(raw) ? 2 : 0);
-      fs.writeFileSync(f.full, JSON.stringify(data, null, indent), "utf8");
+      fs.writeFileSync(f.full, (bom ? "\uFEFF" : "") + JSON.stringify(data, null, indent), "utf8");
       files.push(f.rel + " (" + changed + ")");
     }
   }

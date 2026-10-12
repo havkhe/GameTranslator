@@ -85,6 +85,32 @@ try {
   // Three, not four: the MZ speaker and the two dialogue bodies. The face name is deliberately not one
   // of them even though the cache holds a translation for it.
   check("three values were replaced, never the face name", rep.replaced === 3, "replaced=" + rep.replaced);
+
+  // RPG Maker MV writes some of its own files with a leading UTF-8 BOM. JSON.parse throws on that, and
+  // every read site used to swallow the error and skip the file — so System.json, which holds the whole
+  // terms block (menu labels, the messages for saving and loading, the names of skill types and elements),
+  // was neither extracted nor patched, and the patch report listed its strings as "missing" with no reason.
+  console.log("");
+  console.log("=== a data file with a UTF-8 BOM (System.json) ===");
+  const bomDir = under(TMP, "bom", "data");
+  fs.mkdirSync(bomDir, { recursive: true });
+  const terms = { messages: ["\u30bb\u30fc\u30d6", "\u30ed\u30fc\u30c9"], basic: ["\u653b\u6483", "\u9632\u5fa1"] };
+  fs.writeFileSync(under(bomDir, "System.json"), "\uFEFF" + JSON.stringify({ terms: terms, title: "Game", locale: "en_US" }), "utf8");
+
+  const bomEntries = mv.extract(bomDir, bomDir).entries.map((e) => e.text);
+  check("BOM 之后的内容照样被抽出（4 个词条）", bomEntries.length === 4, "entries=" + JSON.stringify(bomEntries));
+  check("消息表被抽出", bomEntries.includes("\u30bb\u30fc\u30d6"), JSON.stringify(bomEntries));
+
+  const termMap = new Map([["\u30bb\u30fc\u30d6", "\u5b58\u6863"], ["\u30ed\u30fc\u30c9", "\u8bfb\u6863"],
+    ["\u653b\u6483", "\u653b\u51fb"], ["\u9632\u5fa1", "\u9632\u5fa1\u529b"]]);
+  const bomRep = patch.patch(bomDir, { lookup: (t) => termMap.get(t) }, null);
+  const bomRaw = fs.readFileSync(under(bomDir, "System.json"), "utf8");
+  check("没有把该文件报成解析错误", bomRep.errors.length === 0, JSON.stringify(bomRep.errors));
+  check("四个词条都被替换", bomRep.replaced === 4, "replaced=" + bomRep.replaced);
+  check("回写后 BOM 仍然在", bomRaw.charCodeAt(0) === 0xFEFF);
+  const bomDoc = JSON.parse(bomRaw.slice(1));
+  check("消息表已变中文", bomDoc.terms.messages[0] === "\u5b58\u6863", JSON.stringify(bomDoc.terms.messages));
+  check("其它字段原样保留", bomDoc.title === "Game" && bomDoc.locale === "en_US");
 } finally {
   fs.rmSync(TMP, { recursive: true, force: true });
 }

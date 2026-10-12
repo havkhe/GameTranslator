@@ -98,7 +98,10 @@ function patch(liveDir, cache, reportFile, opts) {
   for (const f of listJsonFiles(liveDir, accept)) {
     let data;
     const raw = fs.readFileSync(f.full, "utf8");
-    try { data = JSON.parse(raw); } catch (e) {
+    // A leading UTF-8 BOM (measured on System.json) used to make this throw, and the file was skipped
+    // entirely — the whole terms block stayed untranslated while the report only said "parse: ...".
+    const bom = raw.charCodeAt(0) === 0xFEFF;
+    try { data = JSON.parse(bom ? raw.slice(1) : raw); } catch (e) {
       errors.push({ file: f.rel, err: "parse: " + e.message });
       continue;
     }
@@ -115,9 +118,10 @@ function patch(liveDir, cache, reportFile, opts) {
     const after = JSON.stringify(data);
     if (after !== before) {
       // Keep the original formatting (indentation) so the file still looks edit-made
-      // by the game's own tooling; RPG Maker writes pretty-printed JSON.
+      // by the game's own tooling; RPG Maker writes pretty-printed JSON — and put the BOM back if the
+      // file had one, so the encoding the game's own loader was written against does not change.
       const indent = /\n\s+"/.test(raw) ? 2 : 0;
-      fs.writeFileSync(f.full, JSON.stringify(data, null, indent), "utf8");
+      fs.writeFileSync(f.full, (bom ? "\uFEFF" : "") + JSON.stringify(data, null, indent), "utf8");
       fileStats.push({ file: f.rel, changed: true });
     }
   }
