@@ -6,10 +6,13 @@
 
 ## 一、下载 / Downloads
 
-- `GameTranslatorV3-v3.1.zip` —— **解压即用**：主程序 + 管线 + 工具 + 内置 node 与 ruby + Vulkan 版 llama.cpp。
-  - RTX 20 / 30 / 40 / 50 系想换成 CUDA 版，解压后在该目录执行一次：
-    `.\download-llama.ps1 -Dest .\llama -Backend cuda12`
-  - 其它（含 6 GB 显存级别的老卡）用包内自带的 Vulkan 版即可：`.\download-llama.ps1 -Dest .\llama -Backend vulkan`
+- `GameTranslatorV3-v3.1.zip` —— **解压即用**：主程序 + 管线 + 工具 + 内置 node 与 ruby
+  + **两套 llama.cpp 后端并存**（`llama\vulkan\` 与 `llama\cuda12\`），切换只改一个设置、离线即可。
+  - 默认用 **Vulkan**：GTX 10 系等老 NVIDIA、AMD、Intel 都跑得动。
+  - RTX 20 / 30 / 40 / 50 系想更快就用 **CUDA 12**（`llama\cuda12\`，自带 CUDA 运行库）：
+    程序里点模型行最右的「后端：…」按钮，或双击根目录 `切换显卡后端.bat`。
+  - 想更新到更新的 llama.cpp 版本：`.\download-llama.ps1 -Dest .\llama\vulkan -Backend vulkan`
+    （CUDA 版同理，`-Backend cuda12`）。
 - 模型 `.gguf` 需另行取得（放到设置里的「模型目录」）。4B 级（如 Galtransl-v4）质量更好，1.8B 级（如 Hy-MT2）显存占用更小。
 - 覆盖升级即可，**设置与密钥不会丢**：`ui-settings.ini`、`api-config.json`、`work\` 都不在包里。
 
@@ -34,6 +37,9 @@
   不再因为"没有散装 data 目录"而显示不出引擎；只有归档、启动器不叫 `Game.exe` 的游戏也能扫到。
 - **被打包进 exe 的游戏会被识别并说明**：状态写 `未汉化（已打包）`、引擎写 `MV（已打包，需先解包）`，
   去翻它会在日志里明确告诉你数据在哪个 exe 里、需要先解包——而不是沉默。见下面「已知限制」。
+- **显卡后端可一键切换（Vulkan ↔ CUDA 12）**：包里两套并存，切的是一个设置而不是重下一遍。
+  窗口里「后端：…」按钮即切（空闲时自动重启模型服务、翻译进行中会拒绝以免打断整批），根目录
+  `切换显卡后端.bat` 是不开窗口时的同一入口；状态行会写明当前后端，所选那套缺失时会提示并可一键下载。
 
 ## 三、修掉的问题
 
@@ -51,6 +57,11 @@
   「扫描文件夹」扫完不保存也不刷新。
 - **速度与进度**：tok/s、条/分、完成时间预计、本局已译条数——v3.0 已经做了，但当时界面上还是旧式显示；
   这次一并确认生效并写进了检查项。
+- **`download-llama.ps1` 下不动东西（两个真 bug）**：① 它问的是 `releases/latest`，而 llama.cpp 的 latest
+  现在是**不含任何二进制**的 `v0.6.0`，于是直接报 `Not Found`——改为自动挑**最新一个真正带 Windows 包的
+  `bXXXX` 版本**（实测当前为 `b11571`），也可用 `-Tag` 手动钉住；② CUDA 版**还需要单独的 CUDA 运行库**
+  （`cudart-llama-bin-win-*.zip`，内含 `cudart64*.dll`），老脚本只下主包，即使 RTX 机器装出来也**起不来**——
+  现在两个包一起下，缺 `cudart64*.dll` 时会明确报错。
 
 ## 四、已知限制（如实写在文档里）
 

@@ -71,6 +71,73 @@ namespace GameTranslatorV3.Core
         /// </summary>
         public string LlamaDir = "";
 
+        /// <summary>
+        /// Which llama.cpp build to run: "vulkan" or "cuda12".
+        ///
+        /// The runtime ships both and they live in their own folders under the llama directory
+        /// (<c>llama\vulkan\llama-server.exe</c>, <c>llama\cuda12\llama-server.exe</c>), so switching is a
+        /// setting and a server restart — no download, and it works offline. The two builds use the same
+        /// executable and command line; only the ggml backend DLL beside it differs, which is the whole
+        /// reason the choice exists: CUDA needs sm_70+ (Volta/Turing and newer), while Vulkan also drives
+        /// older NVIDIA cards (Pascal, e.g. GTX 10 series), AMD and Intel GPUs.
+        /// </summary>
+        public string LlamaBackend = "vulkan";
+
+        /// <summary>The backends the runtime can switch between.</summary>
+        public static readonly string[] KnownBackends = new string[] { "vulkan", "cuda12" };
+
+        /// <summary>Keeps a backend name usable: anything unknown falls back to vulkan.</summary>
+        public static string NormalizeBackend(string name)
+        {
+            var n = (name ?? "").Trim().ToLowerInvariant();
+            foreach (var b in KnownBackends) if (b == n) return b;
+            return "vulkan";
+        }
+
+        /// <summary>
+        /// The folder the selected backend's server lives in.
+        ///
+        /// Prefers <c>&lt;LlamaDir&gt;\&lt;backend&gt;\</c>. When that is absent it falls back to the llama
+        /// directory itself, which is what a single-build install looks like (and what every install made
+        /// before the backends were split into folders looks like), so an existing setup keeps working
+        /// untouched.
+        /// </summary>
+        public string LlamaDirFor(string backend)
+        {
+            var root = LlamaDir ?? "";
+            if (root.Length == 0) return "";
+            var sub = Path.Combine(root, NormalizeBackend(backend));
+            try { if (File.Exists(Path.Combine(sub, "llama-server.exe"))) return sub; } catch { }
+            return root;
+        }
+
+        /// <summary>
+        /// Which backend the build in a folder actually is, from the ggml backend DLL it carries. Empty when
+        /// neither is present (a CPU-only build, or a folder that is not a llama install).
+        /// </summary>
+        public static string DetectBackendIn(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return "";
+                if (Directory.GetFiles(dir, "ggml-cuda*.dll").Length > 0) return "cuda12";
+                if (Directory.GetFiles(dir, "ggml-vulkan.dll").Length > 0) return "vulkan";
+            } catch { }
+            return "";
+        }
+
+        /// <summary>Does the install carry both builds, i.e. can the backend actually be switched?</summary>
+        public bool BothBackendsInstalled()
+        {
+            try
+            {
+                foreach (var b in KnownBackends)
+                    if (!File.Exists(Path.Combine(LlamaDir ?? "", b, "llama-server.exe"))) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
         /// <summary>The llama folder beside this install. Nothing points at another install.</summary>
         public static string DefaultLlamaDir(string root)
         {
@@ -243,6 +310,7 @@ namespace GameTranslatorV3.Core
                         case "Port": if (int.TryParse(val, out n) && n > 0 && n < 65536) s.Port = n; break;
                         case "PipelineJs": if (val.Length > 0) s.PipelineJs = val; break;
                         case "LlamaDir": if (val.Length > 0) s.LlamaDir = val; break;
+                        case "LlamaBackend": s.LlamaBackend = NormalizeBackend(val); break;
                         case "ScanRoots": s.ScanRootsRaw = val; break;
                         case "ScanDepth": if (int.TryParse(val, out n) && n >= 1 && n <= 12) s.ScanDepth = n; break;
                         case "MaxAttempts": if (int.TryParse(val, out n) && n >= 1 && n <= 10) s.MaxAttempts = n; break;
@@ -279,6 +347,7 @@ namespace GameTranslatorV3.Core
                 sb.AppendLine("PromptFile=" + PromptFile);
                 sb.AppendLine("PipelineJs=" + PipelineJs);
                 sb.AppendLine("LlamaDir=" + LlamaDir);
+                sb.AppendLine("LlamaBackend=" + LlamaBackend);
                 sb.AppendLine("ScanRoots=" + ScanRootsRaw);
                 sb.AppendLine("ScanDepth=" + ScanDepth.ToString(CultureInfo.InvariantCulture));
                 sb.AppendLine("Port=" + Port.ToString(CultureInfo.InvariantCulture));

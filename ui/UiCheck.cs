@@ -627,6 +627,88 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 后端切换（Vulkan / CUDA 12）===");
+            {
+                var settingsField = typeof(MainForm).GetField("_settings", BindingFlags.NonPublic | BindingFlags.Instance);
+                var settings = settingsField == null ? null : settingsField.GetValue(form) as GameTranslatorV3.Core.Settings;
+                Assert(settings != null, "取到设置对象（后端）");
+
+                // The value in the ini may only be one of the two backends.
+                Assert(GameTranslatorV3.Core.Settings.NormalizeBackend("cuda12") == "cuda12", "cuda12 合法");
+                Assert(GameTranslatorV3.Core.Settings.NormalizeBackend("Vulkan") == "vulkan", "vulkan 大小写不敏感");
+                Assert(GameTranslatorV3.Core.Settings.NormalizeBackend("nonsense") == "vulkan", "未知值回落到 vulkan");
+                Assert(GameTranslatorV3.Core.Settings.NormalizeBackend("") == "vulkan", "空值回落到 vulkan");
+
+                // Where the chosen backend's server lives: subfolder when it exists, else the llama dir itself
+                // (a single-build install must keep working untouched).
+                var tmp = Path.Combine(Path.GetTempPath(), "gt-uicheck-backend-" + Environment.TickCount.ToString());
+                try
+                {
+                    Directory.CreateDirectory(Path.Combine(tmp, "vulkan"));
+                    Directory.CreateDirectory(Path.Combine(tmp, "cuda12"));
+                    File.WriteAllText(Path.Combine(tmp, "vulkan", "llama-server.exe"), "x");
+                    File.WriteAllText(Path.Combine(tmp, "vulkan", "ggml-vulkan.dll"), "x");
+                    File.WriteAllText(Path.Combine(tmp, "cuda12", "ggml-cuda.dll"), "x");
+                    var s2 = new GameTranslatorV3.Core.Settings();
+                    s2.LlamaDir = tmp;
+                    Assert(s2.LlamaDirFor("vulkan").EndsWith("vulkan", StringComparison.OrdinalIgnoreCase),
+                        "两个后端都在时按所选后端取子目录：" + s2.LlamaDirFor("vulkan"));
+                    Assert(s2.LlamaDirFor("cuda12") == tmp,
+                        "该后端没有 llama-server.exe 时回落到 llama 根目录：" + s2.LlamaDirFor("cuda12"));
+                    Assert(GameTranslatorV3.Core.Settings.DetectBackendIn(Path.Combine(tmp, "vulkan")) == "vulkan",
+                        "从 ggml DLL 认出 vulkan");
+                    Assert(GameTranslatorV3.Core.Settings.DetectBackendIn(Path.Combine(tmp, "cuda12")) == "cuda12",
+                        "从 ggml DLL 认出 cuda12");
+                    Assert(!s2.BothBackendsInstalled(), "只有一个后端就绪时 BothBackendsInstalled=false");
+                    File.WriteAllText(Path.Combine(tmp, "cuda12", "llama-server.exe"), "x");
+                    Assert(s2.BothBackendsInstalled(), "两个都就绪时 BothBackendsInstalled=true");
+                }
+                finally { try { Directory.Delete(tmp, true); } catch { } }
+
+                // The control itself, and the rule that its label carries the current value.
+                var backendBtn = all.OfType<Button>().FirstOrDefault(b => b.Text != null && b.Text.StartsWith("后端：", StringComparison.Ordinal));
+                Assert(backendBtn != null, "模型行里有「后端：…」按钮");
+                var toggle = typeof(MainForm).GetMethod("ToggleLlamaBackend", BindingFlags.NonPublic | BindingFlags.Instance);
+                var upd = typeof(MainForm).GetMethod("UpdateBackendButton", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(toggle != null && upd != null, "找到 ToggleLlamaBackend / UpdateBackendButton（反射）");
+                if (settings != null && backendBtn != null && upd != null)
+                {
+                    var old = settings.LlamaBackend;
+                    settings.LlamaBackend = "cuda12";
+                    upd.Invoke(form, null);
+                    Assert(backendBtn.Text == "后端：CUDA 12", "按钮显示所选后端：" + backendBtn.Text);
+                    settings.LlamaBackend = "vulkan";
+                    upd.Invoke(form, null);
+                    Assert(backendBtn.Text == "后端：Vulkan", "切回 Vulkan：" + backendBtn.Text);
+                    settings.LlamaBackend = old;
+                    upd.Invoke(form, null);
+                    // The state row carries the backend too. UpdateProgressPanel is what writes that row, and
+                    // this check runs without a message loop, so the timer that would normally call it never
+                    // fires here — call it directly first.
+                    var updPanel = typeof(MainForm).GetMethod("UpdateProgressPanel", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (updPanel != null) updPanel.Invoke(form, null);
+                    var stateRow = Flatten(form).OfType<Label>().FirstOrDefault(l => (l.Text ?? "").Contains("后端："));
+                    Assert(stateRow != null, "状态行里有「后端：」（实际没有；检查 UpdateProgressPanel 是否写入了后端）");
+                }
+                // Settings round-trip for the new key.
+                var iniTmp = Path.Combine(Path.GetTempPath(), "gt-uicheck-backendini-" + Environment.TickCount.ToString());
+                try
+                {
+                    Directory.CreateDirectory(iniTmp);
+                    var s3 = new GameTranslatorV3.Core.Settings();
+                    s3.WorkDir = iniTmp;
+                    s3.LlamaDir = iniTmp;
+                    s3.LlamaBackend = "cuda12";
+                    s3.Save(iniTmp);
+                    var raw = File.ReadAllText(Path.Combine(iniTmp, "ui-settings.ini"), System.Text.Encoding.UTF8);
+                    Assert(raw.Contains("LlamaBackend=cuda12"), "设置文件写出 LlamaBackend=cuda12");
+                    var back = GameTranslatorV3.Core.Settings.Load(iniTmp);
+                    Assert(back.LlamaBackend == "cuda12", "读回来一致：" + back.LlamaBackend);
+                }
+                finally { try { Directory.Delete(iniTmp, true); } catch { } }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 翻译对照面板（实时显示原文/译文）===");
             {
                 var srcBox = FindControl(form, "pairSrc") as TextBox;

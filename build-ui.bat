@@ -16,6 +16,7 @@ if not exist "%CSC%" (
 echo Compiling with %CSC%
 "%CSC%" /nologo /target:winexe /out:"%ROOT%GameTranslatorV3.exe" ^
   /reference:System.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Core.dll ^
+  /reference:System.IO.Compression.FileSystem.dll /reference:System.Management.dll ^
   "%ROOT%ui\Program.cs" "%ROOT%ui\MainForm.cs" "%ROOT%ui\PipelineRunner.cs" "%ROOT%ui\Settings.cs" "%ROOT%ui\SimpleJson.cs" "%ROOT%ui\Startup.cs"
 if errorlevel 1 (
   echo [ERROR] build failed

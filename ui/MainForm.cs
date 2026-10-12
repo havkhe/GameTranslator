@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,7 +45,9 @@ namespace GameTranslatorV3
         /// itself would be recorded as a choice (and, in cloud mode, would rewrite ApiModel on every refresh).
         /// </summary>
         private bool _suppressModelChange;
-        private Button _btnModelRefresh, _btnModelStart, _btnModelStop;
+        private Button _btnModelRefresh, _btnModelStart, _btnModelStop, _btnBackend;
+        /// <summary>True while a backend download runs, so a second click cannot start another.</summary>
+        private volatile bool _backendDownloading;
         private Label _lblModelState;
 
         // detailed progress panel
@@ -947,13 +950,19 @@ namespace GameTranslatorV3
             _btnModelRefresh = MakeButton("刷新列表", (s, e) => RefreshModels());
             _btnModelStart = MakeButton("启动模型", (s, e) => StartLlama());
             _btnModelStop = MakeButton("停止模型", (s, e) => StopLlama());
+            // The backend switch: one click flips vulkan <-> cuda12, saves it, and restarts the server when it
+            // is idle so the change is real rather than a setting nobody notices. The label carries the
+            // current value, so the state is readable without opening anything.
+            _btnBackend = MakeButton("后端：Vulkan", (s, e) => ToggleLlamaBackend());
             _lblModelState = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Text = "状态：未知", ForeColor = Color.DimGray };
             modelRow.Controls.Add(_cmbModel, 0, 0);
             modelRow.Controls.Add(_btnModelRefresh, 1, 0);
             modelRow.Controls.Add(_lblModelState, 0, 1);
             modelRow.Controls.Add(_btnModelStart, 1, 1);
             modelRow.Controls.Add(_btnModelStop, 1, 2);
+            modelRow.Controls.Add(_btnBackend, 1, 3);
             modelBox.Controls.Add(modelRow);
+            UpdateBackendButton();
 
             // ---- detailed progress ----------------------------------------------
             // 180 px rather than 210: nine short rows plus two bars need about that, and every pixel
@@ -1694,8 +1703,30 @@ namespace GameTranslatorV3
             }
 
             _lblCounts.Text = "请求：" + _reqCount + "    失败：" + _failCount + "    跳过：" + _skipCount;
-            _lblModelNow.Text = "模型：" + (_settings.Model ?? "—") + "    端口：" + _settings.Port;
+            // The backend is part of "which model is running": the same exe with a different ggml DLL beside it
+            // is a different device (CUDA needs sm_70+, Vulkan also drives Pascal/AMD/Intel).
+            _lblModelNow.Text = "模型：" + (_settings.Model ?? "—") + "    端口：" + _settings.Port +
+                "    后端：" + _settings.LlamaBackend + BackendHealthNote();
             UpdateModelState();
+        }
+
+        /// <summary>
+        /// "（实际：cuda12）" when the installed build is not the one selected, or a "未安装" hint when that
+        /// backend's folder is missing — so the row never claims a device that is not actually loaded.
+        /// </summary>
+        private string BackendHealthNote()
+        {
+            try
+            {
+                var dir = _settings.LlamaDirFor(_settings.LlamaBackend);
+                if (string.IsNullOrEmpty(dir) || !File.Exists(Path.Combine(dir, "llama-server.exe")))
+                    return "（未安装：llama\\" + _settings.LlamaBackend + " 里没有 llama-server.exe）";
+                var installed = GameTranslatorV3.Core.Settings.DetectBackendIn(dir);
+                if (installed.Length > 0 && installed != _settings.LlamaBackend)
+                    return "（实际：" + installed + "）";
+            }
+            catch { }
+            return "";
         }
 
         /// <summary>
@@ -3641,15 +3672,18 @@ namespace GameTranslatorV3
             }
             try
             {
-                string exe = Path.Combine(_settings.LlamaDir ?? "", "llama-server.exe");
+                // The selected backend's folder: llama\vulkan\ or llama\cuda12\ when the install carries both,
+                // otherwise the llama directory itself (a single-build install keeps working untouched).
+                string exe = Path.Combine(_settings.LlamaDirFor(_settings.LlamaBackend), "llama-server.exe");
                 if (!File.Exists(exe))
                 {
                     // Name the path that was tried and what to do about it; "not found" on
                     // its own gives the user nothing to act on.
                     MessageBox.Show(this,
-                        "未找到 llama-server.exe。\n\n" +
+                        "未找到 llama-server.exe（后端：" + _settings.LlamaBackend + "）。\n\n" +
                         "查找位置：\n" + exe + "\n\n" +
-                        "请在「设置…」里把「llama 目录」指向包含 llama-server.exe 的文件夹。\n\n" +
+                        "请在「设置…」里把「llama 目录」指向包含 llama-server.exe 的文件夹；\n" +
+                        "或者换成已经安装的那个后端（模型行最右边的「后端」按钮）。\n\n" +
                         "本程序自带的运行目录：\n" + Path.Combine(_root, "llama"),
                         "未找到模型运行程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
@@ -3823,6 +3857,255 @@ namespace GameTranslatorV3
         }
 
         // -------------------------------------------------------------- settings -----
+
+        /// <summary>
+        /// Switch the llama.cpp backend (vulkan &lt;-&gt; cuda12), save it, and restart the server so the change
+        /// is actually in effect.
+        ///
+        /// The two builds live in their own folders under the llama directory, so this is a setting plus a
+        /// restart — no download when both are present, and it works offline. A missing folder offers to
+        /// fetch it. Refused while a translation runs, because the server is mid-batch and stopping it would
+        /// fail the current game.
+        /// </summary>
+        private void ToggleLlamaBackend()
+        {
+            var current = GameTranslatorV3.Core.Settings.NormalizeBackend(_settings.LlamaBackend);
+            var next = current == "vulkan" ? "cuda12" : "vulkan";
+            if (_running)
+            {
+                MessageBox.Show(this, "翻译进行中不能切换后端：服务器正在为当前这一局服务，停掉它会让这一局整批失败。\n" +
+                    "请先「暂停」或等这一局结束。", "翻译进行中", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var dir = _settings.LlamaDirFor(next);
+            bool installed = !string.IsNullOrEmpty(dir) && File.Exists(Path.Combine(dir, "llama-server.exe"));
+            if (!installed)
+            {
+                var r0 = MessageBox.Show(this,
+                    "llama\\" + next + " 里没有 llama-server.exe，这个后端还没下载。\n\n" +
+                    "要现在下载吗？（需要联网，约一百多 MB；下载期间界面可以继续用）\n\n" +
+                    "下载完成后回到这里再点一次这个按钮就会切过去。",
+                    "该后端未安装", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (r0 == DialogResult.Yes) DownloadBackendAsync(next);
+                return;
+            }
+            if (next == "cuda12" && !CudaLooksUsable())
+            {
+                // A CUDA 12 build carries kernels for sm_70+ only; on an older card llama.cpp quietly falls
+                // back to the CPU, which looks like "the GPU did nothing". Say it before switching.
+                var r1 = MessageBox.Show(this,
+                    "没检测到算力 sm_70 及以上的 NVIDIA 显卡（GTX 10 系等 Pascal 显卡不在支持范围内）。\n\n" +
+                    "切到 CUDA 版后 llama.cpp 会静默退回 CPU 运行，翻译会明显变慢。\n" +
+                    "确定要切换吗？",
+                    "这张显卡可能用不了 CUDA 版", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (r1 != DialogResult.Yes) return;
+            }
+
+            _settings.LlamaBackend = next;
+            _settings.Save(_root);
+            UpdateBackendButton();
+            AppendLog("模型后端已切换为 " + next + "（" + dir + "）");
+
+            // Restart so the switch takes effect; nothing is translating (checked above), so this is safe.
+            if (IsPortOpen())
+            {
+                StopLlama(true);
+                StartLlama();
+            }
+            else
+            {
+                AppendLog("点「启动模型」后按 " + next + " 运行。");
+            }
+            UpdateProgressPanel();
+        }
+
+        /// <summary>The button's own label is the current backend, so nothing else is needed to read it.</summary>
+        private void UpdateBackendButton()
+        {
+            if (_btnBackend == null) return;
+            var b = GameTranslatorV3.Core.Settings.NormalizeBackend(_settings.LlamaBackend);
+            _btnBackend.Text = "后端：" + (b == "cuda12" ? "CUDA 12" : "Vulkan");
+            var installed = GameTranslatorV3.Core.Settings.DetectBackendIn(_settings.LlamaDirFor(b));
+            Tip(_btnBackend, "点一下切换 llama.cpp 的运行后端（Vulkan ↔ CUDA 12），有服务在跑时会自动重启它。\n" +
+                "Vulkan：GTX 10 系等老 NVIDIA、AMD、Intel 都能用；CUDA 12：需要 sm_70 及以上（RTX 20 系起）。\n" +
+                "两套分别放在 llama\\vulkan 与 llama\\cuda12；缺哪个就用这个按钮下载。" +
+                (installed.Length > 0 ? "\n所选后端的目录里实际是：" + installed : "\n所选后端的目录里没有 ggml 后端 DLL。"));
+        }
+
+        /// <summary>Is there an NVIDIA GPU of the generations a CUDA 12 build supports (sm_70+)?</summary>
+        private bool CudaLooksUsable()
+        {
+            try
+            {
+                var q = new System.Management.ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");
+                foreach (System.Management.ManagementBaseObject o in q.Get())
+                {
+                    var name = Convert.ToString(o["Name"]) ?? "";
+                    if (System.Text.RegularExpressions.Regex.IsMatch(name,
+                        @"(RTX\s*(20|30|40|50)\d0|T4\b|A\d{2,4}\b|L4\b|L40\b|H100\b|V100\b|Quadro\s*RTX)",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
+        /// Download one llama.cpp backend into llama\&lt;backend&gt;, in this process.
+        ///
+        /// In-process on purpose: running download-llama.ps1 with a path taken from the settings would be a
+        /// command line built from user input, and it also depended on the machine's PowerShell execution
+        /// policy. This asks the GitHub API for the newest release tag and unzips the matching asset with
+        /// ZipFile. Every URL is https on github.com or api.github.com — nothing else is ever requested.
+        /// </summary>
+        private void DownloadBackendAsync(string backend)
+        {
+            if (_backendDownloading) { AppendLog("已经在下载一个后端了，等它跑完。"); return; }
+            _backendDownloading = true;
+            if (_btnBackend != null) _btnBackend.Enabled = false;
+            var b = GameTranslatorV3.Core.Settings.NormalizeBackend(backend);
+            var root = _settings.LlamaDir ?? "";
+            var dest = Path.Combine(root, b);
+            AppendLog("开始下载 " + b + " 后端 → " + dest);
+
+            System.Threading.Tasks.Task.Factory.StartNew(() =>
+            {
+                string stage = null;
+                try
+                {
+                    var release = FindLlamaRelease(b);
+                    AppendLog("llama.cpp 版本：" + release.tag + "（" + b + "）");
+                    var zip = Path.Combine(Path.GetTempPath(), Path.GetFileName(release.url));
+                    Download(release.url, zip);
+                    AppendLog("下载完成（" + (new FileInfo(zip).Length / 1048576) + " MB），正在解压…");
+                    // Unzip to a staging folder and copy in, so re-downloading over an existing backend works
+                    // (ZipFile.ExtractToDirectory refuses to overwrite).
+                    stage = Path.Combine(Path.GetTempPath(), "gt-llama-" + b + "-" + Environment.TickCount.ToString());
+                    System.IO.Compression.ZipFile.ExtractToDirectory(zip, stage);
+                    // The CUDA build also needs the CUDA runtime (cudart64_*.dll) in the same folder; llama.cpp
+                    // ships it as a separate zip, and without it the build cannot start at all.
+                    if (!string.IsNullOrEmpty(release.extraUrl))
+                    {
+                        var extra = Path.Combine(Path.GetTempPath(), Path.GetFileName(release.extraUrl));
+                        AppendLog("下载 CUDA 运行库…");
+                        Download(release.extraUrl, extra);
+                        System.IO.Compression.ZipFile.ExtractToDirectory(extra, stage);
+                        try { File.Delete(extra); } catch { }
+                    }
+                    Directory.CreateDirectory(dest);
+                    foreach (var f in Directory.GetFiles(stage)) File.Copy(f, Path.Combine(dest, Path.GetFileName(f)), true);
+                    try { File.Delete(zip); } catch { }
+                    if (!File.Exists(Path.Combine(dest, "llama-server.exe")))
+                        throw new Exception("解压后没有找到 llama-server.exe");
+                    if (b == "cuda12" && Directory.GetFiles(dest, "cudart64*.dll").Length == 0)
+                        throw new Exception("CUDART_MISSING");
+                    AppendLog("✔ " + b + " 后端已就绪：" + dest + "（再点一次「后端」按钮即可切换过去）");
+                }
+                catch (Exception ex)
+                {
+                    AppendLog(ex.Message == "CUDART_MISSING"
+                        ? "✘ CUDA 后端已解压，但缺少 cudart64*.dll（CUDA 运行库没有下到）；重试一次即可。"
+                        : "✘ 下载 " + b + " 后端失败：" + ex.Message);
+                }
+                finally
+                {
+                    try { if (stage != null) Directory.Delete(stage, true); } catch { }
+                    _backendDownloading = false;
+                    try
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            if (_btnBackend != null) _btnBackend.Enabled = true;
+                            UpdateBackendButton();
+                            UpdateProgressPanel();
+                        }));
+                    }
+                    catch { }
+                }
+            });
+        }
+
+        /// <summary>A llama.cpp release plus the two zips a backend needs.</summary>
+        private sealed class LlamaRelease { public string tag = ""; public string url = ""; public string extraUrl = ""; }
+
+        /// <summary>
+        /// The newest llama.cpp release that actually carries Windows binaries, and the URLs for this backend.
+        ///
+        /// The releases list has to be scanned rather than using /releases/latest: llama.cpp's semver releases
+        /// (measured: v0.6.0) carry only a nightly-tag pointer, so "latest" has no zips and the download fails
+        /// with a bare WebException. Windows builds live on the bXXXX builds. A CUDA build additionally needs
+        /// the CUDA runtime, published as its own cudart zip — without it the build cannot start.
+        /// </summary>
+        private static LlamaRelease FindLlamaRelease(string backend)
+        {
+            var suffix = backend == "cuda12" ? "cuda-12.4" : "vulkan";
+            var listUrl = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30";
+            GuardGithub(listUrl);
+            string json;
+            using (var wc = new WebClient())
+            {
+                wc.Headers["User-Agent"] = "GameTranslatorV3";
+                wc.Headers["Accept"] = "application/vnd.github+json";
+                json = wc.DownloadString(listUrl);
+            }
+            var want = "bin-win-" + suffix + "-x64.zip";
+            foreach (System.Text.RegularExpressions.Match m in
+                     System.Text.RegularExpressions.Regex.Matches(json, "\"tag_name\"\\s*:\\s*\"(b\\d+)\""))
+            {
+                var tag = m.Groups[1].Value;
+                var main = "llama-" + tag + "-bin-win-" + suffix + "-x64.zip";
+                if (json.IndexOf(main, StringComparison.Ordinal) < 0) continue;   // this build has no such asset
+                var rel = new LlamaRelease();
+                rel.tag = tag;
+                rel.url = "https://github.com/ggml-org/llama.cpp/releases/download/" + tag + "/" + main;
+                if (backend == "cuda12")
+                {
+                    var cudart = "cudart-llama-bin-win-" + suffix + "-x64.zip";
+                    if (json.IndexOf(cudart, StringComparison.Ordinal) >= 0)
+                        rel.extraUrl = "https://github.com/ggml-org/llama.cpp/releases/download/" + tag + "/" + cudart;
+                }
+                GuardGithub(rel.url);
+                if (rel.extraUrl.Length > 0) GuardGithub(rel.extraUrl);
+                return rel;
+            }
+            throw new Exception("没有找到带 Windows 二进制包的 llama.cpp release（该版本没有 " + want + "）");
+        }
+
+        /// <summary>One https GET to a file, with the same host check every request here uses.</summary>
+        private static void Download(string url, string path)
+        {
+            GuardGithub(url);
+            using (var wc = new WebClient())
+            {
+                wc.Headers["User-Agent"] = "GameTranslatorV3";
+                wc.DownloadFile(url, path);
+            }
+        }
+
+        /// <summary>
+        /// Every request this window makes goes to GitHub over https and nowhere else: https only, a fixed
+        /// host allowlist, and literal addresses that are loopback/private/reserved are refused outright.
+        /// </summary>
+        private static void GuardGithub(string url)
+        {
+            var u = new Uri(url);
+            if (u.Scheme != Uri.UriSchemeHttps) throw new Exception("只允许 https：" + url);
+            var host = u.Host.ToLowerInvariant();
+            if (host != "github.com" && host != "api.github.com" && host != "objects.githubusercontent.com")
+                throw new Exception("只允许访问 GitHub：" + host);
+            System.Net.IPAddress ip;
+            if (System.Net.IPAddress.TryParse(host, out ip))
+            {
+                if (System.Net.IPAddress.IsLoopback(ip)) throw new Exception("拒绝回环地址：" + host);
+                var bytes = ip.GetAddressBytes();
+                bool priv = ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                    ? (bytes[0] == 10 || bytes[0] == 127 || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
+                       (bytes[0] == 192 && bytes[1] == 168) || bytes[0] == 169 || bytes[0] >= 224)
+                    : ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal;
+                if (priv) throw new Exception("拒绝内网/保留地址：" + host);
+            }
+        }
 
         /// <summary>
         /// Settings live in a dialog rather than on the page: they are edited rarely and
