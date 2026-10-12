@@ -291,6 +291,10 @@ function ensureDataBackup(engine, gameDir) {
   // A save can be refused to protect an existing cache; report rather than hide it.
   fs.writeFileSync(FAILURES, JSON.stringify(fails, null, 0), "utf8");
   console.log("TRANSLATED", stats.cached, "FAILURES", fails.length, "REQUESTS", stats.requests);
+  if (stats.apiUsage && stats.apiUsage.total > 0) {
+    console.log("API_USAGE", "prompt", stats.apiUsage.prompt, "completion", stats.apiUsage.completion,
+      "total", stats.apiUsage.total, "(" + stats.apiUsage.requests + " 次请求，云端接口上报的真实用量)");
+  }
 
   // The per-game progress file the window's 进度 column reads (MainForm.ReadProgress).
   //
@@ -310,6 +314,9 @@ function ensureDataBackup(engine, gameDir) {
       // unverifiable). A large number here means the model is not complying and the run is splitting
       // hard to stay correct - worth seeing in the report instead of guessing from a low rate.
       alignmentRejects: stats.alignmentRejects || 0,
+      // Cloud mode: the endpoint's own token accounting for this game, so the free quota can be planned
+      // against a measured number instead of a characters-to-tokens guess.
+      apiUsage: stats.apiUsage,
       failures: fails.length,
     }, null, 2), "utf8");
   } catch (e) { /* a missing progress file is cosmetic; never fail the run for it */ }

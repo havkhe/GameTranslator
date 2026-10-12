@@ -46,12 +46,13 @@ function stub(mode) {
       if (req.url.endsWith("/models")) {
         return reply(200, { data: [{ id: "model-a" }, { id: "model-b" }, { id: "model-c" }] });
       }
+      const usage = { prompt_tokens: 120, completion_tokens: 8, total_tokens: 128 };
       if (mode === "quota-first") {
         // The first model is out of free quota; the second answers.
         if (parsed.model === "model-a") {
           return reply(403, { error: { code: "AllocationQuota.FreeTierOnly", message: "The free quota has been exhausted." } });
         }
-        return reply(200, { choices: [{ message: { content: "译文来自 " + parsed.model } }] });
+        return reply(200, { choices: [{ message: { content: "译文来自 " + parsed.model } }], usage: usage });
       }
       if (mode === "quota-all") {
         return reply(403, { error: { code: "AllocationQuota.FreeTierOnly", message: "free quota exhausted" } });
@@ -60,9 +61,9 @@ function stub(mode) {
         if (seen.filter((x) => x.url.endsWith("/chat/completions")).length === 1) {
           return reply(429, { error: { message: "rate limited" } });
         }
-        return reply(200, { choices: [{ message: { content: "限流后成功" } }] });
+        return reply(200, { choices: [{ message: { content: "限流后成功" } }], usage: usage });
       }
-      return reply(200, { choices: [{ message: { content: "ok" } }] });
+      return reply(200, { choices: [{ message: { content: "ok" } }], usage: usage });
     });
   });
   return new Promise((resolve) => {
@@ -144,6 +145,27 @@ globalThis.__gtTestDone = (async () => {
     const out = await c.ask({ port: 1, prompt: "x", maxTokens: 64 });
     check("重试后成功", out, "限流后成功");
     check("模型没被换掉", s.seen.filter((x) => x.url.endsWith("/chat/completions")).every((x) => x.model === "model-a"), true);
+    s.server.close();
+  }
+
+  console.log("");
+  console.log("=== 用量核算（把接口上报的 usage 累加，用于估算额度）===");
+  {
+    const s = await stub("ok");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a",
+      GT_API_BACKOFF_MS: "10",
+    });
+    const before = c.usage();
+    await c.ask({ port: 1, prompt: "1. a", maxTokens: 64 });
+    await c.ask({ port: 1, prompt: "2. b", maxTokens: 64 });
+    const after = c.usage();
+    check("统计到 2 次请求", after.requests - before.requests, 2);
+    check("输入 token 累加", after.prompt - before.prompt, 240);
+    check("输出 token 累加", after.completion - before.completion, 16);
+    check("合计 token 累加", after.total - before.total, 256);
     s.server.close();
   }
 

@@ -16,7 +16,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { ask, waitForServer } = require("./client.js");
+const { ask, waitForServer, usage } = require("./client.js");
 const B = require("./batcher.js");
 const { makeCache, normText } = require("./cache.js");
 
@@ -362,6 +362,9 @@ async function translate(o) {
   // The exact figure for the report: entries the cache now holds, computed once.
   cache.save();
   stats.cached = entries.filter((e) => cache.has(e.text)).length;
+  // Cloud mode: the exact token usage the endpoint reported for this game (local llama-server leaves
+  // this at zero). This is what turns "will the free quota cover it" from an estimate into a number.
+  stats.apiUsage = usage();
   return { cache, stats, fails };
 }
 

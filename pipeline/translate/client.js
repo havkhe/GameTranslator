@@ -59,6 +59,27 @@ function nextModel(ep) {
   return ep.models[apiModelIndex];
 }
 
+/**
+ * Exact token usage the endpoint reported (cloud mode only).
+ *
+ * The offline estimate of "what will this cost" can only assume a characters-to-tokens ratio; a hosted
+ * endpoint returns `usage` on every reply, so after one real run the numbers here are the truth and the
+ * guesswork is over. Resets with the process, and is reported at the end of a run.
+ */
+const apiUsage = { requests: 0, prompt: 0, completion: 0, total: 0 };
+function usage() { return Object.assign({}, apiUsage); }
+function addUsage(j) {
+  const u = j && j.usage;
+  if (!u || typeof u !== "object") return;
+  const p = Number(u.prompt_tokens) || 0, c = Number(u.completion_tokens) || 0;
+  const t = Number(u.total_tokens) || (p + c);
+  if (!p && !c && !t) return;
+  apiUsage.requests++;
+  apiUsage.prompt += p;
+  apiUsage.completion += c;
+  apiUsage.total += t;
+}
+
 /** Does this response body say the free allocation for the model is used up? */
 function isQuotaExhausted(status, body) {
   if (status !== 403 && status !== 429 && status !== 400) return false;
@@ -217,6 +238,7 @@ function ask({ port, prompt, maxTokens, onStall }) {
             try {
               const j = JSON.parse(data);
               if (j.error) return finish(reject, new Error(typeof j.error === "string" ? j.error : JSON.stringify(j.error)));
+              if (isApi) addUsage(j);
               const msg = j.choices && j.choices[0] && j.choices[0].message;
               const text = msg && msg.content;
               if (!text) {
@@ -253,7 +275,7 @@ function ask({ port, prompt, maxTokens, onStall }) {
 }
 
 module.exports = {
-  ask, waitForServer, eraseSlot, endpoint, listModels, isQuotaExhausted,
+  ask, waitForServer, eraseSlot, endpoint, listModels, isQuotaExhausted, usage,
   resetApiModel: function () { apiModelIndex = 0; },
   SYSTEM_PROMPT, DEFAULT_PORT, MAX_OUTPUT_TOKENS, STALL_MS,
 };
