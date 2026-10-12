@@ -1183,14 +1183,16 @@ namespace GameTranslatorV3
         /// synthesis and recognition, image and video generation. None of those can translate a line of
         /// text; leaving them in the dropdown only invites a run that fails on every request. Measured on
         /// the Model Studio catalogue: beside qwen-mt-plus / qwen-plus / qwen-turbo sit text-embedding-v3,
-        /// gte-rerank-v2, qwen-vl-max, cosyvoice-v1, paraformer-realtime-v2, sambert-zhide-v1, wanx-v1.
+        /// gte-rerank-v2, qwen-vl-max, cosyvoice-v1, paraformer-realtime-v2, sambert-zhide-v1, wanx-v1, and
+        /// the speech-to-speech family (qwen3-livetranslate-flash, qwen3.8-omni-flash-realtime,
+        /// qwen3-s2s-flash-realtime) which takes audio and cannot translate text at all.
         ///
         /// Kept in step with NON_CHAT_MODEL in pipeline/translate/client.js, which filters the same list
         /// for the pipeline's own callers.
         /// </summary>
         private static readonly System.Text.RegularExpressions.Regex NonChatModel =
             new System.Text.RegularExpressions.Regex(
-                @"(embed|rerank|gte-|bge-|clip|whisper|sensevoice|paraformer|cosyvoice|sambert|\btts\b|\basr\b|\bvl\b|vision|ocr|wanx|stable-diffusion|sdxl|flux|kling|image|avatar|speech|voice|audio)",
+                @"(embed|rerank|gte-|bge-|clip|whisper|sensevoice|paraformer|cosyvoice|sambert|\btts\b|\basr\b|\bvl\b|vision|ocr|wanx|stable-diffusion|sdxl|flux|kling|image|avatar|speech|voice|audio|realtime|livetranslate|s2s)",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         private static bool IsCloudTextModel(string id) { return !NonChatModel.IsMatch(id ?? ""); }

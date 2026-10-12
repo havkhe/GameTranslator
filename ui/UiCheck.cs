@@ -453,13 +453,16 @@ namespace GameTranslatorV3.UiCheck
                 {
                     var body = "{\"data\":[{\"id\":\"qwen-mt-plus\"},{\"id\":\"qwen-plus\"},{\"id\":\"qwen-vl-max\"}," +
                                "{\"id\":\"text-embedding-v3\"},{\"id\":\"gte-rerank-v2\"},{\"id\":\"cosyvoice-v1\"}," +
-                               "{\"id\":\"wanx-v1\"},{\"id\":\"deepseek-v3\"}]}";
+                               "{\"id\":\"wanx-v1\"},{\"id\":\"qwen3-livetranslate-flash\"},{\"id\":\"qwen3.8-omni-flash-realtime\"}," +
+                               "{\"id\":\"deepseek-v3\"}]}";
                     var ids = parseIds.Invoke(null, new object[] { body }) as List<string>;
                     Assert(ids != null && ids.Count == 3 && ids.Contains("qwen-mt-plus") && ids.Contains("qwen-plus") && ids.Contains("deepseek-v3"),
                         "云端列表只留大语言模型：" + (ids == null ? "null" : string.Join(",", ids.ToArray())));
                     Assert(ids != null && !ids.Contains("qwen-vl-max") && !ids.Contains("text-embedding-v3") &&
                         !ids.Contains("gte-rerank-v2") && !ids.Contains("cosyvoice-v1") && !ids.Contains("wanx-v1"),
                         "视觉 / 向量 / 重排 / 语音 / 图像模型不出现在列表里");
+                    Assert(ids != null && !ids.Contains("qwen3-livetranslate-flash") && !ids.Contains("qwen3.8-omni-flash-realtime"),
+                        "语音对语音（livetranslate / realtime）模型不出现在列表里");
                 }
 
                 // The key lives in its own file (gitignored), never in the settings file or the source.

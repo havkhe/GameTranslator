@@ -12,6 +12,18 @@
 //     request and erases the slot.
 "use strict";
 const http = require("http");
+const https = require("https");
+
+/**
+ * Which module talks to this endpoint.
+ *
+ * A hosted endpoint is virtually always https, and `http.request` against a TLS port is cleartext to a
+ * port that will not speak it: the socket is reset and the client sees "read ECONNRESET" for every single
+ * request. That is what a run looked like while the window's own model list worked — the window fetches
+ * that list itself, in C# with HttpWebRequest, so only the pipeline was affected, and only the pipeline
+ * could not translate anything through the cloud at all.
+ */
+function transportFor(protocol) { return protocol === "http:" ? http : https; }
 
 const DEFAULT_PORT = 18080;
 const STALL_MS = parseInt(process.env.GT_STALL_MS || "45000", 10);
@@ -52,6 +64,12 @@ function endpoint() {
  * the caller retries the same line and the cache keeps everything already translated.
  */
 let apiModelIndex = 0;
+/**
+ * Set once a hosted endpoint has refused the `enable_thinking` parameter (400 NotSupportEnableThinking).
+ * The refusal is a property of that model, so it holds for the whole process and the parameter is left out
+ * of every later request rather than re-tested.
+ */
+let apiThinkFlagRejected = false;
 function currentModel(ep) { return ep.models[Math.min(apiModelIndex, ep.models.length - 1)] || ""; }
 function nextModel(ep) {
   if (apiModelIndex + 1 >= ep.models.length) return null;
@@ -87,17 +105,36 @@ function isQuotaExhausted(status, body) {
 }
 
 /**
- * Does this response say the ENDPOINT does not know that model name?
+ * Does this response say the ENDPOINT cannot serve that model — so the chain should move on?
  *
- * Also a reason to move down the chain rather than to fail: a stale name — measured in a real install,
- * where cloud mode was switched on while the dropdown still held a local .gguf name — would otherwise
- * fail every line of every game. A rejected KEY is different and must fail loudly, so it is not here.
+ * Two shapes, both measured:
+ *   * 404 "Model not exist." — the name is not in that account's catalogue (qwen-mt-turbo on a key that
+ *     does not carry it). Also the shape a stale local .gguf name produces when cloud mode was switched on
+ *     while the dropdown still held a local model: every line of every game would otherwise fail.
+ *   * 400 "InvalidParameter: missing required field: input.target_lang" — a native-format model
+ *     (qwen-mt-uni) that cannot be driven through the chat-completions shape at all.
+ *
+ * A rejected KEY is different and must fail loudly, so any api-key / unauthorized wording is excluded.
+ * Note that "Role must be in [user, assistant]" is deliberately NOT matched: that is fixed in the request
+ * shape (the system role is folded into the user message), not by switching models.
  */
 function isModelUnavailable(status, body) {
   if (status !== 404 && status !== 400) return false;
   const b = String(body || "");
   if (/api[_\s-]?key|unauthor|invalid[_\s-]?token|permission/i.test(b)) return false;
-  return /model|模型/i.test(b) && /(not\s*found|does\s*not\s*exist|unknown|invalid|不支持|不存在|没有|无效)/i.test(b);
+  if (/missing\s+required\s+field\s*:\s*input\./i.test(b)) return true;
+  return /model|模型/i.test(b) && /(not\s*found|not\s*exist|does\s*not\s*exist|unknown|invalid|不支持|不存在|没有|无效)/i.test(b);
+}
+
+/**
+ * Does this response say the model refuses the `enable_thinking` parameter?
+ *
+ * Alibaba documents it as 400 InvalidParameter.NotSupportEnableThinking ("The model xxx does not support
+ * enable_thinking"). Like the model-name case it is a property of the model, not a bad line of text, so the
+ * answer is to drop the parameter and ask again — never to record the entry as a failure.
+ */
+function isThinkFlagRejected(status, body) {
+  return status === 400 && /enable_thinking/i.test(String(body || ""));
 }
 
 /**
@@ -107,13 +144,15 @@ function isModelUnavailable(status, body) {
  * recognition, image and video generators. None of them can translate a line of text, and offering them
  * in the dropdown only invites a failed run — measured on the Model Studio catalogue, where the list
  * beside qwen-mt-plus/qwen-plus/qwen-turbo holds text-embedding-v3, gte-rerank-v2, qwen-vl-max,
- * cosyvoice-v1, paraformer-realtime-v2, sambert-zhide-v1, wanx-v1 and friends.
+ * cosyvoice-v1, paraformer-realtime-v2, sambert-zhide-v1, wanx-v1 and friends. The same probe found the
+ * speech-to-speech family there too (qwen3-livetranslate-flash, qwen3.8-omni-flash-realtime,
+ * qwen3-s2s-flash-realtime), which take audio and cannot translate a line of text either.
  *
  * Kept in step with MainForm.IsCloudTextModel in ui/MainForm.cs (the window filters the same list; it
  * cannot call this file).
  */
 const NON_CHAT_MODEL =
-  /(embed|rerank|gte-|bge-|clip|whisper|sensevoice|paraformer|cosyvoice|sambert|\btts\b|\basr\b|\bvl\b|vision|ocr|wanx|stable-diffusion|sdxl|flux|kling|image|avatar|speech|voice|audio)/i;
+  /(embed|rerank|gte-|bge-|clip|whisper|sensevoice|paraformer|cosyvoice|sambert|\btts\b|\basr\b|\bvl\b|vision|ocr|wanx|stable-diffusion|sdxl|flux|kling|image|avatar|speech|voice|audio|realtime|livetranslate|s2s)/i;
 
 /** Is this model id a text LLM (the only kind this tool can use)? */
 function isTextModel(id) { return !NON_CHAT_MODEL.test(String(id || "")); }
@@ -123,7 +162,7 @@ function listModels({ base, key }, timeoutMs) {
   return new Promise((resolve) => {
     let url;
     try { url = new URL(base + "/models"); } catch (e) { return resolve([]); }
-    const req = http.request({
+    const req = transportFor(url.protocol).request({
       host: url.hostname, port: url.port || 443, path: url.pathname + url.search, method: "GET",
       headers: { Authorization: "Bearer " + key }, timeout: timeoutMs || 15000,
     }, (res) => {
@@ -183,29 +222,45 @@ function ask({ port, prompt, maxTokens, onStall }) {
   const isApi = ep.kind === "api";
   const CLOUD_RETRIES = Math.max(0, parseInt(process.env.GT_API_RETRIES || "4", 10));
   return new Promise((resolve, reject) => {
-    // The model is resolved per attempt, because a spent quota moves the chain on mid-run.
-    const payloadBase = Object.assign({
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.3,
-      top_p: 0.8,
-      frequency_penalty: 0.1,
-      max_tokens: Math.max(64, Math.min(MAX_OUTPUT_TOKENS, maxTokens || MAX_OUTPUT_TOKENS)),
-      stream: false,
-    },
-    // A reasoning model answers inside `reasoning_content` first and can spend the whole token budget
-    // there, leaving `content` empty — measured on Qwen3.5-0.8B: 3,492 characters of "Thinking Process" and
-    // no answer at max_tokens 1024, 16,732 and still none at 4096, finish_reason "length" every time. The
-    // pipeline saw "no content" and recorded a request failure for every entry, so that model translated
-    // nothing at all (0 / 24 long sentences, 29 request-failed).
-    //
-    // Switching the thinking block off makes it answer immediately and cheaply (7 characters in 5 tokens
-    // for the same input). The flag is sent for every LOCAL model because a template that does not define
-    // the variable simply ignores it — Hy-MT2 and Galtransl are unaffected — and GT_NO_THINK=0 drops it.
-    // A hosted endpoint is not llama.cpp and does not take llama.cpp extensions.
-    (!isApi && NO_THINK) ? { chat_template_kwargs: { enable_thinking: false } } : null);
+    // The model is resolved per attempt (a spent quota moves the chain on mid-run), and the body is rebuilt
+    // per attempt too, so a parameter this endpoint refuses can be dropped and the retry picks it up.
+    const payloadFor = () => {
+      const p = {
+        // A hosted endpoint's own translation models reject the system role outright. Measured on Alibaba
+        // Model Studio: qwen-mt-plus / qwen-mt-flash / qwen-mt-lite answer
+        //   400 {"message":"Role must be in [user, assistant].","code":"invalid_parameter_error"}
+        // for a request that carries a system message — and because that is not a "model unknown" answer,
+        // the chain never advanced, so a run whose first model was qwen-mt-plus failed EVERY request
+        // (0 translated, 100% request-failed). Folding the persona line into the user message fixes it for
+        // those models and changes nothing for the rest: qwen-plus / qwen-turbo / qwen-max return the same
+        // translations either way (measured side by side), and it is 5 prompt tokens cheaper.
+        //
+        // The local server keeps the system role: llama.cpp applies the model's own chat template to it.
+        messages: isApi
+          ? [{ role: "user", content: SYSTEM_PROMPT + "\n\n" + prompt }]
+          : [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: prompt }],
+        temperature: 0.3,
+        top_p: 0.8,
+        frequency_penalty: 0.1,
+        max_tokens: Math.max(64, Math.min(MAX_OUTPUT_TOKENS, maxTokens || MAX_OUTPUT_TOKENS)),
+        stream: false,
+      };
+      // A reasoning model answers inside `reasoning_content` first and can spend the whole token budget
+      // there, leaving `content` empty — measured on Qwen3.5-0.8B: 3,492 characters of "Thinking Process" and
+      // no answer at max_tokens 1024, 16,732 and still none at 4096, finish_reason "length" every time. The
+      // pipeline saw "no content" and recorded a request failure for every entry, so that model translated
+      // nothing at all (0 / 24 long sentences, 29 request-failed).
+      //
+      // Local: `chat_template_kwargs` is the llama.cpp switch, sent for every local model because a template
+      // that does not define the variable simply ignores it (Hy-MT2 and Galtransl are unaffected).
+      // Hosted: the equivalent is the top-level `enable_thinking`, sent the same way — and measured as
+      // harmless on the models that do not think (qwen-mt-plus / qwen-plus / qwen-turbo / qwen-max all
+      // answer identically with it). A model that REFUSES the parameter (400 NotSupportEnableThinking) turns
+      // it off for the process instead of failing the line; see the response handler.
+      if (isApi) { if (!apiThinkFlagRejected) p.enable_thinking = false; }
+      else if (NO_THINK) p.chat_template_kwargs = { enable_thinking: false };
+      return p;
+    };
     const modelOf = () => (isApi ? currentModel(ep) : "local");
     let settled = false;
     let stallTimer = null;
@@ -213,20 +268,24 @@ function ask({ port, prompt, maxTokens, onStall }) {
     const finish = (fn, arg) => { if (settled) return; settled = true; if (stallTimer) clearTimeout(stallTimer); fn(arg); };
 
     /** Where the request goes: the local server, or the configured OpenAI-compatible endpoint. */
-    let target;
+    let target, transport;
     if (isApi) {
       let u;
       try { u = new URL(ep.base + "/chat/completions"); } catch (e) { return finish(reject, new Error("bad GT_API_BASE: " + ep.base)); }
+      // TLS for an https endpoint: http.request to a TLS port is reset, which is a request failure on
+      // every line of every game rather than a visible error. See transportFor().
+      transport = transportFor(u.protocol);
       target = { host: u.hostname, port: u.port || (u.protocol === "http:" ? 80 : 443), path: u.pathname + u.search };
     } else {
+      transport = http;
       target = { host: "127.0.0.1", port, path: "/v1/chat/completions" };
     }
 
     const send = () => {
-      const body = JSON.stringify(Object.assign({ model: modelOf() }, payloadBase));
+      const body = JSON.stringify(Object.assign({ model: modelOf() }, payloadFor()));
       const headers = { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) };
       if (isApi) headers.Authorization = "Bearer " + ep.key;
-      const req = http.request(
+      const req = transport.request(
         Object.assign({ method: "POST", headers }, target),
         (res) => {
           let data = "";
@@ -242,8 +301,16 @@ function ask({ port, prompt, maxTokens, onStall }) {
           res.on("data", (c) => { data += c; arm(); });
           res.on("end", () => {
             if (stallTimer) clearTimeout(stallTimer);
+            // The endpoint refuses `enable_thinking` — a property of that model, not of this line. Drop the
+            // parameter for the rest of the process and ask the SAME line again, so no entry is recorded as
+            // failed over a settings flag.
+            if (isApi && !apiThinkFlagRejected && isThinkFlagRejected(res.statusCode, data)) {
+              apiThinkFlagRejected = true;
+              console.log("API_THINK_FLAG_OFF " + modelOf() + " 不接受 enable_thinking，已去掉该参数继续翻译");
+              return send();
+            }
             // Free tier spent (403 AllocationQuota.FreeTierOnly on Model Studio, and the same shape on
-            // other hosts), or the endpoint does not know this model name at all: move to the next model
+            // other hosts), or the endpoint cannot serve this model at all: move to the next model
             // in the chain and ask again — the SAME line, so nothing about the batch is lost and no entry
             // is recorded as failed because of a quota or a stale name.
             if (isApi && (isQuotaExhausted(res.statusCode, data) || isModelUnavailable(res.statusCode, data))) {
@@ -310,7 +377,7 @@ function ask({ port, prompt, maxTokens, onStall }) {
 
 module.exports = {
   ask, waitForServer, eraseSlot, endpoint, listModels, isQuotaExhausted, isModelUnavailable,
-  usage, isTextModel,
-  resetApiModel: function () { apiModelIndex = 0; },
+  isThinkFlagRejected, transportFor, usage, isTextModel,
+  resetApiModel: function () { apiModelIndex = 0; apiThinkFlagRejected = false; },
   SYSTEM_PROMPT, DEFAULT_PORT, MAX_OUTPUT_TOKENS, STALL_MS,
 };
