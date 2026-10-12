@@ -162,9 +162,10 @@ RPG Maker 汉化管理器（GameTranslator.exe） v2.4
 二、模型
   - 模型为 GGUF 文件，默认从 D:\galtrans 加载（可改）。
   - 内置 llama.cpp 运行库，自动使用独立显卡推理（GTX 10 系等老卡可用）。
-  - 显卡后端可在 Vulkan 与 CUDA 12 之间切换（两套并存、离线切换）：程序里模型行最右边的
-    「后端：…」按钮，或根目录的「切换显卡后端.bat」/ switch-backend.ps1。默认 Vulkan；
-    CUDA 12 需 RTX 20 系及以上（sm_70+），GTX 10 系上会退回 CPU。详见 安装说明.txt 第二节。
+  - 包内带两套后端（llama\vulkan\ 与 llama\cuda12\），可在 Vulkan 与 CUDA 12 之间切换：
+    程序里模型行最右边的「后端：…」按钮，或根目录的「切换显卡后端.bat」/ switch-backend.ps1。
+    默认 Vulkan；CUDA 12 需 RTX 20 系及以上（sm_70+），GTX 10 系上会退回 CPU。
+    详见 安装说明.txt 第二节。
 
 三、使用方法
   1. 选择盘符点“扫描”，或“选择文件夹”/拖拽 Game.exe 加入游戏列表。

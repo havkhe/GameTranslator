@@ -1,8 +1,8 @@
 GameTranslator v3.0 —— 安装说明 / Installation
 ================================================
 
-这是一个「解压即用」的完整包：里面已经带了 node、ruby 和 Vulkan 版 llama.cpp 运行库，
-不需要另外安装任何东西（模型文件 .gguf、以及可选的 CUDA 版运行库需另行准备，见第二节）。
+这是一个「解压即用」的完整包：里面已经带了 node、ruby 和**两套** llama.cpp 运行库
+（Vulkan 与 CUDA 12），不需要另外安装任何东西（模型文件 .gguf 需要你自己准备）。
 
 一、安装（3 步）
   1) 把整个文件夹解压到任意目录（路径里避免 emoji 之类特殊字符）；
@@ -10,20 +10,21 @@ GameTranslator v3.0 —— 安装说明 / Installation
   3) 双击 GameTranslatorV3.exe。
 
 二、显卡后端：Vulkan（默认）与 CUDA 12，一键切换
-  包内自带的是 Vulkan 版（llama\vulkan\），GTX 10 系 / AMD / Intel 都能用，默认就用它。
-  RTX 20/30/40/50 换 CUDA 12 一般更快。两种切换方式（选一种即可，都是离线切换、不重下载）：
+  包内两套都在：`llama\vulkan\`（默认，GTX 10 系 / AMD / Intel 都能用）与
+  `llama\cuda12\`（RTX 20 系及以上更快，已自带 CUDA 运行库与 cuBLAS）。
+  选哪一套只改一个设置、重启模型服务，**离线即可，不用重下载**：
 
     * 程序里：模型那一行最右边有「后端：Vulkan / 后端：CUDA 12」按钮，点一下就切，空闲时
-      会自动重启模型服务；**翻译进行中会拒绝**（避免打断正在跑的这一批）。若 CUDA 版还没下载，
-      按钮会直接帮你下载并解压到 llama\cuda12\。
+      会自动重启模型服务；**翻译进行中会拒绝**（避免打断正在跑的这一批）。
     * 根目录：双击「切换显卡后端.bat」（菜单式），或执行
       .\switch-backend.ps1 -Backend vulkan|cuda12
 
-  也可以用命令行单独取回某一套（新版本 llama.cpp 同理）：
+  也可以用命令行单独更新某一套（例如换到更新的 llama.cpp 版本时）：
 
-      .\download-llama.ps1 -Dest .\llama\cuda12 -Backend cuda12
       .\download-llama.ps1 -Dest .\llama\vulkan -Backend vulkan
+      .\download-llama.ps1 -Dest .\llama\cuda12 -Backend cuda12
 
+  （万一把某一套删掉了，程序里的「后端：…」按钮也能把它重新下载回来。）
   两套各在自己的文件夹里，互不覆盖；当前用的是哪一套，程序状态行（「模型：… 端口：…」那一行）
   末尾会写出来。注意 CUDA 12 的预编译包**不支持 GTX 10 系（Pascal / sm_61）**，会静默退回 CPU。
 

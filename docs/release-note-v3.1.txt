@@ -6,21 +6,20 @@
 
 ## 一、下载 / Downloads
 
-- `GameTranslatorV3-v3.1.zip` —— **解压即用**：主程序 + 管线 + 工具 + 内置 node 与 ruby + **Vulkan 版 llama.cpp**。
+- `GameTranslatorV3-v3.1.zip` —— **解压即用**：主程序 + 管线 + 工具 + 内置 node 与 ruby
+  + **两套 llama.cpp 后端都在包里**（`llama\vulkan\` 与 `llama\cuda12\`）。
   - **默认就是 Vulkan**：GTX 10 系等老 NVIDIA、AMD、Intel 都跑得动。
-  - **RTX 20 / 30 / 40 / 50 系想更快就用 CUDA 12**：程序里点模型行最右的
-    「后端：…」按钮会**一键把 CUDA 版下载并解压到 `llama\cuda12\`**（约 630 MB，
-    含 CUDA 运行库），之后一键切换；不想联网也可以另行下载 CUDA 包放进该目录。
-  - **两套并存、离线切换**：切换只改一个设置并重启模型服务，不用重下一遍。
-    同一个入口在根目录也有：双击 `切换显卡后端.bat`，或 `.\switch-backend.ps1 -Backend vulkan|cuda12`。
-  - **CUDA 版不塞进主包**（两个文件合计 626 MB，老卡用户不必陪跑这 626 MB）。想手动部署就从
-    llama.cpp 官方发行版取这两个文件，解压进 `llama\cuda12\`（两包解到同一目录即可）：
-      `llama-b11571-bin-win-cuda-12.4-x64.zip`（252.9 MB）
-      `cudart-llama-bin-win-cuda-12.4-x64.zip`（373.3 MB）
-    上游页面：<https://github.com/ggml-org/llama.cpp/releases/tag/b11571>（换更新的 `bXXXX` 版本同理，
-    注意两个包**必须同一个版本**）。
+  - **RTX 20 / 30 / 40 / 50 系想更快就切 CUDA 12**：包里的 `llama\cuda12\` 已自带 CUDA 运行库与
+    cuBLAS，直接在程序里点模型行最右的「后端：…」按钮切换（或根目录 `切换显卡后端.bat`），
+    **离线切换、不用再下载**。
+  - **两套各在自己的文件夹，互不覆盖**；当前用的是哪一套，程序状态行会写出来。同一个切换入口
+    在根目录也有：双击 `切换显卡后端.bat`，或 `.\switch-backend.ps1 -Backend vulkan|cuda12`。
+  - 因为带了两套后端，主包从约 133 MB 增到约 770 MB——**老卡用户其实只用得到 Vulkan 那 90 MB**，
+    想要小包就自行删掉 `llama\cuda12\`，程序里的「后端：…」按钮随时能再下回来。
+  - 两套运行库都是 **llama.cpp 官方 `b11571` 发行版的原始文件，未经改动**（MIT，© ggml authors；
+    上游：<https://github.com/ggml-org/llama.cpp/releases/tag/b11571>），可直接对上游校验和核对。
   - 想更新到更新的 llama.cpp 版本：`.\download-llama.ps1 -Dest .\llama\vulkan -Backend vulkan`
-    （CUDA 版同理，`-Backend cuda12`）。
+    （CUDA 版同理，`-Backend cuda12`，两个包必须同版本）。
   - 注意 **CUDA 12 的预编译包不支持 GTX 10 系（Pascal / sm_61）**，在那种卡上会静默退回 CPU。
 - 模型 `.gguf` 需另行取得（放到设置里的「模型目录」）。4B 级（如 Galtransl-v4）质量更好，1.8B 级（如 Hy-MT2）显存占用更小。
 - 覆盖升级即可，**设置与密钥不会丢**：`ui-settings.ini`、`api-config.json`、`work\` 都不在包里。
