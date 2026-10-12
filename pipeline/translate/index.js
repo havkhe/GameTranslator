@@ -21,7 +21,7 @@ const B = require("./batcher.js");
 const { makeCache, normText } = require("./cache.js");
 
 const DEFAULT_TEMPLATE =
-  "将下列每行日文翻译成简体中文。禁止翻译成英文，只输出简体中文。\r\n" +
+  "将下列每行文本翻译成简体中文（原文可能是日文，也可能是英文）。禁止翻译成英文，只输出简体中文。\r\n" +
   // The instruction must NOT contain literal control codes.
   //
   // It used to read 「必须原样保留 \N[1]、\V[1]、\N<角色名> 等控制代码」, and the model treated

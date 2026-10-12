@@ -162,6 +162,11 @@ function looksLikeEnglish(t, source) {
   const srcLetters = countMatches(src, /[A-Za-z]/g);
   const cjk = countMatches(t, /[\u3400-\u9fff]/g);
   const control = countMatches(t, /\\[NVI]|<\/?[^>]{1,12}>/g);
+  // English SOURCE: the overlap test below cannot see anything, because the source already holds those
+  // letters — a paraphrase in English would look "invented 0" and be accepted. A Chinese answer must
+  // carry Han characters; one without them is not Chinese.
+  const srcIsEnglish = srcLetters >= 3 && !/[\u3040-\u30ff\u3400-\u9fff]/.test(src);
+  if (srcIsEnglish) return cjk === 0;
   const invented = letters - Math.min(letters, srcLetters);
   return invented >= cjk && invented > control;
 }
@@ -197,7 +202,14 @@ function translatableSource(s) {
   if (!t) return false;
   if (/\.(png|jpg|jpeg|gif|bmp|webp|rpgmvp|rpgmvo|ogg|m4a|mp3|rvdata2?|rxdata)$/i.test(t)) return false;
   if (/^[A-Za-z0-9_\-./\\%]+$/.test(t)) return false;
-  if (!/[\u3040-\u30ff\u3400-\u9fff]/.test(t)) return false;
+  if (!/[\u3040-\u30ff\u3400-\u9fff]/.test(t)) {
+    // An English source counts too: without this, a run on an English release had no `unchanged`
+    // check at all, so an answer that echoed the English was cached and written into the game.
+    const letters = (t.match(/[A-Za-z]/g) || []).length;
+    if (letters < 3 || letters * 10 < t.replace(/\s/g, "").length * 6) return false;
+    const words = t.split(/\s+/).filter((w) => /[A-Za-z]/.test(w));
+    return words.length >= 2 || /[.!?…:]["')\]]?$/.test(t);
+  }
   return true;
 }
 

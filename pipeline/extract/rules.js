@@ -38,11 +38,42 @@ const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]/;
  * inserted a note like "（到这里为止5）" — so the reply had the wrong number of lines
  * and the whole batch failed and split. 45% of batches failed that way.
  */
+/**
+ * Is this English text something a translator should see?
+ *
+ * Half of a real library is English releases ("(eng)", "[ENG]", "EnglishMTL"), and until now this rule
+ * threw all of their text away: `if (!CJK_RE.test(t)) return false` meant the pipeline extracted only
+ * the Japanese LEFTOVERS of such a game (its battle/skill names), translated those, and reported the
+ * run as finished while every line the player reads stayed English. Measured on five such games: 88 to
+ * 839 entries extracted out of thousands, and the failures were `unchanged` because the model was
+ * asked to translate Japanese-looking kanji-only names.
+ *
+ * Prose-like English only, so identifiers, slugs and filenames stay out: at least two words OR a
+ * sentence-ending punctuation, mostly letters, and none of the guards below. A single bare word
+ * ("Potion") is left alone — it is far more often an id than a line.
+ */
+function isTranslatableEnglish(text) {
+  const t = String(text).trim();
+  if (t.length < 4) return false;
+  if (EXT_RE.test(t) || INTERNAL_RE.test(t) || EVENT_ID_RE.test(t)) return false;
+  if (/^(https?:|\/\/)|[\\/]/.test(t)) return false;                   // url / path
+  const letters = (t.match(/[A-Za-z]/g) || []).length;
+  if (letters < 3) return false;
+  const body = t.replace(/\s/g, "");
+  if (letters * 10 < body.length * 6) return false;                    // mostly letters (not symbols/numbers)
+  const words = t.split(/\s+/).filter((w) => /[A-Za-z]/.test(w));
+  if (words.length >= 2) return true;
+  // A single word is normally an id, but "Yes." / "No!" / "Go!" are choice lines: accept one that ends
+  // with sentence punctuation and holds no digits, and reject the rest of the path-like tokens.
+  if (PATH_LIKE_RE.test(t) && !(/[!?…]|\.$/.test(t) && !/[0-9]/.test(t))) return false;
+  return /[.!?…:]["')\]]?$/.test(t) && !/[0-9]/.test(t);
+}
+
 function isTranslatable(text) {
   if (typeof text !== "string") return false;
   const t = text.trim();
   if (!t) return false;                            // empty / whitespace only
-  if (!CJK_RE.test(t)) return false;               // no CJK at all -> not our target
+  if (!CJK_RE.test(t)) return isTranslatableEnglish(t);   // no CJK -> English source, same rules apply
   if (EXT_RE.test(t)) return false;                // resource filename
   if (INTERNAL_RE.test(t)) return false;           // engine class identifier
   if (EVENT_ID_RE.test(t)) return false;           // event id label
@@ -199,6 +230,7 @@ function pluginArgValueTranslatable(key, value) {
 
 module.exports = {
   isTranslatable,
+  isTranslatableEnglish,
   EVENT_TEXT_CODES,
   TEXT_FIELDS,
   TERMS_KEYS,
