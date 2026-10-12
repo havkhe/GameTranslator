@@ -38,6 +38,12 @@ namespace GameTranslatorV3
         private TextBox _log;
         private Label _status;
         private ComboBox _cmbModel;
+        /// <summary>
+        /// Set while the dropdown is rebuilt programmatically. Every refresh clears the items and re-selects
+        /// one, which raises SelectedIndexChanged exactly like a user picking a model — without this the fill
+        /// itself would be recorded as a choice (and, in cloud mode, would rewrite ApiModel on every refresh).
+        /// </summary>
+        private bool _suppressModelChange;
         private Button _btnModelRefresh, _btnModelStart, _btnModelStop;
         private Label _lblModelState;
 
@@ -794,6 +800,12 @@ namespace GameTranslatorV3
             modelRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             modelRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _cmbModel = new ComboBox { Name = "cmbModel", Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            // Picking a model has to be recorded as it is picked. It used to be read only while refreshing the
+            // list and again when 启动模型 was pressed, so in cloud mode a model chosen from the dropdown changed
+            // nothing at all: the chain handed to the pipeline is built from _settings.ApiModel, which only the
+            // refresh wrote. Choosing another model looked like the control had no effect, and 刷新列表 then
+            // snapped the selection back to the old name.
+            _cmbModel.SelectedIndexChanged += (s, e) => OnModelSelectionChanged();
             _btnModelRefresh = MakeButton("刷新列表", (s, e) => RefreshModels());
             _btnModelStart = MakeButton("启动模型", (s, e) => StartLlama());
             _btnModelStop = MakeButton("停止模型", (s, e) => StopLlama());
@@ -1083,6 +1095,7 @@ namespace GameTranslatorV3
         {
             if (_settings.UseApi) { RefreshApiModels(); return; }
             var previous = _settings.Model;
+            _suppressModelChange = true;
             _cmbModel.Items.Clear();
             var dir = _settings.ModelDir;
             if (Directory.Exists(dir))
@@ -1108,6 +1121,7 @@ namespace GameTranslatorV3
                 _settings.Model = Convert.ToString(_cmbModel.SelectedItem);
                 _runner.Model = _settings.Model;
             }
+            _suppressModelChange = false;
             UpdateModelState();
         }
 
@@ -1121,7 +1135,6 @@ namespace GameTranslatorV3
         private void RefreshApiModels()
         {
             var previous = string.IsNullOrEmpty(_settings.ApiModel) ? "" : _settings.ApiModel;
-            _cmbModel.Items.Clear();
             var key = Settings.LoadApiKey(_root);
             List<string> models = null;
             string error = "";
@@ -1138,15 +1151,38 @@ namespace GameTranslatorV3
                 catch (Exception ex) { error = "取模型列表失败：" + ex.Message; }
             }
 
+            // The fill is not a choice: suppress the handler for its duration, or it would record the
+            // auto-selected first item as if the user had picked it.
+            _suppressModelChange = true;
+            _cmbModel.Items.Clear();
             if (models == null || models.Count == 0)
             {
-                _cmbModel.Items.Add("（云端：" + error + "）");
-                _cmbModel.SelectedIndex = 0;
-                _cmbModel.Enabled = false;
-                AppendLog("云端模型列表未取到：" + error);
+                // Never leave the control a dead end. The configured chain is the user's own list of model
+                // names and is perfectly usable without the endpoint — a dead disabled row just meant "you
+                // cannot choose a cloud model", which is what it looked like when the key was missing.
+                var chain = ChainModelIds(_settings.ApiModel, _settings.ApiModels);
+                if (chain.Count > 0)
+                {
+                    foreach (var m in chain) _cmbModel.Items.Add(m);
+                    _cmbModel.Enabled = true;
+                    _cmbModel.SelectedIndex = 0;
+                    _settings.ApiModel = chain[0];
+                    AppendLog("云端模型列表未取到（" + error + "）；下拉框改用已配置的模型链：" + string.Join(",", chain.ToArray()));
+                }
+                else
+                {
+                    _cmbModel.Items.Add("（云端：" + error + "）");
+                    _cmbModel.SelectedIndex = 0;
+                    _cmbModel.Enabled = false;
+                    AppendLog("云端模型列表未取到：" + error);
+                }
             }
             else
             {
+                // Keep a configured model the catalogue does not list. The endpoint's list can be
+                // incomplete, and a name that really is unknown is handled when the request is made (the
+                // chain moves on) — better than silently replacing what the user chose.
+                if (previous.Length > 0 && IsCloudTextModel(previous) && !models.Contains(previous)) models.Insert(0, previous);
                 foreach (var m in models) _cmbModel.Items.Add(m);
                 _cmbModel.Enabled = true;
                 int idx = previous.Length > 0 ? _cmbModel.Items.IndexOf(previous) : -1;
@@ -1154,7 +1190,62 @@ namespace GameTranslatorV3
                 _settings.ApiModel = Convert.ToString(_cmbModel.SelectedItem);
                 AppendLog("云端模型列表：" + models.Count + " 个，已选 " + _settings.ApiModel);
             }
+            _suppressModelChange = false;
             UpdateModelState();
+        }
+
+        /// <summary>
+        /// Record a model the user picked in the dropdown, in whichever field the current mode uses.
+        ///
+        /// One control serves two settings: in cloud mode the pick is the head of the chain (ApiModel), in
+        /// local mode it is what llama-server is launched with (Model). Only the refresh used to write either,
+        /// so choosing another model had no effect beyond the highlight moving.
+        /// </summary>
+        private void OnModelSelectionChanged()
+        {
+            if (_suppressModelChange) return;
+            var sel = Convert.ToString(_cmbModel.SelectedItem) ?? "";
+            if (sel.Length == 0 || sel.StartsWith("（")) return;     // placeholder rows are not models
+            if (_settings.UseApi)
+            {
+                if (!IsCloudTextModel(sel))
+                {
+                    AppendLog("「" + sel + "」不是能翻译文本的模型，仍用 " + _settings.ApiModel);
+                    var back = _cmbModel.Items.IndexOf(_settings.ApiModel);
+                    _suppressModelChange = true;
+                    _cmbModel.SelectedIndex = back >= 0 ? back : 0;
+                    _suppressModelChange = false;
+                    return;
+                }
+                if (sel == _settings.ApiModel) return;
+                _settings.ApiModel = sel;
+                AppendLog("云端模型已切换为 " + sel + "（模型链 " + BuildModelChain() + "，下一次开始翻译时生效）");
+            }
+            else
+            {
+                if (sel == _settings.Model) return;
+                _settings.Model = sel;
+                _runner.Model = sel;
+                AppendLog("本地模型已切换为 " + sel + "（点「启动模型」装载；已运行的服务不受影响）");
+            }
+            UpdateModelState();
+        }
+
+        /// <summary>
+        /// The cloud ids to fall back to when the endpoint's catalogue cannot be fetched: the configured
+        /// chain in order, de-duplicated, with anything that cannot translate text left out.
+        /// </summary>
+        private static List<string> ChainModelIds(string apiModel, string apiModels)
+        {
+            var chain = new List<string>();
+            var first = (apiModel ?? "").Trim();
+            if (first.Length > 0 && IsCloudTextModel(first)) chain.Add(first);
+            foreach (var m in (apiModels ?? "").Split(','))
+            {
+                var t = m.Trim();
+                if (t.Length > 0 && IsCloudTextModel(t) && !chain.Contains(t)) chain.Add(t);
+            }
+            return chain;
         }
 
         /// <summary>
@@ -2014,7 +2105,11 @@ namespace GameTranslatorV3
             _btnRestore.Enabled = !_running && checkedGames == 1;
             _btnState.Enabled = !_running;
             _btnSettings.Enabled = !_running;
-            _cmbModel.Enabled = !_running && _cmbModel.Items.Count > 0 && !Convert.ToString(_cmbModel.SelectedItem).StartsWith("（");
+            // Kept usable while a run is going: the model reaches the pipeline through the environment when a
+            // run starts, so a change here applies to the NEXT game, not the one in flight (the log line says
+            // so). It used to be disabled while running, which read as "the model cannot be switched" — this
+            // dropdown is the only place a model is chosen.
+            _cmbModel.Enabled = _cmbModel.Items.Count > 0 && !Convert.ToString(_cmbModel.SelectedItem).StartsWith("（");
             _btnModelRefresh.Enabled = !_running;
 
             // The queue. Adding to a group stays available during a run on purpose: the running group

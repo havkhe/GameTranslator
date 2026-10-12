@@ -465,6 +465,57 @@ namespace GameTranslatorV3.UiCheck
                         "语音对语音（livetranslate / realtime）模型不出现在列表里");
                 }
 
+                // Picking a model in the dropdown must have an effect. The chain handed to the pipeline is built
+                // from _settings.ApiModel, and until this existed that field was written only while refreshing
+                // the list — so choosing another model changed nothing, and 刷新列表 snapped the selection back.
+                var onSel = typeof(MainForm).GetMethod("OnModelSelectionChanged", BindingFlags.NonPublic | BindingFlags.Instance);
+                var chainIds = typeof(MainForm).GetMethod("ChainModelIds", BindingFlags.NonPublic | BindingFlags.Static);
+                var cmb = FindControl(form, "cmbModel") as ComboBox;
+                Assert(onSel != null && chainIds != null && cmb != null,
+                    "找到 OnModelSelectionChanged / ChainModelIds（下拉框选择会被记录）");
+                if (onSel != null && chainIds != null && cmb != null && settings != null && chainMethod != null)
+                {
+                    var list = chainIds.Invoke(null, new object[] { "qwen-plus", "qwen-plus, qwen-mt-plus, qwen-vl-max,qwen-turbo" }) as List<string>;
+                    Assert(list != null && string.Join(",", list.ToArray()) == "qwen-plus,qwen-mt-plus,qwen-turbo",
+                        "取不到云端列表时的候选链：选中项在前、去重、排除非文本模型 → " +
+                        (list == null ? "null" : string.Join(",", list.ToArray())));
+
+                    // The dropdown is the real one (it may hold the live catalogue, whose names would collide with
+                    // any invented test model), so the whole item list is snapshotted and put back afterwards.
+                    var savedItems = cmb.Items.Cast<object>().ToArray();
+                    int savedIdx = cmb.SelectedIndex;
+                    bool savedUse = settings.UseApi;
+                    string savedApi = settings.ApiModel;
+                    string savedLocal = settings.Model;
+
+                    cmb.Items.Clear();
+                    cmb.Items.AddRange(new object[] { "qwen-mt-plus", "unit-cloud-model", "qwen-vl-max" });
+                    settings.UseApi = true;
+                    settings.ApiModel = "qwen-mt-plus";
+
+                    cmb.SelectedIndex = 1;
+                    onSel.Invoke(form, null);
+                    Assert(settings.ApiModel == "unit-cloud-model", "云端模式：下拉框选的模型被记录 → " + settings.ApiModel);
+                    Assert(Convert.ToString(chainMethod.Invoke(form, null)).StartsWith("unit-cloud-model"),
+                        "所选模型成为模型链第一项 → " + Convert.ToString(chainMethod.Invoke(form, null)));
+
+                    cmb.SelectedIndex = 2;
+                    onSel.Invoke(form, null);
+                    Assert(settings.ApiModel == "unit-cloud-model", "非文本模型不会被记成所选 → " + settings.ApiModel);
+
+                    settings.UseApi = false;
+                    cmb.SelectedIndex = 1;
+                    onSel.Invoke(form, null);
+                    Assert(settings.Model == "unit-cloud-model", "本地模式：选择记入 Model → " + settings.Model);
+
+                    cmb.Items.Clear();
+                    cmb.Items.AddRange(savedItems);
+                    settings.UseApi = savedUse;
+                    settings.ApiModel = savedApi;
+                    settings.Model = savedLocal;
+                    if (savedIdx >= 0 && savedIdx < cmb.Items.Count) cmb.SelectedIndex = savedIdx;
+                }
+
                 // The key lives in its own file (gitignored), never in the settings file or the source.
                 var tmpDir = Path.Combine(Path.GetTempPath(), "gt-uicheck-api-" + Environment.TickCount.ToString());
                 Directory.CreateDirectory(tmpDir);
