@@ -70,10 +70,11 @@ check("英文正文算可译源", Q.translatableSource("You found a Potion!"), t
 check("id 不算可译源", Q.translatableSource("K-02"), false);
 check("中文长句仍算", Q.translatableSource("你已经获得了三个药剂，请小心使用它们。"), true);
 
-// 真实语料统计（有游戏目录时才有意义）
-const GAME = "J:\\game\\HGAME\\H\\NTR Sisters - Ciella & Luciella\\NTR Sisters - Ciella & Luciella";
-const BAK = path.join(GAME, "data_原版备份");
-if (fs.existsSync(BAK)) {
+// 真实语料统计：只有当环境变量 GT_CORPUS 指向一个英文版游戏的原版数据目录时才跑，没有就整段跳过。
+// 写死本机某个游戏的路径，会让这条断言在别的机器上失败，也会把作者的游戏名带进发行产物。
+const GAME = String(process.env.GT_CORPUS || "");
+const BAK = GAME ? path.join(GAME, "data_原版备份") : "";
+if (BAK && fs.existsSync(BAK)) {
   let latin = 0, accepted = 0;
   for (const f of fs.readdirSync(BAK)) {
     if (!/\.json$/i.test(f)) continue;
@@ -89,7 +90,7 @@ if (fs.existsSync(BAK)) {
     walk(j);
   }
   console.log("");
-  console.log("=== 真实语料（NTR Sisters 原版数据）===");
+  console.log("=== 真实语料（GT_CORPUS 指定的原版数据）===");
   console.log("   非中日文、含英文的字符串: " + latin + " 条，其中规则接受: " + accepted + " 条（" +
     (latin ? Math.round(100 * accepted / latin) : 0) + "%）");
   check("真实语料里至少接受了一部分英文", accepted > 100, true);

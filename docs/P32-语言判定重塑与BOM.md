@@ -12,7 +12,7 @@
 
 ## 一、现象与实测
 
-`J:\game\HGAME\H\Detective Girl of the Steam City (eng-uncen) + save\…` 在界面里显示**已汉化**
+`（游戏库）Detective Girl of the Steam City (eng-uncen) + save\…` 在界面里显示**已汉化**
 （状态名 `自带中文`），因此被跳过、永远不会去翻。实测它到底翻没翻：
 
 | 测量 | 数值 |
@@ -53,7 +53,7 @@ CN_MAX = 35   →  32.8 < 35  →  "原版数据即中文"  →  自带中文
 4. **`byteProfile` 的两个比例都加了 `CJK_MIN ≥ 200`** 门槛：22 个字符算出的比例是噪声，不足为凭。
 5. `无文本` 的判据改为"既没有可译文本、也不是拉丁语文本"，否则一个有上万行英文对白的游戏会被说成"文本太少"。
 6. 导出内部函数（`classify/textProfile/byteProfile/isLatinText/verdictFromBytes/locate/findBackup/常量`），
-   CLI 收进 `require.main === module` —— `require` 它不再会去扫 `J:\game`。
+   CLI 收进 `require.main === module` —— `require` 它不再会去扫 `（游戏库）`。
 
 ### 现在这局的判定
 

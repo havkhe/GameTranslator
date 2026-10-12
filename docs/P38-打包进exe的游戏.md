@@ -10,7 +10,7 @@ UiCheck：249 → **253 项**；`unit-game-state`：31 → **35 项**
 ## 一、这个游戏为什么既"识别不出"又"翻不了"
 
 ```
-J:\game\HGAME\H\更多game\妛墍摿寈晹-SIGNIT-惢昳斉 01.3\
+（游戏库）妛墍摿寈晹-SIGNIT-惢昳斉 01.3\
   Game_boxed.exe        1,020.9 MB
   www\save\*.rpgsave    只剩存档（common / config / file1 / file2 / global）
   TrsData.bin 等        MTool 的

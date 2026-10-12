@@ -5,7 +5,7 @@
 改动文件：`pipeline/translate/client.js`、`ui/MainForm.cs`、`ui/UiCheck.cs`、`tools/unit-api-mode.js`
 单测：`tools/unit-api-mode.js` 33 → **55 项**
 UiCheck：155 → **156 项**
-实测脚本：`D:\dsh\gt-audit\p33\` —— `api-probe.js`（只读探测）、`api-probe2.js`（请求形状对照）、`api-live.js`（**直接驱动出货的 `client.js`** 打通真接口）
+实测脚本：`（施工脚本目录）` —— `api-probe.js`（只读探测）、`api-probe2.js`（请求形状对照）、`api-live.js`（**直接驱动出货的 `client.js`** 打通真接口）
 
 ---
 
@@ -83,7 +83,7 @@ API_MODEL_SWITCH qwen-mt-uni -> qwen-mt-plus     ✅ 译出
 单测：`tools/unit-api-mode.js` **55/55**（新增 22 项：传输层选模块、`https` 断言、系统角色禁令下的成功与请求体形状、
 云端默认带 `enable_thinking:false`、拒绝该参数时的去掉重试与"后续请求也不再带"、
 `Model not exist.`/原生格式算模型不可用、角色报错与密钥报错**不算**、本地路径仍发 system 与 `chat_template_kwargs`）。
-其余 15 套全绿。UiCheck **156/156**（新增：语音对语音模型不出现在云端列表里），在 `D:\GameTranslatorV3\` 用部署自身源码构建后运行。
+其余 15 套全绿。UiCheck **156/156**（新增：语音对语音模型不出现在云端列表里），在 `（部署目录）` 用部署自身源码构建后运行。
 
 ## 五、部署状态与你要做的事
 

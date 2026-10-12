@@ -2221,7 +2221,7 @@ namespace GameTranslatorV3
         ///
         /// A game the window skips — 已是中文 / 自带中文: someone else's translation, or the game arrived
         /// Chinese — has nothing for this tool to translate, so a count beside it would describe work that
-        /// does not exist. Measured: 【御光盟国汉化组】露出女子校生2 is skipped as 自带中文, and its stale
+                /// does not exist. Measured: a 汉化组 release is skipped as 自带中文, and its stale
         /// extract would have read 0/9098, the opposite of what that row means.
         /// </summary>
         private static bool ShowsProgress(string status)
@@ -2776,12 +2776,12 @@ namespace GameTranslatorV3
                         found.Add(dir);
                         // Nothing below a game is a separate game: the launcher found here starts whatever
                         // sits underneath, and adding those produced a list full of the same title over and
-                        // over — measured: prisonbrave_1.1.0\Tool, 長谷川麻衣のメイド飼育調教\Game（セリフ有り）
-                        // and Game（セリフ無し）, ストアマトロンNTR\…\Game, びたみんクエスト 2ND ATTRACT\<同名>
-                        // (the release folder and the game folder inside it are the same game at two depths).
+                        // over — measured: a utility folder inside a game, two variants of the same game
+                        // ("with voice" / "without"), a sub-folder literally named Game, and a release folder
+                        // whose inner folder has the same name as itself (one game listed at two depths).
                         //
                         // A bonus folder is the exception: a separate game shipped alongside the main one,
-                        // which is worth finding (measured: Yutaka Gaiden外传 inside 无知少女的乡村韵事).
+                        // which is worth finding (measured: a side-story folder inside the main game).
                         // Anything else buried here is named in the log rather than dropped in silence, and
                         // 「添加游戏」 can add it in one click.
                         if (depth < MaxScanDepth)
@@ -2830,7 +2830,7 @@ namespace GameTranslatorV3
         /// A folder that is its own game even though it sits inside another game.
         ///
         /// Releases often ship a second, smaller game beside the main one, and the player would want it
-        /// translated too (measured: Yutaka Gaiden外传 inside 无知少女の乡村韵事). Everything else found below
+        /// translated too (measured: a side-story folder inside a release). Everything else found below
         /// a game is part of that game and must not become a second entry in the list.
         /// </summary>
         private static bool IsBonusName(string name)
@@ -2933,10 +2933,10 @@ namespace GameTranslatorV3
         ///
         /// Looking for a loose data folder is not enough. A VX or VX Ace game normally keeps its whole data
         /// tree inside Game.rgss2a / Game.rgss3a and has no data folder at all, so this returned "?" for all
-        /// of them — measured: 25 of the 100 folders found under J:\game, among them
-        /// [151231][アンコクマリモカン] SNEAK IN DESPERADA (Game.exe + Game.rgss2a + .rvdata saves, a VX
-        /// game). The archive's own header says which one it is: RGSSAD with version 1 is VX, version 3 is
-        /// VX Ace — the same check the pipeline's archive codec makes.
+        /// of them — measured: a quarter of the folders found in one library, among them a VX title that is
+        /// nothing but Game.exe + Game.rgss2a + .rvdata saves. The archive's own header says which one it
+        /// is: RGSSAD with version 1 is VX, version 3 is VX Ace — the same check the pipeline's archive
+        /// codec makes.
         /// </summary>
         private static string DetectEngine(string dir)
         {

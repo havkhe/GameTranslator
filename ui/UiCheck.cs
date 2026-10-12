@@ -568,11 +568,11 @@ namespace GameTranslatorV3.UiCheck
                     }
                     if (bonus != null)
                     {
-                        foreach (var s in new[] { "bonus", "Bonus Game", "おまけ", "特典", "Yutaka Gaiden外传", "extras" })
+                        foreach (var s in new[] { "bonus", "Bonus Game", "おまけ", "特典", "Sample外伝", "extras" })
                         {
                             Assert(Convert.ToBoolean(bonus.Invoke(null, new object[] { s })), "附赠游戏目录被识别：" + s);
                         }
-                        foreach (var s in new[] { "Tool", "game1", "game2", "Game（セリフ有り）", "js", "plugins", "data" })
+                        foreach (var s in new[] { "Tool", "game1", "game2", "Game Variant", "js", "plugins", "data" })
                         {
                             Assert(!Convert.ToBoolean(bonus.Invoke(null, new object[] { s })), "不是附赠目录：" + s);
                         }
@@ -595,16 +595,16 @@ namespace GameTranslatorV3.UiCheck
                 if (matches != null)
                 {
                     var m = (Func<string, string, bool>)((name, q) => Convert.ToBoolean(matches.Invoke(null, new object[] { name, q })));
-                    Assert(m("NTR Gyaru", ""), "空查询匹配全部");
-                    Assert(m("NTR Gyaru", "   "), "只有空格也匹配全部");
-                    Assert(m("NTR Gyaru", "ntr"), "大小写不敏感");
-                    Assert(m("NTR Gyaru", "GYARU"), "大写查询也能命中");
-                    Assert(m("NTR Sisters - Ciella & Luciella", "ntr sisters"), "空格分隔多词：全部命中才匹配");
-                    Assert(!m("NTR Gyaru", "ntr police"), "多词里有一个不命中就不匹配");
-                    Assert(m("\u65e0\u77e5\u5c11\u5973\u7684\u4e61\u6751\u97f5\u4e8bVer2.0DLC", "\u4e61\u6751"), "中文子串命中");
-                    Assert(m("NTR Gyaru", "  ntr  "), "查询前后空格被忽略");
-                    Assert(m("NTR Gyaru", "\u3000ntr\u3000"), "全角空格作分隔符");
-                    Assert(!m("NTR Gyaru", "Sisters"), "不命中的词就是不匹配");
+                    Assert(m("Sample Gyaru", ""), "空查询匹配全部");
+                    Assert(m("Sample Gyaru", "   "), "只有空格也匹配全部");
+                    Assert(m("Sample Gyaru", "sample"), "大小写不敏感");
+                    Assert(m("Sample Gyaru", "GYARU"), "大写查询也能命中");
+                    Assert(m("Sample Sisters - Part A & Part B", "sample sisters"), "空格分隔多词：全部命中才匹配");
+                    Assert(!m("Sample Gyaru", "sample police"), "多词里有一个不命中就不匹配");
+                    Assert(m("\u793a\u4f8b\u6e38\u620f\u4e2d\u6587\u540dVer2.0DLC", "\u6e38\u620f"), "中文子串命中");
+                    Assert(m("Sample Gyaru", "  sample  "), "查询前后空格被忽略");
+                    Assert(m("Sample Gyaru", "\u3000sample\u3000"), "全角空格作分隔符");
+                    Assert(!m("Sample Gyaru", "Sisters"), "不命中的词就是不匹配");
                 }
                 // The list must be able to shrink to nothing and come back, WITHOUT touching the model —
                 // that is the "display-only" promise the count line depends on.

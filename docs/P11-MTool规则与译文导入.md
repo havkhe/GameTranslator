@@ -1,6 +1,6 @@
 # P11 —— MTool 本体解剖：它的翻译规则，以及为什么 TrsData.bin 不必解
 
-对象：`C:\Users\Administrator\Desktop\MTool`（MTool 本体）、`J:\game\**`（游戏目录里的 MTool 产物）、
+对象：`（用户目录）Desktop\MTool`（MTool 本体）、`（游戏库）**`（游戏目录里的 MTool 产物）、
 仓库新增 `tools/import-mtool.js`。承接 `docs/P10-文本文件与覆盖统计.md`。
 
 ---
@@ -287,5 +287,5 @@ node tools/unit-text2frame.js     pass 30  fail 0
 node tools/unit-prompt-echo.js    pass 35  fail 0
 node tools/unit-degeneration.js   pass 47  fail 0
 node tools/unit-parse-result.js   pass  9  fail 0
-node D:\dsh\gt-audit\check-deploy.js   仓库与部署 0 差异
+node （施工脚本目录）check-deploy.js   仓库与部署 0 差异
 ```

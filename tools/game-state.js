@@ -13,7 +13,7 @@
 // decide whether it is safe to snapshot a game, so this verdict and the pipeline's guard agree.
 //
 // Usage:
-//   node tools/game-state.js [--roots "J:\\game" ...] [--depth 5] [--cache <games-cache.json>]
+//   node tools/game-state.js [--roots "<游戏库根目录>" ...] [--depth 5] [--cache <games-cache.json>]
 //                            [--outdir <dir>] [--out <name.json>] [--quiet]
 "use strict";
 const fs = require("fs");
@@ -58,7 +58,7 @@ const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch (e) { retu
 
 /** Where this game's data lives, or why it cannot be read. */
 function locate(game) {
-  // An archive wins over loose files: measured on 莉娜的金钱探索, whose loose Data folder is Japanese
+  // An archive wins over loose files: measured on one game, whose loose Data folder is Japanese
   // (59.5 % kana) while the game plays in Chinese, i.e. the Chinese lives inside Game.rgss3a and the
   // loose files are not what the player sees. The loose folder is still reported, so the ambiguity is
   // visible instead of silently resolved.
@@ -128,7 +128,7 @@ function byteProfile(dir, exts) {
 
 // A data folder that is already Chinese still carries kana in names and sfx; raw Japanese sits at
 // 60-80 % of all CJK characters, a translated one at 5-30 %. These are the byte-scale cut-offs
-// (measured: 莉娜的金钱探索's archive 22.1 % and still Chinese; びたみんクエスト 73 % and raw Japanese).
+// (measured: one archive at 22.1 % and still Chinese; another at 73 % and raw Japanese).
 const CN_MAX = 35, JP_MIN = 55;
 // A folder that is this much Latin letters is not CJK text, whatever its kana-vs-Han ratio says.
 const LATIN_TEXT_PCT = 70;
@@ -145,7 +145,7 @@ const JSON_EXT = /\.json$/i;
  * measures the game's plumbing: RPG Maker's JSON is mostly keys and structure ("events", "pages", "list",
  * "parameters") and a VX Ace archive embeds whole Ruby scripts, so a Japanese or Chinese game measures
  * 89-95 % Latin that way. Measured: with a byte-based Latin rule, 14 games changed verdict — including
- * 【御光盟国汉化组】露出女子校生2, whose dialogue is Chinese and whose own resources/zh-CN folder says so.
+ * a 汉化组 release, whose dialogue is Chinese and whose own resources/zh-CN folder says so.
  *
  * What does describe the language of a game is the text a player reads, so the strings are taken through
  * the project's own extraction (rules.isTranslatable decides what counts) and the letters inside THEM are
@@ -300,7 +300,7 @@ function verdictFromBytes(game, live, backup, kind, archiveName, looseProf, viaA
   // No Latin rule here, deliberately. An English verdict has to come from the text a player reads, and for
   // VX/VX Ace and archives that means running the Ruby extractor per game — a byte-level Latin share is
   // useless: a .rvdata2 file embeds whole Ruby scripts, so a Japanese game measures ~89 % Latin
-  // (measured: 莉娜的金钱探索, whose archive plays in Chinese). Byte counts answer the kana-vs-Han question
+  // (measured on one game, whose archive plays in Chinese). Byte counts answer the kana-vs-Han question
   // only, so only that question is asked here. The MV/MZ path below does measure the game's text.
 
   // The pristine copy is Chinese too: the game shipped Chinese (a 汉化组 release, or the folder claim).
@@ -545,7 +545,7 @@ function classify(game) {  const loc = locate(game);
 // The measurement and the verdicts are exported so they can be tested on synthetic data
 // (tools/unit-game-state.js) — the whole point of the redesign is a judgement about language, and that has
 // to be checkable without a library of games on disk. The CLI below only runs when this file IS the entry
-// point, so requiring it in a test does not start a scan of J:\game.
+// point, so requiring it in a test does not start a scan of a whole library.
 module.exports = { classify, byteProfile, textProfile, isLatinText, verdictFromBytes, locate, findBackup, CN_MAX, JP_MIN, LATIN_TEXT_PCT, CJK_MIN };
 
 // --- which games -------------------------------------------------------------------------
@@ -561,7 +561,9 @@ if (require.main === module) {
     } catch (e) { console.error("读取 games-cache.json 失败：" + e.message); }
   }
   if (!games.length) {
-    if (!roots.length) roots = ["J:\\game"];
+    // No root given: scan the current directory. The window always passes --cache or --roots, so this is
+    // only the command-line default, and defaulting to a fixed drive would tie the tool to one machine.
+    if (!roots.length) roots = [process.cwd()];
     const looksLikeGame = (dir) => {
       for (const rel of ["data", "Data", path.join("www", "data")]) {
         const d = path.join(dir, rel);

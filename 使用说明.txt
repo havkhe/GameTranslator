@@ -138,7 +138,7 @@ RPG Maker 汉化管理器（GameTranslator.exe） v2.4
   - 内置 llama 改用 Vulkan 后端：新版 CUDA 预编译包已不支持 GTX 10 系
     （Pascal），会静默退回 CPU；Vulkan 版可让 GTX 10 系等老显卡真正使用 GPU。
   - 界面新增“运行设备”下拉：显示检测到的真实 CPU / GPU 型号
-    （如 GPU (NVIDIA GeForce GTX 10xx)），可选 GPU 或 CPU 运行；
+    （如 6 GB 显存级别的 NVIDIA 显卡），可选 GPU 或 CPU 运行；
     默认 GPU（-ngl 99），CPU 模式不加载显存（-ngl 0）。
   - 新增 llama 内存硬限制：启动时通过 Windows 任务对象限制进程内存，
     默认自动 = 总内存 - 4GB（16GB 内存 → 上限 12GB），可在 settings.json

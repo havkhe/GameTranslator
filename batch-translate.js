@@ -49,7 +49,8 @@ function loadGames() {
   }
   if (!games.length) {
     log("no games-cache.json entries; falling back to a filesystem scan of the settings ScanPath");
-    let scan = "J:\\game";
+    // The fallback root comes from settings.json's ScanPath; without either, the current directory.
+    let scan = process.cwd();
     try { scan = JSON.parse(fs.readFileSync(path.join(APP, "settings.json"), "utf8")).ScanPath || scan; } catch (e) {}
     const walk = (d, depth) => {
       if (depth > 4) return;

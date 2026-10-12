@@ -3,7 +3,7 @@
 生成时间：2026-10-12
 分支：`v3-p1`
 结论：**没有完成验证 → 按你的规则不并入翻译器**。本文记录做到了哪一步、卡在哪、以及接下来可行的两条路。
-探测脚本（可复现）：`D:\dsh\gt-audit\p33\` 下的
+探测脚本（可复现）：`（施工脚本目录）` 下的
 `boxed-probe*.js`（容器内布局）、`evb-anchor.js`（PE 节表 + `EVB\0` 头）、`enigma-head.txt`、`ebv-*.txt`
 
 ---
@@ -65,7 +65,7 @@
 
 ```bat
 pip install evbunpack
-evbunpack "J:\game\...\妛墍摿寈晹-SIGNIT-惢昳斉 01.3\Game_boxed.exe" -o "D:\SIGNIT_unboxed"
+evbunpack "（游戏库）...\妛墍摿寈晹-SIGNIT-惢昳斉 01.3\Game_boxed.exe" -o "D:\SIGNIT_unboxed"
 :: 若报版本不符，再试：  evbunpack --pe 10_70 ...  /  --pe 9_70 ...  /  --pe 7_80 --legacy-fs ...
 ```
 解包成功后目录里会出现 `www\data\*.json` → 回到本工具扫描一次，它会显示成普通 `MV`，正常翻译。

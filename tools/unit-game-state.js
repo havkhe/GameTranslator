@@ -10,7 +10,7 @@
 //      translated.
 //   2. The first fix for that judged the Latin share of the folder's BYTES. That measures the plumbing:
 //      RPG Maker's JSON is mostly keys and structure and a VX Ace archive embeds whole Ruby scripts, so
-//      【御光盟国汉化组】露出女子校生2 — whose dialogue is Chinese and which ships its own resources/zh-CN —
+//      a 汉化组 release — whose dialogue is Chinese and which ships its own resources/zh-CN —
 //      came out 91 % Latin and turned into 未汉化（英文原版）. 14 of 14 games changed verdict.
 //
 // The rule that works is over the TEXT the extractor would translate (a player reads text, not bytes), and
@@ -177,7 +177,7 @@ console.log("=== 已知限制：VX/VX Ace 与归档仍然没有拉丁判据 ==="
   const prof = (kana, han, latin) => ({ files: 1, kana, han, latin, total: kana + han, letters: kana + han + latin,
     kanaPct: 100 * kana / (kana + han), latinPct: 100 * latin / (kana + han + latin) });
   // Detective Girl's own byte counts. The byte path has no Latin rule on purpose: a .rvdata2 embeds whole
-  // Ruby scripts, so its Latin share says nothing (莉娜的金钱探索's archive is 89 % Latin and plays in
+  // Ruby scripts, so its Latin share says nothing (one game's archive is 89 % Latin and plays in
   // Chinese). This assertion documents the gap rather than pretending it is closed.
   const live = prof(2494, 16226, 6413460);
   const bak = prof(6605, 13531, 6413398);
