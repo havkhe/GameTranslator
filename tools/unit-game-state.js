@@ -194,6 +194,28 @@ console.log("=== 已知限制：VX/VX Ace 与归档仍然没有拉丁判据 ==="
 }
 
 console.log("");
+console.log("=== 打包过的 MV/MZ：说清楚为什么翻不了，而不是「非 MV/MZ」===");
+{
+  // Only saves beside a big executable: the app is inside it (measured: Game_boxed.exe, 1.0 GB, Enigma
+  // Virtual Box). Saying 非 MV/MZ here would read as "wrong engine" and send the user looking in the wrong
+  // place; the state has to name the cause.
+  const dir = path.join(root, "packed");
+  const save = path.join(dir, "www", "save");
+  fs.mkdirSync(save, { recursive: true });
+  fs.writeFileSync(at(save, "file1.rpgsave"), "x");
+  fs.writeFileSync(at(dir, "Game_boxed.exe"), "MZ-not-really");
+  const c = G.classify(dir);
+  check("状态写明是「已打包」", c.State, "未汉化（已打包）");
+  check("备注点名了那个 exe", c.Note.includes("Game_boxed.exe"), true);
+  check("备注说明要先解包", c.Note.includes("解包"), true);
+
+  // A folder with neither saves nor data stays 非 MV/MZ.
+  const plain = path.join(root, "plain");
+  fs.mkdirSync(plain, { recursive: true });
+  check("普通空目录仍是「非 MV/MZ」", G.classify(plain).State, "非 MV/MZ");
+}
+
+console.log("");
 console.log("=== LATIN_TEXT_PCT / CJK_MIN 边界 ===");
 {
   const mk = (kana, han, latin) => ({ strings: 100, kana, han, latin, total: kana + han, letters: kana + han + latin,

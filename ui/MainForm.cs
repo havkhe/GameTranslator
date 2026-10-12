@@ -2859,7 +2859,27 @@ namespace GameTranslatorV3
                 if (File.Exists(Path.Combine(dir, "Game.rgss2a"))) return true;
                 if (File.Exists(Path.Combine(dir, "Game.rgssad"))) return true;
                 if (Directory.Exists(Path.Combine(dir, "www", "data"))) return true;
+                // A game whose app is packed into a single executable: only its save folder is left beside it.
+                // .rpgsave files are written by RPG Maker MV/MZ alone, so their presence says "this is an
+                // MV/MZ game" even when there is no data folder to read. Measured on 妛墍摿寈晹-SIGNIT-惢昳斉
+                // (Game_boxed.exe, 1 GB, Enigma Virtual Box): without this the folder was invisible in the
+                // list, so the user could not even learn why it cannot be translated.
+                if (IsPackedMvApp(dir)) return true;
                 return false;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// A folder whose MV/MZ data is inside an executable (a "boxed" build): only saves are beside it.
+        /// </summary>
+        private static bool IsPackedMvApp(string dir)
+        {
+            try
+            {
+                if (Directory.Exists(Path.Combine(dir, "www", "data"))) return false;   // readable: not packed
+                if (!Directory.Exists(Path.Combine(dir, "www", "save"))) return false;
+                return Directory.GetFiles(Path.Combine(dir, "www", "save"), "*.rpgsave").Length > 0;
             }
             catch { return false; }
         }
@@ -2941,6 +2961,9 @@ namespace GameTranslatorV3
                     // No signature to read: the name is the only clue left.
                     return a.EndsWith("3a", StringComparison.OrdinalIgnoreCase) ? "VX Ace" : "VX";
                 }
+                // An MV/MZ app packed into its own executable is still an MV/MZ game — saying so, and saying
+                // that it needs unpacking first, is the whole answer to "why can this one not be translated".
+                if (IsPackedMvApp(dir)) return "MV（已打包，需先解包）";
                 return "?";
             }
             catch { return "?"; }

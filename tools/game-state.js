@@ -329,8 +329,47 @@ function verdictFromBytes(game, live, backup, kind, archiveName, looseProf, viaA
   return { State: "未汉化", Note: label + "，" + fig, Evidence: evidence };
 }
 
+/** Is this folder an MV/MZ game whose app is packed into an executable ("boxed" build)? */
+function packedAppExe(game) {
+  // Only saves are left beside the exe: .rpgsave files are written by RPG Maker MV/MZ alone, so their
+  // presence identifies the engine even when there is no data folder to read. The launcher itself is
+  // whatever .exe is not a tool (measured: Game_boxed.exe, 1.0 GB, an Enigma Virtual Box container holding
+  // the whole game — www/data, js/, img/, audio/ — inside).
+  let hasSave = false;
+  const save = subdir(game, "www/save");
+  if (save) {
+    try { hasSave = fs.readdirSync(save).some((f) => /\.rpgsave$/i.test(f)); } catch (e) { }
+  }
+  if (!hasSave) return null;
+  let best = null, size = -1;
+  try {
+    for (const f of fs.readdirSync(game)) {
+      if (!/\.exe$/i.test(f)) continue;
+      if (/^(unins|vcredist|nw|node|ruby|mtool|一键|启动器)/i.test(f)) continue;
+      const p = child(game, f);
+      const st = fs.statSync(p);
+      if (st.size > size) { size = st.size; best = f; }
+    }
+  } catch (e) { }
+  return best ? { exe: best, size: size } : { exe: "(未找到 .exe)", size: 0 };
+}
+
 function classify(game) {  const loc = locate(game);
-  if (!loc) return { State: "非 MV/MZ", Note: "无 JSON 数据，本工具不支持", Evidence: {} };
+  if (!loc) {
+    // Not "this is not an MV/MZ game" when the evidence says otherwise: an MV/MZ save folder beside a big
+    // executable means the app is packed INTO that executable, and the honest answer is why we cannot read
+    // it and what to do about it — not a bare 非 MV/MZ that reads like "wrong engine".
+    const packed = packedAppExe(game);
+    if (packed) {
+      return {
+        State: "未汉化（已打包）",
+        Note: "MV/MZ 数据被打包进 " + packed.exe + "（" + (packed.size / 1048576).toFixed(0) +
+          " MB，虚拟文件系统），本工具读不到里面的 www\\data，需先用解包工具把它还原成普通文件夹才能翻译",
+        Evidence: { packedExe: packed.exe, packedSizeMB: Math.round(packed.size / 1048576) },
+      };
+    }
+    return { State: "非 MV/MZ", Note: "无 JSON 数据，本工具不支持", Evidence: {} };
+  }
 
   // Packed and VX/VX Ace games ARE supported (the pipeline unpacks the archive from its pristine copy
   // and repacks it; VX/VX Ace is driven through the portable Ruby), so "not supported / needs

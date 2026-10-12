@@ -155,6 +155,28 @@ function ensureDataBackup(engine, gameDir) {
 
   const engine = detectEngine(GAME_DIR);
   if (!engine) {
+    // An MV/MZ game whose app is packed into its own executable has a save folder beside it and nothing to
+    // read: say that, and say what to do, instead of "unrecognised engine" — measured on
+    // 妛墍摿寈晹-SIGNIT-惢昳斉 (Game_boxed.exe, 1.0 GB, Enigma Virtual Box holding www/data inside).
+    let packedExe = "";
+    try {
+      const saveDir = path.join(GAME_DIR, "www", "save");
+      const hasSave = fs.existsSync(saveDir) && fs.readdirSync(saveDir).some((f) => /\.rpgsave$/i.test(f));
+      if (hasSave) {
+        let size = -1;
+        for (const f of fs.readdirSync(GAME_DIR)) {
+          if (!/\.exe$/i.test(f)) continue;
+          if (/^(unins|vcredist|nw|node|ruby|mtool|一键|启动器)/i.test(f)) continue;
+          const st = fs.statSync(path.join(GAME_DIR, f));
+          if (st.size > size) { size = st.size; packedExe = f + "（" + Math.round(st.size / 1048576) + " MB）"; }
+        }
+      }
+    } catch (e) { /* the plain message below is enough */ }
+    if (packedExe) {
+      console.log("NOT_SUPPORTED 这是一个被打包过的 MV/MZ 游戏：数据（www/data）在 " + packedExe +
+        " 的虚拟文件系统里，本工具读不到。先用解包工具把它还原成普通文件夹（解包后应能看到 www/data/*.json），再来翻译。游戏没有被改动。");
+      process.exit(4);
+    }
     console.log("NOT_SUPPORTED 无法识别的游戏引擎（支持 MV/MZ 的 JSON 数据，以及 VX Ace/VX 的 .rvdata2/.rvdata 与 RGSSAD 归档）");
     process.exit(4);
   }

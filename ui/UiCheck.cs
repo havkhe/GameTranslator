@@ -544,6 +544,27 @@ namespace GameTranslatorV3.UiCheck
 
                         Assert(!Convert.ToBoolean(isGame.Invoke(null, new object[] { Path.Combine(tmp, "empty") })),
                             "什么都没有的目录不算游戏");
+
+                        // An MV/MZ game packed into its own executable: only www\save is left beside it.
+                        // Measured on 妛墍摿寈晹-SIGNIT-惢昳斉 (Game_boxed.exe, 1.0 GB, Enigma Virtual Box).
+                        var packed = Path.Combine(tmp, "packed-mv");
+                        Directory.CreateDirectory(Path.Combine(packed, "www", "save"));
+                        File.WriteAllText(Path.Combine(packed, "www", "save", "file1.rpgsave"), "x");
+                        File.WriteAllText(Path.Combine(packed, "Game_boxed.exe"), "MZ");
+                        Assert(Convert.ToBoolean(isGame.Invoke(null, new object[] { packed })),
+                            "只有 www\\save\\*.rpgsave + 一个 exe 也算游戏（打包过的 MV/MZ）");
+                        if (det != null)
+                            Assert(Convert.ToString(det.Invoke(null, new object[] { packed })) == "MV（已打包，需先解包）",
+                                "引擎列写明「已打包，需先解包」：" + Convert.ToString(det.Invoke(null, new object[] { packed })));
+
+                        // …but a game that also has a readable data folder is an ordinary MV game.
+                        var packed2 = Path.Combine(tmp, "mv-with-save");
+                        Directory.CreateDirectory(Path.Combine(packed2, "www", "data"));
+                        Directory.CreateDirectory(Path.Combine(packed2, "www", "save"));
+                        File.WriteAllText(Path.Combine(packed2, "www", "data", "Map001.json"), "{}");
+                        File.WriteAllText(Path.Combine(packed2, "www", "save", "file1.rpgsave"), "x");
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { packed2 })).StartsWith("M", StringComparison.Ordinal),
+                            "有 data 目录的游戏按正常 MV/MZ 判定：" + Convert.ToString(det.Invoke(null, new object[] { packed2 })));
                     }
                     if (bonus != null)
                     {
