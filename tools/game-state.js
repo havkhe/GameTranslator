@@ -132,13 +132,46 @@ function byteProfile(dir, exts) {
 const CN_MAX = 35, JP_MIN = 55;
 // A folder that is this much Latin letters is not CJK text, whatever its kana-vs-Han ratio says.
 const LATIN_TEXT_PCT = 70;
-// Below this many CJK characters the ratio is noise rather than a measurement: 22 characters can sit at
+// Below this many characters the ratio is noise rather than a measurement: 22 characters can sit at
 // any percentage at all. Both the 自带中文 verdict and its refutation rest on the ratio, so both need it.
 const CJK_MIN = 200;
 const RV_EXT = /\.(rvdata2?|rxdata)$/i;
 const JSON_EXT = /\.json$/i;
 
-/** Is this folder English/another Latin script, rather than Chinese or Japanese? */
+/**
+ * Language over the text the extractor would translate — NOT over raw bytes.
+ *
+ * This distinction is the whole difference between a working rule and a broken one. Counting raw bytes
+ * measures the game's plumbing: RPG Maker's JSON is mostly keys and structure ("events", "pages", "list",
+ * "parameters") and a VX Ace archive embeds whole Ruby scripts, so a Japanese or Chinese game measures
+ * 89-95 % Latin that way. Measured: with a byte-based Latin rule, 14 games changed verdict — including
+ * 【御光盟国汉化组】露出女子校生2, whose dialogue is Chinese and whose own resources/zh-CN folder says so.
+ *
+ * What does describe the language of a game is the text a player reads, so the strings are taken through
+ * the project's own extraction (rules.isTranslatable decides what counts) and the letters inside THEM are
+ * counted. English dialogue is then 99 % Latin; Chinese dialogue is not.
+ */
+function textProfile(dataDir) {
+  let entries = [];
+  try { entries = mv.extract(dataDir, dataDir).entries; } catch (e) { return null; }
+  if (!entries.length) return null;
+  let kana = 0, han = 0, latin = 0;
+  for (const e of entries) {
+    for (const ch of String(e.text)) {
+      const cp = ch.codePointAt(0);
+      if ((cp >= 0x3040 && cp <= 0x30ff) || cp === 0x30fc) kana++;
+      else if (cp >= 0x3400 && cp <= 0x9fff) han++;
+      else if ((cp >= 65 && cp <= 90) || (cp >= 97 && cp <= 122)) latin++;
+    }
+  }
+  const total = kana + han;
+  const letters = total + latin;
+  return { strings: entries.length, kana: kana, han: han, latin: latin, total: total, letters: letters,
+    kanaPct: total ? 100 * kana / total : 0,
+    latinPct: letters ? 100 * latin / letters : 0 };
+}
+
+/** Is the game's own text English/another Latin script, rather than Chinese or Japanese? */
 function isLatinText(p) { return !!p && p.letters >= CJK_MIN && p.latinPct >= LATIN_TEXT_PCT; }
 
 /** Did this project leave artifacts for the game (its cache or a run report)? */
@@ -253,32 +286,25 @@ function verdictFromBytes(game, live, backup, kind, archiveName, looseProf, viaA
   const label = kind === "packed"
     ? (archiveName + (viaArchive === false ? " 归档读不出，按松散数据判断" : " 归档"))
     : (kind === "vxace" ? "VX Ace" : "VX");
-  if (!live || live.letters < 20) {
+  if (!live || live.total < 20) {
     return { State: "无文本", Note: label + "（数据读不出来或文本太少）", Evidence: {} };
   }
   const ours = ourArtifacts(game);
   const bakPct = backup && backup.total > 20 ? backup.kanaPct : null;
   const evidence = { liveKanaPct: +live.kanaPct.toFixed(1), backupKanaPct: bakPct === null ? null : +bakPct.toFixed(1),
-    liveHan: live.han, liveKana: live.kana, liveLatin: live.latin, liveLatinPct: +live.latinPct.toFixed(1),
-    engine: label, ours: ours };
+    liveHan: live.han, liveKana: live.kana, engine: label, ours: ours };
   const loose = looseProf && looseProf.total > 20
     ? "；同目录松散数据假名 " + looseProf.kanaPct.toFixed(1) + "%（游戏读的是归档）" : "";
   const fig = "假名占比 " + (bakPct === null ? "" : bakPct.toFixed(1) + "% → ") + live.kanaPct.toFixed(1) + "%" + loose;
 
-  // An English (or other Latin-script) release. The kana figure above is a ratio inside the CJK characters
-  // only, so on a game whose text is Latin it compares a minority against millions of letters and cannot
-  // say anything about Chinese. Measured on Detective Girl of the Steam City: 99.7 % of its letters are
-  // Latin while that ratio read 32.8 % — under CN_MAX — which declared the pristine copy Chinese and made
-  // the window skip a game whose 13,900 dialogue lines were 100 % English. Latin is decisive on its own.
-  if (isLatinText(live)) {
-    return { State: "未汉化（英文原版）", Note: label + "，原版是英文（拉丁字母 " + live.latinPct.toFixed(1) +
-      "%，" + live.latin + " 个；" + fig + " 只是 CJK 内部比例）" + (ours ? "，本工具曾处理过" : ""), Evidence: evidence };
-  }
+  // No Latin rule here, deliberately. An English verdict has to come from the text a player reads, and for
+  // VX/VX Ace and archives that means running the Ruby extractor per game — a byte-level Latin share is
+  // useless: a .rvdata2 file embeds whole Ruby scripts, so a Japanese game measures ~89 % Latin
+  // (measured: 莉娜的金钱探索, whose archive plays in Chinese). Byte counts answer the kana-vs-Han question
+  // only, so only that question is asked here. The MV/MZ path below does measure the game's text.
 
   // The pristine copy is Chinese too: the game shipped Chinese (a 汉化组 release, or the folder claim).
-  // Guarded by the same CJK-population test as everything else here: a handful of CJK characters cannot
-  // decide that a game is Chinese.
-  if (bakPct !== null && bakPct < CN_MAX && !isLatinText(backup)) {
+  if (bakPct !== null && bakPct < CN_MAX) {
     return { State: "自带中文", Note: label + "，原版数据即中文（" + fig + "）", Evidence: evidence };
   }
   if (live.kanaPct < CN_MAX) {
@@ -347,22 +373,27 @@ function classify(game) {  const loc = locate(game);
   // （正确反映"游戏本身是中文的"）。
   const liveBytes = byteProfile(loc.live, JSON_EXT);
   const bakBytesDirs = backup ? byteProfile(backup, JSON_EXT) : null;
-  // CJK_MIN, not 20: see the byteProfile note. A ratio computed from 22 characters is noise, and both the
-  // 自带中文 verdict and its refutation are ratios.
+  // CJK_MIN, not 20: see the "noise" note above. A ratio computed from 22 characters is not a measurement,
+  // and both the 自带中文 verdict and its refutation are ratios.
   const liveBytePct = liveBytes && liveBytes.total >= CJK_MIN ? liveBytes.kanaPct : null;
   const bakBytePct = bakBytesDirs && bakBytesDirs.total >= CJK_MIN ? bakBytesDirs.kanaPct : null;
+  // The language of the game as the player sees it: over the strings the extractor would translate, not over
+  // the folder's bytes (which are mostly keys and structure — see textProfile).
+  const text = textProfile(loc.live);
   const evidence = {
     liveStrings: live ? live.total : 0, liveKanaPct: +liveKanaPct.toFixed(1),
     backup: !!backup, backupStrings: bakProfile ? bakProfile.total : 0, backupKanaPct: +bakKanaPct.toFixed(1),
     dialogue, text2frame: t2f, locales, dataDiff, installedByUs: installed,
-    liveLatinPct: liveBytes ? +liveBytes.latinPct.toFixed(1) : null,
-    backupLatinPct: bakBytesDirs ? +bakBytesDirs.latinPct.toFixed(1) : null,
+    textStrings: text ? text.strings : 0,
+    textKanaPct: text ? +text.kanaPct.toFixed(1) : null,
+    textLatinPct: text ? +text.latinPct.toFixed(1) : null,
   };
 
   if (!live || live.total < 20) {
-    // Not 无文本 if the folder is full of Latin letters: that is an English release, and "too little text"
-    // would be a lie about a game with millions of characters in it.
-    if (!isLatinText(liveBytes)) return { State: "无文本", Note: "可译文本太少", Evidence: evidence };
+    // Not 无文本 if the game's text is Latin: "too little text" would be a lie about a game with 13,900
+    // English dialogue lines in it. (The profile above only counts scalar string fields, so it can be blind
+    // to dialogue that lives in arrays — which is where MV keeps it.)
+    if (!isLatinText(text)) return { State: "无文本", Note: "可译文本太少", Evidence: evidence };
   }
 
   // A Chinese release ships Chinese in its own locale folder while ja-JP stays Japanese, so that is
@@ -372,25 +403,21 @@ function classify(game) {  const loc = locate(game);
   const jaLocale = locales.find((l) => /^ja/i.test(l.locale));
   const jaIsChinese = jaLocale && jaLocale.strings > 20 && jaLocale.kana < jaLocale.strings * 0.1;
 
-  // An English (or other Latin-script) release, same reasoning as in verdictFromBytes: the kana share of
-  // the CJK characters is a ratio of a minority, not a statement about the language of the game. Checked
-  // after the locale folder (that is direct evidence of a Chinese release) and before every CJK-ratio
-  // verdict, so no ratio can call an English game Chinese.
-  // (Placed after `ours` below, which its note needs.)
-
   // Whose work it is: a pristine backup we made, or a cache/report we left. The 一键还原汉化前.bat
   // scripts do NOT count — those ship with other people's 汉化 releases (御光盟国汉化组 ships one), so
   // counting them credited their work to this project.
   const ours = !!backup || ourArtifacts(game);
 
-  // An English (or other Latin-script) release. Same reasoning as in verdictFromBytes, and the reason this
-  // redesign exists: two of the branches below decide "Chinese" from a kana-vs-Han ratio, which on a game
-  // written in Latin letters compares a minority (20k CJK) against millions of letters and produced
-  // 自带中文 for a game with 13,900 untranslated English dialogue lines. This is checked after the locale
-  // folder, which is direct evidence of a Chinese release, and before every ratio-based verdict.
-  if (isLatinText(liveBytes)) {
-    return { State: "未汉化（英文原版）", Note: "原版是英文（拉丁字母 " + liveBytes.latinPct.toFixed(1) +
-      "%，" + liveBytes.latin + " 个；假名占比只是 CJK 内部比例）" + (ours ? "，本工具曾处理过" : ""), Evidence: evidence };
+  // An English (or other Latin-script) release. This is the redesign: the branches below both judge
+  // "Chinese" from a kana-vs-Han ratio, and on a game written in Latin letters that ratio compares a
+  // minority against the rest and lands anywhere — measured on Detective Girl of the Steam City, 32.8 %
+  // (under CN_MAX 35), which declared the pristine copy Chinese and made the window skip a game whose
+  // 13,900 dialogue lines were all English. The measure is the game's own text (textProfile), and the check
+  // sits after the locale folder — direct evidence of a Chinese release — and before every ratio verdict.
+  if (isLatinText(text)) {
+    return { State: "未汉化（英文原版）", Note: "原版是英文（可译文本的字母里拉丁占 " + text.latinPct.toFixed(1) +
+      "%，" + text.latin + " 个字母，共 " + text.strings + " 条文本；假名占比 " + text.kanaPct.toFixed(1) +
+      "% 只是 CJK 内部比例）" + (ours ? "，本工具曾处理过" : ""), Evidence: evidence };
   }
   // "对话" only when the figure really comes from the dialogue folder; otherwise it is the share of
   // translatable data fields that became Chinese.
@@ -434,12 +461,7 @@ function classify(game) {  const loc = locate(game);
   // The pristine copy is Chinese too: the game arrived translated (a 汉化 release, or the folder's
   // own claim), so nothing here was translated by this project and nothing needs translating.
   // Measured over ALL characters, not over the strings the extractor targets — see liveBytes above.
-  //
-  // The `!isLatinText(backup)` guard is the one that matters: on an English release the pristine copy
-  // carries millions of Latin letters and a kana share of 32.8 %, which is under CN_MAX and used to be
-  // read as "the original was already Chinese". That verdict is what made the window skip Detective Girl
-  // of the Steam City — 13,900 dialogue lines, all English, never translated.
-  if (bakBytePct !== null && bakBytePct < CN_MAX && !isLatinText(bakBytesDirs)) {
+  if (bakBytePct !== null && bakBytePct < CN_MAX) {
     return { State: "自带中文", Note: note("原版数据即中文（假名占比 " + bakBytePct.toFixed(1) + "% → " + (liveBytePct === null ? "?" : liveBytePct.toFixed(1)) + "%）"
       + (installed ? "，含其他汉化组的还原脚本" : "")), Evidence: evidence };
   }
@@ -447,7 +469,7 @@ function classify(game) {  const loc = locate(game);
   // an external translation (MTool etc.) or a 汉化 patch applied before this tool ever saw the game.
   // The state name stays exactly 已是中文 because the window skips those games (Skip = 已是中文/自带中文);
   // "外置汉化" belongs in the note, not in the name.
-  if (liveBytePct !== null && liveBytePct < CN_MAX && !ours && !backup && !isLatinText(liveBytes)) {
+  if (liveBytePct !== null && liveBytePct < CN_MAX && !ours && !backup) {
     return { State: "已是中文", Note: note("外置汉化（非本项目所译；假名占比 " + liveBytePct.toFixed(1) + "%）"
       + (installed ? "，含汉化组的还原脚本" : "")), Evidence: evidence };
   }
@@ -485,7 +507,7 @@ function classify(game) {  const loc = locate(game);
 // (tools/unit-game-state.js) — the whole point of the redesign is a judgement about language, and that has
 // to be checkable without a library of games on disk. The CLI below only runs when this file IS the entry
 // point, so requiring it in a test does not start a scan of J:\game.
-module.exports = { classify, byteProfile, isLatinText, verdictFromBytes, locate, findBackup, CN_MAX, JP_MIN, LATIN_TEXT_PCT, CJK_MIN };
+module.exports = { classify, byteProfile, textProfile, isLatinText, verdictFromBytes, locate, findBackup, CN_MAX, JP_MIN, LATIN_TEXT_PCT, CJK_MIN };
 
 // --- which games -------------------------------------------------------------------------
 if (require.main === module) {
