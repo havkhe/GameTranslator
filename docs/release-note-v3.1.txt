@@ -6,13 +6,21 @@
 
 ## 一、下载 / Downloads
 
-- `GameTranslatorV3-v3.1.zip` —— **解压即用**：主程序 + 管线 + 工具 + 内置 node 与 ruby
-  + **两套 llama.cpp 后端并存**（`llama\vulkan\` 与 `llama\cuda12\`），切换只改一个设置、离线即可。
-  - 默认用 **Vulkan**：GTX 10 系等老 NVIDIA、AMD、Intel 都跑得动。
-  - RTX 20 / 30 / 40 / 50 系想更快就用 **CUDA 12**（`llama\cuda12\`，自带 CUDA 运行库）：
-    程序里点模型行最右的「后端：…」按钮，或双击根目录 `切换显卡后端.bat`。
+- `GameTranslatorV3-v3.1.zip` —— **解压即用**：主程序 + 管线 + 工具 + 内置 node 与 ruby + **Vulkan 版 llama.cpp**。
+  - **默认就是 Vulkan**：GTX 10 系等老 NVIDIA、AMD、Intel 都跑得动。
+  - **RTX 20 / 30 / 40 / 50 系想更快就用 CUDA 12**：程序里点模型行最右的
+    「后端：…」按钮会**一键把 CUDA 版下载并解压到 `llama\cuda12\`**（约 630 MB，
+    含 CUDA 运行库），之后一键切换；不想联网也可以另行下载 CUDA 包放进该目录。
+  - **两套并存、离线切换**：切换只改一个设置并重启模型服务，不用重下一遍。
+    同一个入口在根目录也有：双击 `切换显卡后端.bat`，或 `.\switch-backend.ps1 -Backend vulkan|cuda12`。
+  - **CUDA 版不由本包直接分发**（两个包合计约 630 MB，对老卡用户是白下载）。如果不想用程序里的一键
+    下载，也可以自己从 llama.cpp 官方发行版取这两个文件，解压进 `llama\cuda12\`（两包解到同一目录）：
+      `llama-b11571-bin-win-cuda-12.4-x64.zip` 与 `cudart-llama-bin-win-cuda-12.4-x64.zip`
+    （来自 <https://github.com/ggml-org/llama.cpp/releases/tag/b11571>；换更新的 bXXXX 版本同理，
+    注意两个包必须同一个版本）。
   - 想更新到更新的 llama.cpp 版本：`.\download-llama.ps1 -Dest .\llama\vulkan -Backend vulkan`
     （CUDA 版同理，`-Backend cuda12`）。
+  - 注意 **CUDA 12 的预编译包不支持 GTX 10 系（Pascal / sm_61）**，在那种卡上会静默退回 CPU。
 - 模型 `.gguf` 需另行取得（放到设置里的「模型目录」）。4B 级（如 Galtransl-v4）质量更好，1.8B 级（如 Hy-MT2）显存占用更小。
 - 覆盖升级即可，**设置与密钥不会丢**：`ui-settings.ini`、`api-config.json`、`work\` 都不在包里。
 
@@ -37,9 +45,10 @@
   不再因为"没有散装 data 目录"而显示不出引擎；只有归档、启动器不叫 `Game.exe` 的游戏也能扫到。
 - **被打包进 exe 的游戏会被识别并说明**：状态写 `未汉化（已打包）`、引擎写 `MV（已打包，需先解包）`，
   去翻它会在日志里明确告诉你数据在哪个 exe 里、需要先解包——而不是沉默。见下面「已知限制」。
-- **显卡后端可一键切换（Vulkan ↔ CUDA 12）**：包里两套并存，切的是一个设置而不是重下一遍。
-  窗口里「后端：…」按钮即切（空闲时自动重启模型服务、翻译进行中会拒绝以免打断整批），根目录
-  `切换显卡后端.bat` 是不开窗口时的同一入口；状态行会写明当前后端，所选那套缺失时会提示并可一键下载。
+- **显卡后端可一键切换（Vulkan ↔ CUDA 12）**：两套各在自己的文件夹（`llama\vulkan\`、
+  `llama\cuda12\`），切的是一个设置而不是重下一遍。窗口里「后端：…」按钮即切（空闲时自动重启
+  模型服务、翻译进行中会拒绝以免打断整批；缺哪一套就顺手把哪一套下下来），根目录
+  `切换显卡后端.bat` 是不开窗口时的同一入口；状态行会写明当前后端。
 
 ## 三、修掉的问题
 
