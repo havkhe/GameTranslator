@@ -2512,6 +2512,7 @@ namespace GameTranslatorV3
             if (!quiet) AppendLog("开始扫描 " + path + "（最多 " + MaxScanDepth + " 层）…");
             _status.Text = "正在扫描 " + path + " …";
             var found = new List<string>();
+            var buried = new List<string>();
             int visited = 0;
             var started = DateTime.Now;
 
@@ -2532,7 +2533,31 @@ namespace GameTranslatorV3
                         Application.DoEvents();
                     }
 
-                    if (IsGameDir(dir)) found.Add(dir);
+                    if (IsGameDir(dir))
+                    {
+                        found.Add(dir);
+                        // Nothing below a game is a separate game: the launcher found here starts whatever
+                        // sits underneath, and adding those produced a list full of the same title over and
+                        // over — measured: prisonbrave_1.1.0\Tool, 長谷川麻衣のメイド飼育調教\Game（セリフ有り）
+                        // and Game（セリフ無し）, ストアマトロンNTR\…\Game, びたみんクエスト 2ND ATTRACT\<同名>
+                        // (the release folder and the game folder inside it are the same game at two depths).
+                        //
+                        // A bonus folder is the exception: a separate game shipped alongside the main one,
+                        // which is worth finding (measured: Yutaka Gaiden外传 inside 无知少女的乡村韵事).
+                        // Anything else buried here is named in the log rather than dropped in silence, and
+                        // 「添加游戏」 can add it in one click.
+                        if (depth < MaxScanDepth)
+                        {
+                            foreach (var sub in SafeDirs(dir))
+                            {
+                                var subName = Path.GetFileName(sub);
+                                if (IsBoringDir(subName)) continue;
+                                if (IsBonusName(subName)) queue.Enqueue(new KeyValuePair<string, int>(sub, depth + 1));
+                                else if (IsGameDir(sub)) buried.Add(Path.GetFileName(dir) + "\\" + subName);
+                            }
+                        }
+                        continue;
+                    }
                     if (depth >= MaxScanDepth) continue;
 
                     IEnumerable<string> subs;
@@ -2554,6 +2579,29 @@ namespace GameTranslatorV3
             foreach (var dir in found) AddOrUpdate(dir);
             var secs = Math.Round((DateTime.Now - started).TotalSeconds, 1);
             AppendLog("  " + path + " → 检查 " + visited + " 个目录，找到 " + found.Count + " 个游戏，用时 " + secs + " 秒");
+            if (buried.Count > 0)
+            {
+                var names = buried.Take(6).Select(s => s.Length > 46 ? s.Substring(0, 46) + "…" : s).ToList();
+                AppendLog("  游戏内部还有 " + buried.Count + " 个启动目录，未当成新游戏（多为该游戏自己的子程序）：" +
+                    string.Join("、", names.ToArray()) + (buried.Count > 6 ? " 等" : "") +
+                    "。若其中有你要翻译的独立游戏，用「添加游戏」直接指向它即可。");
+            }
+        }
+
+        /// <summary>
+        /// A folder that is its own game even though it sits inside another game.
+        ///
+        /// Releases often ship a second, smaller game beside the main one, and the player would want it
+        /// translated too (measured: Yutaka Gaiden外传 inside 无知少女の乡村韵事). Everything else found below
+        /// a game is part of that game and must not become a second entry in the list.
+        /// </summary>
+        private static bool IsBonusName(string name)
+        {
+            var n = (name ?? "").ToLowerInvariant();
+            return n.Contains("bonus") || n.Contains("omake") || n.Contains("extras") ||
+                   n.Contains("おまけ") || n.Contains("オマケ") || n.Contains("特典") ||
+                   n.Contains("外伝") || n.Contains("外传") || n.Contains("gaiden") ||
+                   n.Contains("追加") || n.Contains("another");
         }
 
         private static IEnumerable<string> SafeDirs(string dir)
@@ -2617,20 +2665,75 @@ namespace GameTranslatorV3
                    n.StartsWith("一键") || n.StartsWith("启动器");
         }
 
+        /// <summary>
+        /// Which RPG Maker this game is, in the names the pipeline itself logs: MV / MZ / VX / VX Ace.
+        ///
+        /// Looking for a loose data folder is not enough. A VX or VX Ace game normally keeps its whole data
+        /// tree inside Game.rgss2a / Game.rgss3a and has no data folder at all, so this returned "?" for all
+        /// of them — measured: 25 of the 100 folders found under J:\game, among them
+        /// [151231][アンコクマリモカン] SNEAK IN DESPERADA (Game.exe + Game.rgss2a + .rvdata saves, a VX
+        /// game). The archive's own header says which one it is: RGSSAD with version 1 is VX, version 3 is
+        /// VX Ace — the same check the pipeline's archive codec makes.
+        /// </summary>
         private static string DetectEngine(string dir)
         {
             try
             {
-                string data = Directory.Exists(Path.Combine(dir, "www", "data"))
-                    ? Path.Combine(dir, "www", "data") : Path.Combine(dir, "data");
-                if (!Directory.Exists(data)) return "?";
-                var files = Directory.GetFiles(data).Select(Path.GetFileName).ToList();
-                if (files.Any(f => f.EndsWith(".rvdata2", StringComparison.OrdinalIgnoreCase))) return "VX Ace";
-                if (files.Any(f => f.EndsWith(".rvdata", StringComparison.OrdinalIgnoreCase))) return "VX";
-                if (files.Any(f => f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))) return "MV/MZ";
+                string wwwData = Path.Combine(dir, "www", "data");
+                string data = Directory.Exists(wwwData) ? wwwData : Path.Combine(dir, "data");
+                if (Directory.Exists(data))
+                {
+                    var files = Directory.GetFiles(data).Select(Path.GetFileName).ToList();
+                    if (files.Any(f => f.EndsWith(".rvdata2", StringComparison.OrdinalIgnoreCase))) return "VX Ace";
+                    if (files.Any(f => f.EndsWith(".rvdata", StringComparison.OrdinalIgnoreCase))) return "VX";
+                    if (files.Any(f => f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))) return IsMz(dir) ? "MZ" : "MV";
+                }
+                foreach (var a in new[] { "Game.rgss2a", "Game.rgss3a", "Game.rgssad" })
+                {
+                    string p = Path.Combine(dir, a);
+                    if (!File.Exists(p)) continue;
+                    int version = ArchiveVersion(p);
+                    if (version == 3) return "VX Ace";
+                    if (version == 1) return "VX";
+                    // No signature to read: the name is the only clue left.
+                    return a.EndsWith("3a", StringComparison.OrdinalIgnoreCase) ? "VX Ace" : "VX";
+                }
                 return "?";
             }
             catch { return "?"; }
+        }
+
+        /// <summary>MZ keeps its core script as rmmz_core.js; MV's is rpg_core.js (inside www/ when deployed).</summary>
+        private static bool IsMz(string dir)
+        {
+            try
+            {
+                foreach (var js in new[] { Path.Combine(dir, "js"), Path.Combine(dir, "www", "js") })
+                {
+                    if (!Directory.Exists(js)) continue;
+                    if (Directory.GetFiles(js, "rmmz_core.js").Length > 0) return true;
+                    if (Directory.GetFiles(js, "rpg_core.js").Length > 0) return false;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>The RGSSAD format version — 1 = VX, 3 = VX Ace, 0 = not an archive. Bytes 0-5 are "RGSSAD".</summary>
+        private static int ArchiveVersion(string path)
+        {
+            try
+            {
+                using (var fs = File.OpenRead(path))
+                {
+                    var head = new byte[8];
+                    if (fs.Read(head, 0, 8) < 8) return 0;
+                    if (head[0] != 'R' || head[1] != 'G' || head[2] != 'S' || head[3] != 'S' ||
+                        head[4] != 'A' || head[5] != 'D') return 0;
+                    return head[7];
+                }
+            }
+            catch { return 0; }
         }
 
         private void AddGame()

@@ -398,6 +398,74 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 引擎识别（含归档游戏）与扫描范围 ===");
+            {
+                var det = typeof(MainForm).GetMethod("DetectEngine", BindingFlags.NonPublic | BindingFlags.Static);
+                var bonus = typeof(MainForm).GetMethod("IsBonusName", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(det != null && bonus != null, "找到 DetectEngine / IsBonusName（反射）");
+                var tmp = Path.Combine(Path.GetTempPath(), "gt-uicheck-engine-" + Environment.TickCount.ToString());
+                try
+                {
+                    Directory.CreateDirectory(tmp);
+                    if (det != null)
+                    {
+                        // Loose data folders.
+                        var a = Path.Combine(tmp, "ace"); Directory.CreateDirectory(Path.Combine(a, "data"));
+                        File.WriteAllText(Path.Combine(a, "data", "Map001.rvdata2"), "x");
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { a })) == "VX Ace", "散装 .rvdata2 → VX Ace");
+
+                        var v = Path.Combine(tmp, "vx"); Directory.CreateDirectory(Path.Combine(v, "Data"));
+                        File.WriteAllText(Path.Combine(v, "Data", "Map001.rvdata"), "x");
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { v })) == "VX", "散装 .rvdata → VX");
+
+                        var mv = Path.Combine(tmp, "mv"); Directory.CreateDirectory(Path.Combine(mv, "www", "data"));
+                        Directory.CreateDirectory(Path.Combine(mv, "www", "js"));
+                        File.WriteAllText(Path.Combine(mv, "www", "data", "Map001.json"), "{}");
+                        File.WriteAllText(Path.Combine(mv, "www", "js", "rpg_core.js"), "//");
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { mv })) == "MV", "JSON + rpg_core.js → MV");
+
+                        var mz = Path.Combine(tmp, "mz"); Directory.CreateDirectory(Path.Combine(mz, "www", "data"));
+                        Directory.CreateDirectory(Path.Combine(mz, "www", "js"));
+                        File.WriteAllText(Path.Combine(mz, "www", "data", "Map001.json"), "{}");
+                        File.WriteAllText(Path.Combine(mz, "www", "js", "rmmz_core.js"), "//");
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { mz })) == "MZ", "JSON + rmmz_core.js → MZ");
+
+                        // Data inside an archive — the case that used to show no engine at all.
+                        var p2 = Path.Combine(tmp, "packedvx"); Directory.CreateDirectory(p2);
+                        var head1 = new byte[8]; head1[0] = (byte)'R'; head1[1] = (byte)'G'; head1[2] = (byte)'S';
+                        head1[3] = (byte)'S'; head1[4] = (byte)'A'; head1[5] = (byte)'D'; head1[7] = 1;
+                        File.WriteAllBytes(Path.Combine(p2, "Game.rgss2a"), head1);
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { p2 })) == "VX", "Game.rgss2a（版本 1）→ VX");
+
+                        var p3 = Path.Combine(tmp, "packedace"); Directory.CreateDirectory(p3);
+                        var head3 = new byte[8]; head3[0] = (byte)'R'; head3[1] = (byte)'G'; head3[2] = (byte)'S';
+                        head3[3] = (byte)'S'; head3[4] = (byte)'A'; head3[5] = (byte)'D'; head3[7] = 3;
+                        File.WriteAllBytes(Path.Combine(p3, "Game.rgss3a"), head3);
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { p3 })) == "VX Ace", "Game.rgss3a（版本 3）→ VX Ace");
+
+                        var none = Path.Combine(tmp, "empty"); Directory.CreateDirectory(none);
+                        Assert(Convert.ToString(det.Invoke(null, new object[] { none })) == "?", "空目录 → ?（不猜）");
+                    }
+                    if (bonus != null)
+                    {
+                        foreach (var s in new[] { "bonus", "Bonus Game", "おまけ", "特典", "Yutaka Gaiden外传", "extras" })
+                        {
+                            Assert(Convert.ToBoolean(bonus.Invoke(null, new object[] { s })), "附赠游戏目录被识别：" + s);
+                        }
+                        foreach (var s in new[] { "Tool", "game1", "game2", "Game（セリフ有り）", "js", "plugins", "data" })
+                        {
+                            Assert(!Convert.ToBoolean(bonus.Invoke(null, new object[] { s })), "不是附赠目录：" + s);
+                        }
+                    }
+                }
+                finally { try { Directory.Delete(tmp, true); } catch { } }
+                // A fresh configuration must reach past the release wrappers (更多game\Title\Title); the value
+                // already stored in ui-settings.ini is the user's own and is not asserted here.
+                var fresh = new GameTranslatorV3.Core.Settings();
+                Assert(fresh.ScanDepth >= 5, "新配置的默认扫描深度 " + fresh.ScanDepth + " ≥ 5");
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 翻译对照面板（实时显示原文/译文）===");
             {
                 var srcBox = FindControl(form, "pairSrc") as TextBox;

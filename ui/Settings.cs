@@ -99,8 +99,13 @@ namespace GameTranslatorV3.Core
         /// and 136 games at depth 6. Raising it recovers games nested inside another game's
         /// folder (RJ-numbered releases often look like &lt;root&gt;\Title\Title\game) at
         /// the cost of a slower scan, hence a setting rather than a constant.
+        ///
+        /// 6 rather than 4 by default, because the walk no longer descends INTO a game it has found (see
+        /// ScanPath): the depth now only buys reach through release wrappers like &lt;root&gt;\更多game\Title\Title,
+        /// which is exactly where depth 4 was losing games — measured on this library: 36 of the 110 known
+        /// games sit deeper than 4, and the 牧場/Loretta/Lizbel releases all need 5.
         /// </summary>
-        public int ScanDepth = 4;
+        public int ScanDepth = 6;
 
         /// <summary>Scan roots as a list, with duplicates and empties removed.</summary>
         public List<string> ScanRoots
