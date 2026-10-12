@@ -3894,10 +3894,10 @@ namespace GameTranslatorV3
             if (next == "cuda12" && !CudaIsUsuallyFasterOnThisGpu())
             {
                 // Pascal (GTX 10 系, sm_61) IS in the CUDA build shipped here — its fatbin carries
-                // sm_50/61/70/75/80/90 and it was measured running on a GTX 1060. What varies is the speed:
-                // CUDA wins prompt processing by 2-4x, but for the 4B K-quant models the decode step (which is
-                // what produces the translation) is ~30-50% slower than Vulkan. So this warns instead of
-                // refusing, and says which way it usually goes.
+                // sm_50/61/70/75/80/90 and it was measured running on a GTX 10-series card. What varies is the
+                // speed: CUDA wins prompt processing by 2-4x, but for the 4B K-quant models the decode step
+                // (which is what produces the translation) is ~30-50% slower than Vulkan. So this warns
+                // instead of refusing, and says which way it usually goes.
                 var r1 = MessageBox.Show(this,
                     "没检测到 RTX 20 系及以上的 NVIDIA 显卡。\n\n" +
                     "CUDA 版在 GTX 10 系（Pascal）上**能跑**，只是不一定更快：它在读入（预填充）上快 2~4 倍，\n" +
@@ -3963,7 +3963,7 @@ namespace GameTranslatorV3
         internal static bool NameLooksLikeNvidia(string name)
         {
             return System.Text.RegularExpressions.Regex.IsMatch(name ?? "",
-                @"(GeForce|Quadro|Tesla|Titan|\bRTX\b|\bGTX\b|\bMX\d|\bT4\b|\bV100\b|A\d{2,4}\s|L4\b|L40\b|H100\b)",
+                @"(NVIDIA|GeForce|Quadro|Tesla|Titan|\bRTX\b|\bGTX\b|\bMX\d|\bT4\b|\bV100\b|A\d{2,4}\b|L4\b|L40\b|H100\b)",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 

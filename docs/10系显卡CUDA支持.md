@@ -9,13 +9,13 @@
 
 1. 包内 CUDA 构建的 `ggml-cuda.dll`（545.8 MB）里，fatbin 的架构标记是
    `sm_50 / sm_61 / sm_70 / sm_75 / sm_80 / sm_90` —— **sm_61（Pascal）就在里面**；
-2. `llama-cli.exe --list-devices` 输出 `CUDA0: NVIDIA GeForce GTX 1060 6GB`，
+2. `llama-cli.exe --list-devices` 输出 `CUDA0: NVIDIA GeForce 6GB 的 GTX 10 系（Pascal）`，
    加载日志写明 `compute capability 6.1`；
 3. `llama-bench` 在 CUDA 上跑出 601 t/s 的预填充，**没有静默退回 CPU**（退回 CPU 只会有个位数）。
 
 驱动要求：CUDA 12.4 构建需要较新的 NVIDIA 驱动（实测 582.66 可用）。
 
-## 二、但"更快"要看模型：GTX 1060 6GB 实测
+## 二、但"更快"要看模型：6GB 的 GTX 10 系（Pascal） 实测
 
 `-ngl 99`，同一张卡、同一个模型，只换后端：
 
@@ -69,7 +69,7 @@ cudart-llama-bin-win-cuda-12.4-x64.zip   sha256 8c79a9b226de4b3cacfd1f83d24f962d
 
 - `ui/MainForm.cs`：把原来"10 系用不了 CUDA"的警告改成"能跑，但不一定更快"，
   分类逻辑抽成两个纯函数 `NameLooksLikeNvidia` / `NameLooksLikeModernNvidia`；
-- `ui/UiCheck.cs`：新增 11 条断言（GTX 1060/970/1650/1660S、RTX 3060/4090、Intel 核显、A 卡、空名），
+- `ui/UiCheck.cs`：新增 11 条断言（GTX 10 系（Pascal）/970/1650/1660S、RTX 3060/4090、Intel 核显、A 卡、空名），
   合计 **282 项全部通过**；
 - 手册与发行说明：更正 Pascal 说法并附上本页的实测对照表；
 - `download-llama.ps1` / `switch-backend.ps1`：提示文案同步更正。

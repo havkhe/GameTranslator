@@ -29,7 +29,7 @@ GameTranslator v3.0 —— 安装说明 / Installation
   末尾会写出来。
 
   **到底哪个快：取决于模型与量化，建议实测**（界面上有 tok/s 与条/分，跑一局就知道）。
-  在一张 GTX 1060 6GB 上实测的对照：
+  在一张 6GB 的 GTX 10 系（Pascal）卡上实测的对照：
 
       模型                后端      读入(预填充)     生成(出译文)
       Hy-MT2 1.8B Q8_0    CUDA      1451 t/s        46.3 t/s   ← CUDA 明显更快

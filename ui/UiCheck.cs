@@ -709,19 +709,21 @@ namespace GameTranslatorV3.UiCheck
 
                 // Which GPUs count as "CUDA is usually the faster pick". Pascal (GTX 10 系) IS supported by the
                 // CUDA build we ship — its fatbin carries sm_50/61/70/75/80/90 and it was measured running on a
-                // GTX 1060 — so it must NOT be classified as unusable, only as "not the usual faster pick".
-                Assert(MainForm.NameLooksLikeNvidia("NVIDIA GeForce GTX 1060 6GB"), "GTX 1060 是 NVIDIA（CUDA 可用）");
+                // GTX 10-series card — so it must NOT be classified as unusable, only as "not the usual faster
+                // pick". Bare model names on purpose: a shipped file should not name the card the author owns.
+                Assert(MainForm.NameLooksLikeNvidia("NVIDIA GTX 1070"), "GTX 10 系是 NVIDIA（CUDA 可用）");
                 Assert(!MainForm.NameLooksLikeNvidia("Intel(R) UHD Graphics 630"), "Intel 核显不是 NVIDIA");
                 Assert(!MainForm.NameLooksLikeNvidia("AMD Radeon RX 580"), "A 卡不是 NVIDIA");
                 Assert(!MainForm.NameLooksLikeNvidia(""), "空名字不是 NVIDIA");
-                Assert(MainForm.NameLooksLikeNvidia("NVIDIA GeForce RTX 3060"), "RTX 3060 是 NVIDIA");
-                Assert(MainForm.NameLooksLikeNvidia("NVIDIA GeForce GTX 1650"), "GTX 16 系是 NVIDIA（Turing）");
-                Assert(!MainForm.NameLooksLikeModernNvidia("NVIDIA GeForce GTX 1060 6GB"),
-                    "GTX 1060 不算「CUDA 通常更快」那一档（能跑，但生成更慢）");
-                Assert(!MainForm.NameLooksLikeModernNvidia("NVIDIA GeForce GTX 970"), "GTX 9 系不算");
-                Assert(MainForm.NameLooksLikeModernNvidia("NVIDIA GeForce RTX 3060"), "RTX 3060 算");
-                Assert(MainForm.NameLooksLikeModernNvidia("NVIDIA GeForce RTX 4090"), "RTX 4090 算");
-                Assert(MainForm.NameLooksLikeModernNvidia("NVIDIA GeForce GTX 1660 SUPER"), "GTX 16 系算（sm_75）");
+                Assert(MainForm.NameLooksLikeNvidia("NVIDIA T4"), "T4 是 NVIDIA");
+                Assert(MainForm.NameLooksLikeNvidia("NVIDIA GTX 1660 SUPER"), "GTX 16 系是 NVIDIA（Turing）");
+                Assert(MainForm.NameLooksLikeNvidia("NVIDIA A100"), "A100 是 NVIDIA");
+                Assert(!MainForm.NameLooksLikeModernNvidia("NVIDIA GTX 1070"),
+                    "GTX 10 系不算「CUDA 通常更快」那一档（能跑，但生成更慢）");
+                Assert(!MainForm.NameLooksLikeModernNvidia("NVIDIA GTX 970"), "GTX 9 系不算");
+                Assert(MainForm.NameLooksLikeModernNvidia("NVIDIA T4"), "T4 算（sm_75）");
+                Assert(MainForm.NameLooksLikeModernNvidia("NVIDIA A100"), "A100 算");
+                Assert(MainForm.NameLooksLikeModernNvidia("NVIDIA GTX 1660 SUPER"), "GTX 16 系算（sm_75）");
                 Assert(!MainForm.NameLooksLikeModernNvidia("Intel(R) UHD Graphics 630"), "Intel 核显不算现代 NVIDIA");
             }
 
