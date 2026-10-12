@@ -487,6 +487,47 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 按名字搜索游戏（筛选只影响显示）===");
+            {
+                var box = FindControl(form, "txtSearch") as TextBox;
+                Assert(box != null, "存在搜索框 txtSearch");
+                var matches = typeof(MainForm).GetMethod("MatchesQuery", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert(matches != null, "找到 MatchesQuery（名字匹配规则）");
+                if (matches != null)
+                {
+                    var m = (Func<string, string, bool>)((name, q) => Convert.ToBoolean(matches.Invoke(null, new object[] { name, q })));
+                    Assert(m("NTR Gyaru", ""), "空查询匹配全部");
+                    Assert(m("NTR Gyaru", "   "), "只有空格也匹配全部");
+                    Assert(m("NTR Gyaru", "ntr"), "大小写不敏感");
+                    Assert(m("NTR Gyaru", "GYARU"), "大写查询也能命中");
+                    Assert(m("NTR Sisters - Ciella & Luciella", "ntr sisters"), "空格分隔多词：全部命中才匹配");
+                    Assert(!m("NTR Gyaru", "ntr police"), "多词里有一个不命中就不匹配");
+                    Assert(m("\u65e0\u77e5\u5c11\u5973\u7684\u4e61\u6751\u97f5\u4e8bVer2.0DLC", "\u4e61\u6751"), "中文子串命中");
+                    Assert(m("NTR Gyaru", "  ntr  "), "查询前后空格被忽略");
+                    Assert(m("NTR Gyaru", "\u3000ntr\u3000"), "全角空格作分隔符");
+                    Assert(!m("NTR Gyaru", "Sisters"), "不命中的词就是不匹配");
+                }
+                // The list must be able to shrink to nothing and come back, WITHOUT touching the model —
+                // that is the "display-only" promise the count line depends on.
+                var gamesField = typeof(MainForm).GetField("_games", BindingFlags.NonPublic | BindingFlags.Instance);
+                var refresh = typeof(MainForm).GetMethod("RefreshList", BindingFlags.NonPublic | BindingFlags.Instance);
+                var list = Flatten(form).OfType<ListView>().FirstOrDefault(l => l.VirtualMode);
+                var games = gamesField == null ? null : (System.Collections.IList)gamesField.GetValue(form);
+                Assert(box != null && games != null && refresh != null && list != null, "取到搜索框 / _games / RefreshList / 列表");
+                if (box != null && games != null && refresh != null && list != null && games.Count > 0)
+                {
+                    int totalGames = games.Count;
+                    box.Text = "zzzz-no-such-game-zzzz";
+                    refresh.Invoke(form, null);
+                    Assert(list.VirtualListSize == 0, "筛选无结果时列表显示 0 行（共 " + totalGames + " 个游戏）");
+                    Assert(games.Count == totalGames, "游戏本身一个都没少（" + games.Count + "）");
+                    box.Text = "";
+                    refresh.Invoke(form, null);
+                    Assert(list.VirtualListSize == games.Count, "清空查询后全部回来：" + list.VirtualListSize);
+                }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 翻译对照面板（实时显示原文/译文）===");
             {
                 var srcBox = FindControl(form, "pairSrc") as TextBox;

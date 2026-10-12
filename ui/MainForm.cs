@@ -61,6 +61,16 @@ namespace GameTranslatorV3
         private int _runTotalCache = -1, _runUnknownCache, _runTotalKey = -1;
 
         private Button _btnScan, _btnAdd, _btnRefresh, _btnRescanAll, _btnState, _btnSelectAll, _btnClearSel;
+        private TextBox _txtSearch;
+        private Label _lblSearchInfo;
+        /// <summary>
+        /// The games the list is currently SHOWING — all of them, or the ones matching the search box.
+        ///
+        /// The model stays _games: filtering changes which rows are drawn, never which games run. What runs
+        /// is still everything ticked (see StartTranslation), and the count line keeps saying how many are
+        /// ticked, so a game ticked before a filter was typed cannot silently drop out of the batch.
+        /// </summary>
+        private readonly List<GameItem> _view = new List<GameItem>();
         private Button _btnStartSel, _btnStartAll, _btnPause, _btnResume, _btnStop, _btnCheck;
         private Button _btnUninstall, _btnRestore, _btnOpenLog, _btnClearLog, _btnSettings;
 
@@ -339,7 +349,8 @@ namespace GameTranslatorV3
             };
             _list.RetrieveVirtualItem += (s, e) =>
             {
-                if (e.ItemIndex >= 0 && e.ItemIndex < _games.Count) e.Item = MakeRow(_games[e.ItemIndex]);
+                // The row index is an index into what is SHOWN, which the search box may have shortened.
+                if (e.ItemIndex >= 0 && e.ItemIndex < _view.Count) e.Item = MakeRow(_view[e.ItemIndex]);
             };
             _list.Columns.Add("选", 34);             // 0  the check character
             _list.Columns.Add("游戏", 300);          // 1  game name (absorbs the slack)
@@ -379,6 +390,9 @@ namespace GameTranslatorV3
             // 任务队列 / 工具栏 / 游戏列表 / 任务控制 / 日志.
             pane.Controls.Add(BuildTaskControlBox());
             pane.Controls.Add(BuildLogBox());
+            // Added before the toolbar, so docking (resolved backwards through the collection) puts the
+            // search strip below it and directly above the list.
+            pane.Controls.Add(BuildSearchRow());
             pane.Controls.Add(bar);
             // Added last, and docking is resolved from the end of the collection backwards, so this
             // reserves the top strip above the toolbar: 任务队列 / 工具栏 / 游戏列表.
@@ -740,15 +754,65 @@ namespace GameTranslatorV3
         /// </summary>
         private void ToggleRow(int idx)
         {
-            if (idx < 0 || idx >= _games.Count) return;
+            if (idx < 0 || idx >= _view.Count) return;
             if (idx == _lastToggleRow && (DateTime.Now - _lastToggleAt).TotalMilliseconds < 200) return;
             _lastToggleRow = idx;
             _lastToggleAt = DateTime.Now;
-            _games[idx].Checked = !_games[idx].Checked;
-            Startup.Trace("勾选切换 行 " + idx + " → " + (_games[idx].Checked ? "已勾选" : "未勾选") +
+            _view[idx].Checked = !_view[idx].Checked;
+            Startup.Trace("勾选切换 行 " + idx + " → " + (_view[idx].Checked ? "已勾选" : "未勾选") +
                 "，合计 " + _games.Count(x => x.Checked));
             _list.RedrawItems(idx, idx, false);
             UpdateButtons();
+        }
+
+        /// <summary>
+        /// The game-name filter, directly above the list.
+        ///
+        /// A library of a hundred releases is navigated by name, and the folder names carry the title, the
+        /// RJ number and the release group — typing one word is faster than scrolling. Filtering is
+        /// display-only (see _view): it never decides what a run does.
+        /// </summary>
+        private Control BuildSearchRow()
+        {
+            var row = new Panel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(6, 3, 6, 1) };
+            var lbl = new Label { Text = "搜索游戏名：", Dock = DockStyle.Left, Width = 82, TextAlign = ContentAlignment.MiddleLeft };
+            var clear = new Button { Text = "清除", Dock = DockStyle.Right, Width = 54, Height = 24 };
+            _lblSearchInfo = new Label { Dock = DockStyle.Right, Width = 110, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray, Text = "" };
+            _txtSearch = new TextBox { Dock = DockStyle.Fill, Name = "txtSearch" };
+            _txtSearch.TextChanged += (s, e) => RefreshList();
+            _txtSearch.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Escape) { _txtSearch.Clear(); e.Handled = true; }
+            };
+            clear.Click += (s, e) => { _txtSearch.Clear(); _txtSearch.Focus(); };
+            // Fill goes in first (the innermost slice); the docked strips are resolved back to front.
+            row.Controls.Add(_txtSearch);
+            row.Controls.Add(_lblSearchInfo);
+            row.Controls.Add(clear);
+            row.Controls.Add(lbl);
+            Tip(_txtSearch, "按游戏名筛选列表：不区分大小写，空格分隔多个词则要求全部命中（例如「ntr sisters」）。\n" +
+                "只影响显示，不影响要跑哪些游戏 —— 跑的是所有已勾选的游戏，计数行会一直显示勾选总数。\n" +
+                "Esc 或「清除」清空。");
+            return row;
+        }
+
+        /// <summary>
+        /// Does this game name match the search box? Space-separated terms must ALL appear, case-insensitive.
+        ///
+        /// Its own static method so the rule is checkable in tools/UiCheck.cs without driving the window.
+        /// Terms split on spaces, tabs and the ideographic space, so a term pasted from a Japanese release
+        /// name does not keep an invisible separator.
+        /// </summary>
+        private static bool MatchesQuery(string name, string query)
+        {
+            var q = (query ?? "").Trim();
+            if (q.Length == 0) return true;
+            var n = name ?? "";
+            foreach (var term in q.Split(new[] { ' ', '\t', '\u3000' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (n.IndexOf(term, StringComparison.OrdinalIgnoreCase) < 0) return false;
+            }
+            return true;
         }
 
         /// <summary>Toggle a set of rows by index (used by the space key).</summary>
@@ -756,13 +820,13 @@ namespace GameTranslatorV3
         {
             if (indices == null || indices.Count == 0) return;
             bool anyUnchecked = false;
-            foreach (int i in indices) if (i >= 0 && i < _games.Count && !_games[i].Checked) { anyUnchecked = true; break; }
+            foreach (int i in indices) if (i >= 0 && i < _view.Count && !_view[i].Checked) { anyUnchecked = true; break; }
             foreach (int i in indices)
             {
-                if (i < 0 || i >= _games.Count) continue;
-                _games[i].Checked = anyUnchecked;      // a mixed selection becomes all-checked
+                if (i < 0 || i >= _view.Count) continue;
+                _view[i].Checked = anyUnchecked;      // a mixed selection becomes all-checked
             }
-            _list.RedrawItems(0, Math.Max(0, _games.Count - 1), false);
+            _list.RedrawItems(0, Math.Max(0, _view.Count - 1), false);
             UpdateButtons();
         }
 
@@ -1939,10 +2003,15 @@ namespace GameTranslatorV3
         /// </summary>
         private void RefreshList()
         {
+            // The search box shortens what is shown, not what exists: _view is what the list draws from.
+            var query = _txtSearch == null ? "" : _txtSearch.Text;
+            _view.Clear();
+            foreach (var g in _games) if (MatchesQuery(g.Name, query)) _view.Add(g);
             _list.VirtualListSize = 0;
-            _list.VirtualListSize = _games.Count;
+            _list.VirtualListSize = _view.Count;
             ApplyColumnWidths();
-            _status.Text = "共 " + _games.Count + " 个游戏，已勾选 " + _games.Count(x => x.Checked) + " 个";
+            if (_lblSearchInfo != null)
+                _lblSearchInfo.Text = _view.Count == _games.Count ? "" : "显示 " + _view.Count + " / " + _games.Count;
             UpdateButtons();
         }
 
@@ -2216,7 +2285,9 @@ namespace GameTranslatorV3
 
         private void SetAllChecked(bool value)
         {
-            foreach (var g in _games) g.Checked = value;
+            // Only the rows on screen: with a search typed, "全选" means "all of these", which is the only
+            // useful reading — and the count line still shows the running total, so nothing is hidden.
+            foreach (var g in _view) g.Checked = value;
             // The rows live in the control's own cache in virtual mode, so the visible checkmarks are
             // refreshed by asking it to redraw from the model rather than by setting them one by one.
             if (_list.VirtualListSize > 0) _list.RedrawItems(0, _list.VirtualListSize - 1, false);
@@ -2229,8 +2300,14 @@ namespace GameTranslatorV3
             // The count line belongs here, not only in RefreshList: it used to be written when the list
             // was rebuilt, so ticking rows left it saying 「已勾选 0 个」 and the checks looked broken.
             if (_status != null)
+            {
+                // Totals and ticks always describe the WHOLE library, even while a search narrows the rows:
+                // that is the number the batch will cover. The shown count only appears when a filter is on.
+                var filtering = _txtSearch != null && _txtSearch.Text.Trim().Length > 0;
                 _status.Text = "共 " + _games.Count + " 个游戏，已勾选 " + checkedGames + " 个" +
+                    (filtering ? "（筛选显示 " + _view.Count + " 个）" : "") +
                     (_running ? "（翻译进行中：取消勾选的游戏不会被开始）" : "");
+            }
             _btnStartSel.Enabled = !_running && checkedGames > 0;
             _btnStartAll.Enabled = !_running && _games.Count > 0;
             _btnStop.Enabled = _running;
@@ -2296,6 +2373,8 @@ namespace GameTranslatorV3
             Tip(_btnRefresh, running);
             Tip(_btnRescanAll, running);
             Tip(_btnState, running);
+            Tip(_btnSelectAll, "勾选全部游戏。搜索框有内容时只勾选显示出来的那些（下面的计数行仍显示勾选总数）。");
+            Tip(_btnClearSel, "取消勾选全部游戏。搜索框有内容时只取消显示出来的那些。");
             Tip(_btnSettings, "翻译进行中不可用（改动设置会影响正在跑的任务）。");
             Tip(_btnStartSel, "勾选要汉化的游戏后可用。翻译进行中不可用。");
             Tip(_btnStartAll, "把列表里所有游戏依次汉化。翻译进行中不可用。");
@@ -2831,10 +2910,10 @@ namespace GameTranslatorV3
 
         private GameItem CurrentGame()
         {
-            // Virtual mode supplies no SelectedItems: the selection is an index into the model.
+            // Virtual mode supplies no SelectedItems: the selection is an index into what is shown.
             if (_list == null || _list.SelectedIndices.Count == 0) return null;
             int i = _list.SelectedIndices[0];
-            return i >= 0 && i < _games.Count ? _games[i] : null;
+            return i >= 0 && i < _view.Count ? _view[i] : null;
         }
 
         private void Launch(GameItem g)
