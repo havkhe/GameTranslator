@@ -65,11 +65,19 @@ function endpoint() {
  */
 let apiModelIndex = 0;
 /**
- * Set once a hosted endpoint has refused the `enable_thinking` parameter (400 NotSupportEnableThinking).
- * The refusal is a property of that model, so it holds for the whole process and the parameter is left out
- * of every later request rather than re-tested.
+ * How this endpoint is being told "do not think". There are three spellings in the wild and no endpoint
+ * takes all of them: `enable_thinking` (Model Studio, and what the app has always sent), and the two that
+ * an OpenAI-compatible GPU host accepts instead -- `chat_template_kwargs: { thinking: false }` and
+ * `reasoning_effort: "none"`. When one is refused with a 400 the client used to give up and leave thinking
+ * ON, which for a reasoning model means the whole output budget goes into reasoning_content and no answer
+ * ever arrives (measured on deepseek-v4.1-flash: 2,669 characters of thinking and no answer at max_tokens
+ * 1024, and 10,519 characters and still no answer at 4096 -- raising the budget does not help, it only
+ * thinks longer). Trying the next spelling does.
+ *
+ *   "enable_thinking" -> "chat_template_kwargs" -> "reasoning_effort" -> "none" (nothing worked)
  */
-let apiThinkFlagRejected = false;
+const THINK_OFF_MODES = ["enable_thinking", "chat_template_kwargs", "reasoning_effort", "none"];
+let apiThinkOffMode = "enable_thinking";
 function currentModel(ep) { return ep.models[Math.min(apiModelIndex, ep.models.length - 1)] || ""; }
 function nextModel(ep) {
   if (apiModelIndex + 1 >= ep.models.length) return null;
@@ -135,6 +143,20 @@ function isModelUnavailable(status, body) {
  */
 function isThinkFlagRejected(status, body) {
   return status === 400 && /enable_thinking/i.test(String(body || ""));
+}
+
+/**
+ * Which thought switch is this 400 refusing? Returns the spelling named in the body ("" when the 400 is
+ * about something else). Three switches exist, and an endpoint that refuses one often accepts another, so
+ * naming the refused one is what lets the client move on to the next instead of leaving thinking on.
+ */
+function refusedThinkSwitch(status, body) {
+  if (status !== 400) return "";
+  const b = String(body || "");
+  if (/enable_thinking/i.test(b)) return "enable_thinking";
+  if (/chat_template_kwargs/i.test(b)) return "chat_template_kwargs";
+  if (/reasoning_effort/i.test(b)) return "reasoning_effort";
+  return "";
 }
 
 /**
@@ -257,14 +279,19 @@ function ask({ port, prompt, maxTokens, onStall }) {
       // harmless on the models that do not think (qwen-mt-plus / qwen-plus / qwen-turbo / qwen-max all
       // answer identically with it). A model that REFUSES the parameter (400 NotSupportEnableThinking) turns
       // it off for the process instead of failing the line; see the response handler.
-      if (isApi) { if (!apiThinkFlagRejected) p.enable_thinking = false; }
-      else if (NO_THINK) p.chat_template_kwargs = { enable_thinking: false };
+      if (isApi) {
+        if (apiThinkOffMode === "enable_thinking") p.enable_thinking = false;
+        else if (apiThinkOffMode === "chat_template_kwargs") p.chat_template_kwargs = { thinking: false };
+        else if (apiThinkOffMode === "reasoning_effort") p.reasoning_effort = "none";
+        // "none" means every spelling was refused: send none of them and accept the thinking.
+      } else if (NO_THINK) p.chat_template_kwargs = { enable_thinking: false };
       return p;
     };
     const modelOf = () => (isApi ? currentModel(ep) : "local");
     let settled = false;
     let stallTimer = null;
     let attempt = 0;
+    let thinkOnlySwitchedModel = false;   // a thinking-only reply moves the chain on, once per request
     const finish = (fn, arg) => { if (settled) return; settled = true; if (stallTimer) clearTimeout(stallTimer); fn(arg); };
 
     /** Where the request goes: the local server, or the configured OpenAI-compatible endpoint. */
@@ -301,12 +328,19 @@ function ask({ port, prompt, maxTokens, onStall }) {
           res.on("data", (c) => { data += c; arm(); });
           res.on("end", () => {
             if (stallTimer) clearTimeout(stallTimer);
-            // The endpoint refuses `enable_thinking` — a property of that model, not of this line. Drop the
-            // parameter for the rest of the process and ask the SAME line again, so no entry is recorded as
-            // failed over a settings flag.
-            if (isApi && !apiThinkFlagRejected && isThinkFlagRejected(res.statusCode, data)) {
-              apiThinkFlagRejected = true;
-              console.log("API_THINK_FLAG_OFF " + modelOf() + " 不接受 enable_thinking，已去掉该参数继续翻译");
+            // The endpoint refuses the thought switch we sent. Try the next spelling rather than leaving
+            // thinking on: an endpoint that answers 400 to `enable_thinking` usually takes one of the other
+            // two, and with thinking left on a reasoning model answers inside reasoning_content until the
+            // output budget is gone (see THINK_OFF_MODES above).
+            const refusedSwitch = isApi ? refusedThinkSwitch(res.statusCode, data) : "";
+            if (refusedSwitch && refusedSwitch === apiThinkOffMode) {
+              const at = THINK_OFF_MODES.indexOf(apiThinkOffMode);
+              apiThinkOffMode = THINK_OFF_MODES[Math.min(at + 1, THINK_OFF_MODES.length - 1)];
+              console.log(apiThinkOffMode === "none"
+                ? "API_THINK_FLAG_OFF " + modelOf() + " 三种关闭思考的参数都不接受，只能让它思考" +
+                  "（若只回思考内容，程序会自动换链上下一个模型）"
+                : "API_THINK_FLAG_OFF " + modelOf() + " 不接受 " + refusedSwitch +
+                  "，改用 " + apiThinkOffMode + " 重试同一条");
               return send();
             }
             // Free tier spent (403 AllocationQuota.FreeTierOnly on Model Studio, and the same shape on
@@ -346,8 +380,24 @@ function ask({ port, prompt, maxTokens, onStall }) {
                 // Name the cause instead of the symptom: an empty answer next to a long reasoning block means
                 // a reasoning model spent the budget thinking, which is a setting, not a broken model.
                 const think = msg && typeof msg.reasoning_content === "string" ? msg.reasoning_content.length : 0;
+                // Thinking that cannot be switched off is a property of THIS model, and every later line
+                // would fail against it the same way. Move the chain on (as the quota and "model unknown"
+                // answers do) instead of recording the whole batch as failed.
+                if (think > 0 && isApi && !thinkOnlySwitchedModel) {
+                  const from = modelOf();
+                  const to = nextModel(ep);
+                  if (to) {
+                    thinkOnlySwitchedModel = true;
+                    attempt = 0;
+                    console.log("API_MODEL_SWITCH " + from + " -> " + to +
+                      "   （" + from + " 只回思考内容、不给译文，换 " + to + " 继续翻译）");
+                    return setTimeout(send, 500);
+                  }
+                }
                 return finish(reject, new Error(think > 0
-                  ? "thinking-only reply: " + think + " chars of reasoning_content and no answer（该模型先思考后作答，思考占满了输出预算；关闭思考后即可）"
+                  ? "thinking-only reply: " + think + " chars of reasoning_content and no answer" +
+                    "（该模型先思考后作答，思考占满了输出预算；关闭思考后即可" +
+                    (isApi ? "；链上没有别的模型可换" : "") + "）"
                   : (isApi ? "API returned no content (HTTP " + res.statusCode + ")" : "llama returned no content")));
               }
               finish(resolve, text);
@@ -378,6 +428,6 @@ function ask({ port, prompt, maxTokens, onStall }) {
 module.exports = {
   ask, waitForServer, eraseSlot, endpoint, listModels, isQuotaExhausted, isModelUnavailable,
   isThinkFlagRejected, transportFor, usage, isTextModel,
-  resetApiModel: function () { apiModelIndex = 0; apiThinkFlagRejected = false; },
+  resetApiModel: function () { apiModelIndex = 0; apiThinkOffMode = "enable_thinking"; },
   SYSTEM_PROMPT, DEFAULT_PORT, MAX_OUTPUT_TOKENS, STALL_MS,
 };

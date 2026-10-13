@@ -90,6 +90,27 @@ function stub(mode) {
         }
         return reply(200, { choices: [{ message: { content: "译文（已去掉 enable_thinking）" } }], usage: usage });
       }
+      if (mode === "think-switches-forbidden") {
+        // An endpoint (measured: an OpenAI-compatible GPU host serving deepseek-v4.1-flash) that refuses
+        // BOTH enable_thinking and chat_template_kwargs, and only accepts reasoning_effort.
+        if (parsed.enable_thinking !== undefined || parsed.chat_template_kwargs !== undefined) {
+          const named = parsed.enable_thinking !== undefined ? "enable_thinking" : "chat_template_kwargs";
+          return reply(400, { error: { message: "This model does not support " + named + ".", type: "invalid_request_error", code: "invalid_parameter_error" } });
+        }
+        return reply(200, { choices: [{ message: { content: "译文（改用 reasoning_effort 后成功）" } }], usage: usage });
+      }
+      if (mode === "think-only-first") {
+        // model-a is a reasoning model whose thinking cannot be switched off: it answers 200 with a long
+        // reasoning_content and no content at all. model-b answers normally. The chain has to move on
+        // instead of recording every line of the batch as failed.
+        if (parsed.model === "model-a") {
+          return reply(200, {
+            choices: [{ message: { content: "", reasoning_content: "思考".repeat(300) }, finish_reason: "length" }],
+            usage: usage
+          });
+        }
+        return reply(200, { choices: [{ message: { content: "译文来自 " + parsed.model } }], usage: usage });
+      }
       if (mode === "bad-key") {
         return reply(401, { error: { code: "InvalidApiKey", message: "Invalid API-key provided." } });
       }
@@ -360,6 +381,64 @@ globalThis.__gtTestDone = (async () => {
       JSON.stringify(s.seen[0].body.chat_template_kwargs), '{"enable_thinking":false}');
     check("本地模式不发 enable_thinking（那是云端的写法）", s.seen[0].body.enable_thinking, undefined);
     s.server.close();
+  }
+
+  console.log("");
+  console.log("=== 三种「关闭思考」的写法依次尝试：enable_thinking → chat_template_kwargs → reasoning_effort ===");
+  {
+    const s = await stub("think-switches-forbidden");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a",
+      GT_API_BACKOFF_MS: "10",
+      GT_API_RETRIES: "0",
+    });
+    const out = await c.ask({ port: 1, prompt: "1. hello", maxTokens: 64 });
+    const calls = s.seen.filter((x) => x.url.endsWith("/chat/completions"));
+    check("第一次带 enable_thinking", calls[0].body.enable_thinking, false);
+    check("被拒后改带 chat_template_kwargs.thinking=false",
+      JSON.stringify((calls[1] || {}).body ? calls[1].body.chat_template_kwargs : "no second call"), '{"thinking":false}');
+    check("第二次不再带 enable_thinking", (calls[1] || {}).body ? calls[1].body.enable_thinking : "no second call", undefined);
+    check("再被拒后改带 reasoning_effort=none",
+      (calls[2] || {}).body ? calls[2].body.reasoning_effort : "no third call", "none");
+    check("三种都试过后拿到译文", out, "译文（改用 reasoning_effort 后成功）");
+    check("全程发给同一个模型（这是参数问题，不是换模型能解决的）",
+      calls.slice(0, 3).every((x) => x.model === "model-a"), true);
+    s.server.close();
+  }
+
+  console.log("");
+  console.log("=== 只回思考内容、不给译文 → 自动换链上下一个模型（而不是把整批记为失败）===");
+  {
+    const s = await stub("think-only-first");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a,model-b",
+      GT_API_BACKOFF_MS: "10",
+      GT_API_RETRIES: "0",
+    });
+    const out = await c.ask({ port: 1, prompt: "1. hello", maxTokens: 64 });
+    const calls = s.seen.filter((x) => x.url.endsWith("/chat/completions"));
+    check("先问了链上第一个模型", calls[0].model, "model-a");
+    check("它只回思考 → 换成链上下一个", calls[calls.length - 1].model, "model-b");
+    check("拿到下一个模型的译文", out, "译文来自 model-b");
+    s.server.close();
+
+    const s2 = await stub("think-only-first");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s2.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a",
+      GT_API_BACKOFF_MS: "10",
+      GT_API_RETRIES: "0",
+    });
+    let err = "";
+    try { await c.ask({ port: 1, prompt: "1. hello", maxTokens: 64 }); } catch (e) { err = String(e.message || e); }
+    check("链上没得换时仍报 thinking-only", /thinking-only/.test(err), true);
+    check("并且说明链上没有别的模型可换", /链上没有别的模型可换/.test(err), true);
+    s2.server.close();
   }
 
   console.log("");
