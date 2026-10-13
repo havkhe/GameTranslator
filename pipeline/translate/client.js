@@ -27,6 +27,23 @@ function transportFor(protocol) { return protocol === "http:" ? http : https; }
 
 const DEFAULT_PORT = 18080;
 const STALL_MS = parseInt(process.env.GT_STALL_MS || "45000", 10);
+/**
+ * How long a HOSTED endpoint may stay silent before we give up on it.
+ *
+ * The local server streams tokens as it works, so 45 silent seconds there really does mean a stuck model.
+ * A hosted reasoning model does the opposite: with `stream: false` it sends nothing at all and then one
+ * finished reply, measured at 32-130 s per small request on deepseek-v4.1-flash. Killing that request
+ * surfaces to the caller as "read ECONNRESET", which reads like a network fault while the actual cause is
+ * our own watchdog. The pipeline's own watchdog (StalledAfterMinutes, 10 minutes by default) is the outer
+ * bound for a hosted run, so this inner one can be generous.
+ */
+const API_STALL_MS = parseInt(process.env.GT_API_STALL_MS || "300000", 10);
+
+/** The silent-socket window for this endpoint: read per call, so a test can move it. */
+function stallWindowMs(isApi) {
+  if (!isApi) return parseInt(process.env.GT_STALL_MS || "45000", 10);
+  return parseInt(process.env.GT_API_STALL_MS || "300000", 10);
+}
 const MAX_OUTPUT_TOKENS = parseInt(process.env.GT_MAX_OUTPUT_TOKENS || "1024", 10);
 const SLOT_ERASE = process.env.GT_NO_SLOT_ERASE !== "1";
 /** Growth of the retry wait for a hosted endpoint (milliseconds, doubled per attempt). */
@@ -322,7 +339,7 @@ function ask({ port, prompt, maxTokens, onStall }) {
               if (typeof onStall === "function") onStall();
               req.destroy(new Error("stalled"));
               if (!isApi) eraseSlot(port, res.headers && res.headers["x-llama-slot-id"]);
-            }, STALL_MS);
+            }, stallWindowMs(isApi));
           };
           arm();
           res.on("data", (c) => { data += c; arm(); });
@@ -429,5 +446,5 @@ module.exports = {
   ask, waitForServer, eraseSlot, endpoint, listModels, isQuotaExhausted, isModelUnavailable,
   isThinkFlagRejected, transportFor, usage, isTextModel,
   resetApiModel: function () { apiModelIndex = 0; apiThinkOffMode = "enable_thinking"; },
-  SYSTEM_PROMPT, DEFAULT_PORT, MAX_OUTPUT_TOKENS, STALL_MS,
+  SYSTEM_PROMPT, DEFAULT_PORT, MAX_OUTPUT_TOKENS, STALL_MS, API_STALL_MS, stallWindowMs,
 };

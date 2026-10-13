@@ -442,6 +442,24 @@ globalThis.__gtTestDone = (async () => {
   }
 
   console.log("");
+  console.log("=== 静默看门狗：本机 45 秒就够，云端要宽松（否则慢模型被自己掐断，报出来却是 read ECONNRESET）===");
+  {
+    useEnv({});
+    delete process.env.GT_STALL_MS;
+    delete process.env.GT_API_STALL_MS;
+    check("本地窗口默认 45 秒", c.stallWindowMs(false), 45000);
+    check("云端窗口默认 300 秒", c.stallWindowMs(true), 300000);
+    check("云端窗口至少是本地的 3 倍", c.stallWindowMs(true) >= c.stallWindowMs(false) * 3, true);
+    process.env.GT_STALL_MS = "1234";
+    process.env.GT_API_STALL_MS = "5678";
+    check("GT_STALL_MS 只改本地窗口", c.stallWindowMs(false), 1234);
+    check("GT_API_STALL_MS 只改云端窗口", c.stallWindowMs(true), 5678);
+    delete process.env.GT_STALL_MS;
+    delete process.env.GT_API_STALL_MS;
+    check("变量删掉后回到默认", c.stallWindowMs(true), 300000);
+  }
+
+  console.log("");
   console.log("pass " + pass + "   fail " + fail);
   // Leave the environment as it was found: an in-process runner shares one process across suites, and a
   // leftover GT_API_BASE would send the NEXT suite's requests to a stub that is already closed.
