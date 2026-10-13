@@ -391,13 +391,17 @@ function ensureDataBackup(engine, gameDir) {
     const out = vxAce.patch(dataDir, ROOT, WORK_DIR, EXTRACT + ".vxsrc.json", TRANS, PATCH_REPORT);
     if (out) console.log("RUBY_PATCH", out.split(/\r?\n/).slice(0, 3).join(" | "));
     if (archiveWork) {
-      // The guard re-checks that an untouched round-trip is byte-identical before writing,
-      // so a container regression cannot silently corrupt the game's images and audio.
+      // The guard compares the CONTENT of an untouched round-trip before writing, so a container
+      // regression cannot silently corrupt the game's images and audio.
       const guard = repackGuard.repackSafely(archiveWork.archiveFile, archiveWork.vxWork);
       if (!guard.ok) {
         console.log("REPACK_REFUSED", guard.reason);
-        console.log("DONE  (数据目录已翻译，但未写回归档；游戏保持不变)");
-        process.exit(0);
+        // Exit NON-ZERO. The archive was not written, so this run did not do what it says: reporting
+        // success here is exactly how a game stayed Japanese while the app logged "第 1 次尝试成功" and the
+        // queue moved on. The last line is what the window shows, so it says what happened and what to do.
+        console.log("DONE  (归档没有写回，游戏保持原样——这一局按失败计。原因见上一行；" +
+          "译文都留在缓存里，处理完重跑只会走「补丁 + 写回」，不会重翻。)");
+        process.exit(6);
       }
       console.log("REPACKED", archiveWork.archiveFile);
     }
