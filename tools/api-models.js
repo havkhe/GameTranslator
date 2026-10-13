@@ -168,6 +168,8 @@ function usage() {
     say("");
     say("可直接粘进【设置…】→「云端 API」→ 模型链 的一行：");
     say("  " + ok.map((r) => r.model).join(","));
+    // Machine-readable line for the window's 检测可用模型 button: it fills 模型链 with this.
+    say("CHAIN=" + ok.map((r) => r.model).join(","));
   }
 
   if (o.json) console.log(JSON.stringify({ base: o.base, probed: results, chain: ok.map((r) => r.model) }, null, 2));

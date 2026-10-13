@@ -146,11 +146,13 @@ function usage() {
     if (zh > 0) {
       say("   ✓ 通过：这条链能翻出中文。");
       say("     " + String(out).replace(/\s+/g, " ").slice(0, 160));
-      if (o.json) console.log(JSON.stringify(report, null, 2));
+      if (o.json) { console.log(JSON.stringify(report, null, 2)); }
+      else { console.log("CHECK=ok"); }   // machine-readable line for the window's 连接测试 button
       process.exit(0);
     }
     say("   ✗ 返回了内容但没有中文（多半把原文吐回来了）。→ 换模型。");
     say("     " + String(out).replace(/\s+/g, " ").slice(0, 160));
+    console.log("CHECK=fail");
     process.exit(1);
   } catch (e) {
     const msg = String(e.message || e);
@@ -170,7 +172,8 @@ function usage() {
     } else if (/ENOTFOUND|ECONNREFUSED|CERT|socket|timeout|ETIMEDOUT/i.test(msg)) {
       say("   → 网络层：DNS/端口/证书/超时。若走了代理，确认程序能用到代理（云端两条路默认读系统代理）。");
     }
-    if (o.json) console.log(JSON.stringify(report, null, 2));
+    if (o.json) { console.log(JSON.stringify(report, null, 2)); }
+    else { console.log("CHECK=fail"); }
     process.exit(1);
   }
 })();

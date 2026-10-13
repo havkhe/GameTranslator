@@ -1116,6 +1116,50 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 设置里的连接测试（填完 key 就能验这条链）===");
+            {
+                var build = typeof(MainForm).GetMethod("BuildApiTestPanel", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(build != null, "找到 BuildApiTestPanel（反射）");
+                if (build != null)
+                {
+                    var args = new object[] { null, null, null, null };
+                    var panel = build.Invoke(form, args) as Control;
+                    var bCheck = args[0] as Button;
+                    var bProbe = args[1] as Button;
+                    var bStop = args[2] as Button;
+                    var box = args[3] as TextBox;
+                    Assert(panel != null, "面板构建成功");
+                    Assert(bCheck != null && bCheck.Text == "测试连通性", "有「测试连通性」按钮：" + (bCheck == null ? "无" : bCheck.Text));
+                    Assert(bProbe != null && bProbe.Text == "检测可用模型", "有「检测可用模型」按钮：" + (bProbe == null ? "无" : bProbe.Text));
+                    Assert(bStop != null && bStop.Text == "停止" && !bStop.Enabled, "「停止」默认不可用（没有东西在跑）");
+                    Assert(box != null && box.Multiline && box.ReadOnly && box.Name == "apiResult", "有只读多行输出框（apiResult）");
+                    Assert(box != null && box.Text.Contains("测试连通性") && box.Text.Contains("模型链"), "输出框里写了怎么用");
+                    Assert(bCheck != null && bProbe != null && panel != null && panel.Controls.Count == 2,
+                        "面板里就是按钮行 + 输出框两件东西（实际 " + (panel == null ? "?" : panel.Controls.Count.ToString()) + "）");
+
+                    var start = typeof(MainForm).GetMethod("StartApiTool", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var stopTool = typeof(MainForm).GetMethod("StopApiTool", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var append = typeof(MainForm).GetMethod("AppendApiLine", BindingFlags.NonPublic | BindingFlags.Instance);
+                    Assert(start != null && stopTool != null && append != null, "找到 StartApiTool / StopApiTool / AppendApiLine");
+                    Assert(File.Exists(Path.Combine(root, "tools", "api-check.js")), "包里带着 tools\\api-check.js");
+                    Assert(File.Exists(Path.Combine(root, "tools", "api-models.js")), "包里带着 tools\\api-models.js");
+
+                    // The two machine-readable lines the tools emit: CHAIN= fills the chain field (that is
+                    // what makes 检测可用模型 useful) and CHECK= says pass/fail in words.
+                    if (append != null && box != null && bCheck != null)
+                    {
+                        var chainField = new TextBox();
+                        append.Invoke(form, new object[] { box, chainField, "CHAIN=a,b,c" });
+                        Assert(chainField.Text == "a,b,c", "CHAIN= 会填进「模型链」文本框：" + chainField.Text);
+                        append.Invoke(form, new object[] { box, null, "CHECK=ok" });
+                        Assert(box.Text.Contains("能翻出中文"), "CHECK=ok 被翻成一句结论");
+                        append.Invoke(form, new object[] { box, null, "CHECK=fail" });
+                        Assert(box.Text.Contains("有问题"), "CHECK=fail 也被翻成一句结论");
+                    }
+                }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
             Console.WriteLine("        标题: " + form.Text + "   尺寸: " + form.Size);
             Console.WriteLine("");

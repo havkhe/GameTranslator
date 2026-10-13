@@ -4140,18 +4140,219 @@ namespace GameTranslatorV3
         /// Settings live in a dialog rather than on the page: they are edited rarely and
         /// would crowd out the list and the progress, which are what the page is for.
         /// </summary>
+        /// <summary>The connectivity/catalogue tool currently running from the settings dialog, if any.</summary>
+        private Process _apiToolProc;
+
+        /// <summary>Did the last run reach the point where the tool prints CHECK=ok / CHECK=fail?</summary>
+        private bool _apiToolSawVerdict;
+
+        /// <summary>
+        /// The connectivity-test row in the settings dialog: three buttons and an output box.
+        ///
+        /// Built by its own factory so the structural check can construct it without opening a modal
+        /// window. The buttons only choose WHICH tool to run — the checks themselves live in
+        /// tools\api-check.js and tools\api-models.js, the same files the command line runs. The window
+        /// must not grow a second, slightly different copy of the request logic: that is how a "test"
+        /// button ends up proving something other than what the pipeline actually does.
+        /// </summary>
+        private Control BuildApiTestPanel(out Button check, out Button probe, out Button stop, out TextBox result)
+        {
+            check = new Button { Text = "测试连通性", Width = 104, Height = 26 };
+            probe = new Button { Text = "检测可用模型", Width = 116, Height = 26 };
+            stop = new Button { Text = "停止", Width = 58, Height = 26, Enabled = false };
+
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 32, WrapContents = false };
+            buttons.Controls.Add(check);
+            buttons.Controls.Add(probe);
+            buttons.Controls.Add(stop);
+
+            result = new TextBox
+            {
+                Name = "apiResult",
+                Multiline = true,
+                ReadOnly = true,
+                WordWrap = false,
+                ScrollBars = ScrollBars.Vertical,
+                Dock = DockStyle.Fill,
+                BackColor = Color.White,
+                Font = new Font("Consolas", 8.25f),
+                Text = "填好接口地址和 API Key 后点「测试连通性」：依次检查地址能不能解析、能不能读到模型列表、"
+                     + "以及真发一条翻译请求能不能拿到中文。\r\n"
+                     + "「检测可用模型」会逐个真发一条短请求（每个最多 30 秒，只测前 15 个），把能用的模型按实测速度排好，"
+                     + "并自动填进上面的「模型链」。"
+            };
+
+            var panel = new Panel { Height = 190, Width = 520 };
+            panel.Controls.Add(result);      // Fill goes in first, then the docked Top row
+            panel.Controls.Add(buttons);
+            return panel;
+        }
+
+        /// <summary>
+        /// Run one shipped API tool against the values currently typed in the dialog and stream its output
+        /// into the box.
+        ///
+        /// The key travels in the child process's ENVIRONMENT, never on the command line and never into a
+        /// file — the same rule the pipeline follows for GT_API_KEY.
+        /// </summary>
+        private Process StartApiTool(TextBox result, TextBox chainField, string script, string extraArgs,
+            string baseUrl, string key, Button check, Button probe, Button stop)
+        {
+            if (key == null || key.Trim().Length == 0)
+            {
+                MessageBox.Show(this, "先填 API Key。它只写进 api-config.json（或环境变量 GT_API_KEY），不进源码。",
+                    "缺少密钥", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return null;
+            }
+            if (baseUrl == null || baseUrl.Trim().Length == 0)
+            {
+                MessageBox.Show(this, "先填接口地址，例如 https://integrate.api.nvidia.com/v1",
+                    "缺少地址", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return null;
+            }
+            // Canonicalise the address before it goes anywhere near a command line: this both catches the
+            // usual typo (missing https://) with a real message, and means the string handed to the child
+            // process is one the URI parser produced rather than whatever was typed — no quotes, spaces or
+            // control characters can survive it. The checks themselves belong to the tools; this is only
+            // about what may be passed to them.
+            Uri parsedBase;
+            if (!Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out parsedBase) ||
+                (parsedBase.Scheme != Uri.UriSchemeHttp && parsedBase.Scheme != Uri.UriSchemeHttps))
+            {
+                AppendApiLine(result, null, "接口地址要是完整的 http/https 地址，例如 https://integrate.api.nvidia.com/v1");
+                AppendApiLine(result, null, "收到的：" + baseUrl.Trim());
+                return null;
+            }
+            var safeBase = parsedBase.AbsoluteUri.TrimEnd('/');
+
+            var node = Path.Combine(Path.Combine(_root, "node"), "node.exe");
+            var tool = Path.Combine(Path.Combine(_root, "tools"), script);
+            if (!File.Exists(node) || !File.Exists(tool))
+            {
+                AppendApiLine(result, null, "找不到要运行的程序：");
+                AppendApiLine(result, null, "  " + node + (File.Exists(node) ? "" : "   ← 缺 node.exe"));
+                AppendApiLine(result, null, "  " + tool + (File.Exists(tool) ? "" : "   ← 缺这个工具脚本"));
+                AppendApiLine(result, null, "（本安装目录里的 node\\ 与 tools\\ 需要和主程序放在一起。）");
+                return null;
+            }
+
+            var psi = new ProcessStartInfo(node)
+            {
+                Arguments = PipelineRunner.Quote(tool) + " " + PipelineRunner.Quote(safeBase) +
+                            (extraArgs.Length > 0 ? " " + extraArgs : ""),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+                WorkingDirectory = _root
+            };
+            psi.EnvironmentVariables["GT_API_KEY"] = key.Trim();
+
+            check.Enabled = false; probe.Enabled = false; stop.Enabled = true;
+            _apiToolSawVerdict = false;
+            AppendApiLine(result, null, "运行：tools\\" + script + "  " + safeBase +
+                (extraArgs.Length > 0 ? " " + extraArgs : ""));
+            AppendApiLine(result, null, "");
+
+            var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            // The two readers run on threadpool threads: marshal every line onto the UI thread before it
+            // touches the box, or the streamed text corrupts the control.
+            p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e)
+            {
+                if (e.Data == null) return;
+                string line = e.Data;
+                try { BeginInvoke(new Action(delegate { AppendApiLine(result, chainField, line); })); } catch { }
+            };
+            p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e)
+            {
+                if (e.Data == null) return;
+                string line = e.Data;
+                try { BeginInvoke(new Action(delegate { AppendApiLine(result, chainField, "  ! " + line); })); } catch { }
+            };
+            p.Exited += delegate
+            {
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        if (!_apiToolSawVerdict) AppendApiLine(result, null,
+                            "（这次没走到「真发一条翻译请求」那一步，原因见上面最后一行。）");
+                        AppendApiLine(result, null, "—— 结束");
+                        check.Enabled = true; probe.Enabled = true; stop.Enabled = false;
+                        _apiToolProc = null;
+                    }));
+                }
+                catch { }
+            };
+            try
+            {
+                p.Start();
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+                _apiToolProc = p;
+            }
+            catch (Exception ex)
+            {
+                AppendApiLine(result, null, "启动失败：" + ex.Message);
+                check.Enabled = true; probe.Enabled = true; stop.Enabled = false;
+                return null;
+            }
+            return p;
+        }
+
+        /// <summary>
+        /// One streamed line into the dialog's output box. Two lines are machine-readable: CHAIN= fills the
+        /// 模型链 field (the whole point of the probe), CHECK= says pass/fail in plain words. The field is
+        /// only written, not saved — 取消 must still discard everything.
+        /// </summary>
+        private void AppendApiLine(TextBox result, TextBox chainField, string line)
+        {
+            if (result == null || result.IsDisposed) return;
+            if (line.StartsWith("CHAIN=", StringComparison.Ordinal))
+            {
+                var chain = line.Substring("CHAIN=".Length).Trim();
+                if (chain.Length > 0)
+                {
+                    if (chainField != null) chainField.Text = chain;
+                    AppendApiLine(result, null, "已把探测通过的模型按实测速度填进上面的「模型链」（点确定才会保存）：");
+                    AppendApiLine(result, null, "  " + chain);
+                }
+                return;
+            }
+            if (line.StartsWith("CHECK=", StringComparison.Ordinal))
+            {
+                _apiToolSawVerdict = true;
+                AppendApiLine(result, null, line == "CHECK=ok"
+                    ? "结论：这条链能翻出中文 —— 可以开始翻译了。"
+                    : "结论：这条链有问题，上面的提示写了原因和处理办法。");
+                return;
+            }
+            result.AppendText(line + "\r\n");
+            result.SelectionStart = result.TextLength;
+            result.ScrollToCaret();
+        }
+
+        private void StopApiTool(Button check, Button probe, Button stop)
+        {
+            try { if (_apiToolProc != null && !_apiToolProc.HasExited) _apiToolProc.Kill(); }
+            catch { }
+            check.Enabled = true; probe.Enabled = true; stop.Enabled = false;
+        }
+
         private void OpenSettings()
         {
             using (var dlg = new Form())
             {
                 dlg.Text = "设置";
-                dlg.Size = new Size(660, 560);
+                dlg.Size = new Size(700, 820);
                 dlg.StartPosition = FormStartPosition.CenterParent;
                 dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
                 dlg.MaximizeBox = false; dlg.MinimizeBox = false;
                 dlg.Font = Font;
 
-                var t = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12) };
+                var t = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12), AutoScroll = true };
                 t.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
                 t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
@@ -4211,6 +4412,33 @@ namespace GameTranslatorV3
                 t.Controls.Add(txtApiKey, 1, r++);
                 t.Controls.Add(new Label { Text = "模型链", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
                 t.Controls.Add(txtApiModels, 1, r++);
+
+                // Connectivity + catalogue test, right where the key is typed: after filling address and
+                // key you can find out whether the chain works before ever starting a translation.
+                Button btnApiCheck, btnApiProbe, btnApiStop;
+                TextBox txtApiResult;
+                var apiTestPanel = BuildApiTestPanel(out btnApiCheck, out btnApiProbe, out btnApiStop, out txtApiResult);
+                t.Controls.Add(new Label { Text = "连接测试", Height = 26, TextAlign = ContentAlignment.TopLeft }, 0, r);
+                t.Controls.Add(apiTestPanel, 1, r++);
+                var checkField = txtApiBase; var keyField = txtApiKey; var chainField = txtApiModels;
+                btnApiCheck.Click += delegate
+                {
+                    var ids = ChainModelIds("", chainField.Text);
+                    StartApiTool(txtApiResult, chainField, "api-check.js",
+                        ids.Count > 0 ? "--model " + PipelineRunner.Quote(ids[0]) : "",
+                        checkField.Text, keyField.Text, btnApiCheck, btnApiProbe, btnApiStop);
+                };
+                btnApiProbe.Click += delegate
+                {
+                    StartApiTool(txtApiResult, chainField, "api-models.js", "--probe --limit 15",
+                        checkField.Text, keyField.Text, btnApiCheck, btnApiProbe, btnApiStop);
+                };
+                btnApiStop.Click += delegate { StopApiTool(btnApiCheck, btnApiProbe, btnApiStop); };
+                dlg.FormClosing += delegate
+                {
+                    try { if (_apiToolProc != null && !_apiToolProc.HasExited) _apiToolProc.Kill(); }
+                    catch { }
+                };
 
                 t.Controls.Add(new Label { Text = "llama 目录", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
                 var llamaRow = new FlowLayoutPanel { WrapContents = false, Height = 30 };
