@@ -138,6 +138,10 @@ function isQuotaExhausted(status, body) {
  *     while the dropdown still held a local model: every line of every game would otherwise fail.
  *   * 400 "InvalidParameter: missing required field: input.target_lang" — a native-format model
  *     (qwen-mt-uni) that cannot be driven through the chat-completions shape at all.
+ *   * 400 "未知模型 'x'，公开支持模型: …" — the free Index-Translate endpoint, which calls a model it
+ *     cannot serve 未知 ("unknown"). Missing that one word meant a stale model name left over from a
+ *     previous endpoint stayed first in the chain and EVERY request failed with HTTP 400, because the
+ *     chain never advanced to the model sitting right behind it.
  *
  * A rejected KEY is different and must fail loudly, so any api-key / unauthorized wording is excluded.
  * Note that "Role must be in [user, assistant]" is deliberately NOT matched: that is fixed in the request
@@ -148,7 +152,23 @@ function isModelUnavailable(status, body) {
   const b = String(body || "");
   if (/api[_\s-]?key|unauthor|invalid[_\s-]?token|permission/i.test(b)) return false;
   if (/missing\s+required\s+field\s*:\s*input\./i.test(b)) return true;
-  return /model|模型/i.test(b) && /(not\s*found|not\s*exist|does\s*not\s*exist|unknown|invalid|不支持|不存在|没有|无效)/i.test(b);
+  return /model|模型/i.test(b) && /(not\s*found|not\s*exist|does\s*not\s*exist|unknown|invalid|不支持|不存在|没有|无效|未知)/i.test(b);
+}
+
+/**
+ * The endpoint's own words for a failed request, whichever field carries them.
+ *
+ * FastAPI answers a bad request with `{"detail": …}` — a string for a rejected value, an ARRAY of
+ * validation errors for a malformed body. Only `{"error": …}` used to be read, so a rejected model name
+ * arrived as the bare "API returned no content (HTTP 400)", which names the symptom and hides the cause.
+ */
+function serverMessage(j) {
+  if (!j || typeof j !== "object") return "";
+  const d = j.detail !== undefined ? j.detail
+    : (j.message !== undefined ? j.message : (j.error !== undefined ? j.error : ""));
+  if (typeof d === "string") return d;
+  if (d && typeof d === "object") { try { return JSON.stringify(d); } catch (e) { return ""; } }
+  return "";
 }
 
 /**
@@ -415,7 +435,10 @@ function ask({ port, prompt, maxTokens, onStall }) {
                   ? "thinking-only reply: " + think + " chars of reasoning_content and no answer" +
                     "（该模型先思考后作答，思考占满了输出预算；关闭思考后即可" +
                     (isApi ? "；链上没有别的模型可换" : "") + "）"
-                  : (isApi ? "API returned no content (HTTP " + res.statusCode + ")" : "llama returned no content")));
+                  : (isApi
+                    ? "API returned no content (HTTP " + res.statusCode + ")" +
+                      (serverMessage(j) ? " — " + serverMessage(j).slice(0, 300) : "")
+                    : "llama returned no content")));
               }
               finish(resolve, text);
             } catch (e) {

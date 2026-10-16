@@ -74,6 +74,21 @@ function stub(mode) {
         }
         return reply(200, { choices: [{ message: { content: "译文来自 " + parsed.model } }], usage: usage });
       }
+      if (mode === "model-unknown-cn") {
+        // Verbatim from the free Index-Translate endpoint (Bilibili) for a name it does not serve. Two
+        // differences from the Model Studio shape: FastAPI puts the reason in "detail" rather than "error",
+        // and the wording is 未知 — which the classifier did not know, so a stale model name left over from
+        // another endpoint failed every single request instead of falling through to the next model.
+        if (parsed.model === "model-a") {
+          return reply(400, { detail: "未知模型 'model-a'，公开支持模型: model-b, model-c" });
+        }
+        return reply(200, { choices: [{ message: { content: "译文来自 " + parsed.model } }], usage: usage });
+      }
+      if (mode === "detail-only-error") {
+        // A FastAPI "detail" rejection that is NOT about the model: with no fallback left, the failure
+        // message has to carry the server's own words instead of the bare "API returned no content".
+        return reply(400, { detail: "输入 Token 数量超过限制 (当前约 56415 tokens, 上限 16384)" });
+      }
       if (mode === "system-role-forbidden") {
         // Model Studio's translation models answer this for any request carrying a system message.
         const hasSystem = (parsed.messages || []).some((m) => m && m.role === "system");
@@ -218,6 +233,46 @@ globalThis.__gtTestDone = (async () => {
       c.isModelUnavailable(400, "InvalidParameter: missing required field: input.target_lang"), true);
     check("角色报错不算模型不可用", c.isModelUnavailable(400, "Role must be in [user, assistant]."), false);
     check("密钥报错不算模型不可用", c.isModelUnavailable(401, "Invalid API-key provided."), false);
+    s.server.close();
+  }
+
+  console.log("");
+  console.log("=== 云端：模型名不认识（未知模型）时换下一个，并把服务端原话带进报错 ===");
+  {
+    const s = await stub("model-unknown-cn");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a,model-b",
+      GT_API_BACKOFF_MS: "10",
+      GT_API_RETRIES: "0",
+    });
+    const out = await c.ask({ port: 1, prompt: "1. hello", maxTokens: 64 });
+    check("「未知模型」时换到下一个并成功", out, "译文来自 model-b");
+    const calls = s.seen.filter((x) => x.url.endsWith("/chat/completions"));
+    check("先试了第一个模型", calls[0].model, "model-a");
+    check("落到第二个模型", calls[calls.length - 1].model, "model-b");
+    check("「未知模型」算模型不可用",
+      c.isModelUnavailable(400, "未知模型 'google/x'，公开支持模型: model-b, model-c"), true);
+    check("英文 unknown 仍然算", c.isModelUnavailable(400, "unknown model: x"), true);
+    check("配额措辞不会被当成模型不可用",
+      c.isModelUnavailable(400, "输入 Token 数量超过限制 (当前约 56415 tokens, 上限 16384)"), false);
+    s.server.close();
+  }
+  {
+    // Every model rejected with a FastAPI "detail" body: the reason has to reach the log.
+    const s = await stub("detail-only-error");
+    useEnv({
+      GT_API_BASE: "http://127.0.0.1:" + s.port,
+      GT_API_KEY: PLACEHOLDER,
+      GT_API_MODELS: "model-a",
+      GT_API_BACKOFF_MS: "10",
+      GT_API_RETRIES: "0",
+    });
+    let msg = "";
+    try { await c.ask({ port: 1, prompt: "1. hello", maxTokens: 64 }); } catch (e) { msg = String(e.message || e); }
+    check("报错里带出服务端的 detail 原话", /输入 Token 数量超过限制/.test(msg), true);
+    check("报错仍然写明是 HTTP 400", /HTTP 400/.test(msg), true);
     s.server.close();
   }
 
