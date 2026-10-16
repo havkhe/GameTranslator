@@ -42,11 +42,43 @@ function archiveVersion(file) {
  * Unpack every Data/ member into <workDir>\unpacked, remembering the rest in a manifest
  * so repacking can copy them through untouched.
  */
-function unpack(archiveFile, workDir) {
-  const outDir = path.join(workDir, "unpacked");
-  const manifestPath = path.join(workDir, "manifest.json");
+function unpack(archiveFile, workDir, liveFile) {
+  // Every path written below is resolved against the work folder and checked to stay inside it.
+  const work = path.resolve(workDir);
+  const inside = (name) => {
+    const t = path.resolve(work, name);
+    if (t !== work && !t.startsWith(work + path.sep)) throw new Error("refusing a path outside the work dir: " + name);
+    return t;
+  };
+  const outDir = inside("unpacked");
+  const manifestPath = inside("manifest.json");
+  const stampPath = inside("unpack-source.json");
+  // Member paths are resolved against the UNPACK folder (not the work folder) and checked to stay inside it.
+  const insideOut = (name) => {
+    const t = path.resolve(outDir, name);
+    if (t !== outDir && !t.startsWith(outDir + path.sep)) throw new Error("refusing a path outside the unpack dir: " + name);
+    return t;
+  };
+
+  let stamp = null;
+  if (liveFile) {
+    try {
+      const st = fs.statSync(liveFile);
+      stamp = { file: path.basename(liveFile), size: st.size, mtimeMs: Math.round(st.mtimeMs) };
+    } catch (e) { stamp = null; }
+  }
   if (fs.existsSync(path.join(outDir, "Data")) && fs.existsSync(manifestPath)) {
-    return { outDir, manifestPath, cached: true };
+    let same = true;
+    if (stamp) {
+      try {
+        const prev = JSON.parse(fs.readFileSync(stampPath, "utf8"));
+        same = prev.size === stamp.size && prev.mtimeMs === stamp.mtimeMs && prev.file === stamp.file;
+      } catch (e) { same = false; }
+    }
+    if (same) return { outDir, manifestPath, cached: true };
+    console.log("UNPACK_CACHE_STALE", stamp ? stamp.file + " changed (" + stamp.size + " bytes), unpacking again" : "no source record, unpacking again");
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.rmSync(manifestPath, { force: true });
   }
   console.log("UNPACKING", archiveFile);
   const arch = codec.readArchive(fs.readFileSync(archiveFile));
@@ -57,13 +89,14 @@ function unpack(archiveFile, workDir) {
     manifest.push({ name: e.name, size: e.size });
     if (!rel.startsWith("Data/")) continue;
     const data = codec.extractFile(arch, e);
-    const fp = path.join(outDir, rel);
+    const fp = insideOut(rel);
     fs.mkdirSync(path.dirname(fp), { recursive: true });
     fs.writeFileSync(fp, data);
   }
-  fs.writeFileSync(path.join(workDir, "archive.json"),
+  fs.writeFileSync(inside("archive.json"),
     JSON.stringify({ name: path.basename(archiveFile), version: arch.version }));
   fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  if (stamp) fs.writeFileSync(stampPath, JSON.stringify(stamp));
   console.log("UNPACKED", arch.entries.length, "entries, version", arch.version);
   return { outDir, manifestPath, version: arch.version };
 }

@@ -162,7 +162,10 @@ function ensureDataBackup(engine, gameDir) {
     const copy = path.join(unpackedFrom, path.basename(pristineArchive));
     fs.copyFileSync(pristineArchive, copy);
     console.log("SOURCE_FROM_BACKUP", pristineArchive);
-    rgssad.unpack(copy, vxWork);
+    // The live archive is passed so the unpacked copy can be invalidated when it changes underneath (a
+    // restore from the backup, another tool, a manual edit) — otherwise a re-run would patch the previous
+    // run's leftovers and repack those.
+    rgssad.unpack(copy, vxWork, engine.archive);
     dataDir = path.join(vxWork, "unpacked", "Data");
     if (!fs.existsSync(dataDir)) dataDir = path.join(vxWork, "unpacked", "data");
     archiveWork = { vxWork, archiveFile: engine.archive };
