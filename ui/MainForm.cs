@@ -155,6 +155,9 @@ namespace GameTranslatorV3
             };
             if (!string.IsNullOrEmpty(_settings.PipelineJs) && File.Exists(_settings.PipelineJs))
                 _runner.PipelineJs = _settings.PipelineJs;
+            // Applies in both modes: the pipeline reads it from the environment either way. 1 = the
+            // shipped sequential behaviour.
+            _runner.ExtraEnv["GT_CONCURRENCY"] = _settings.Concurrency.ToString();
             _runner.Output += OnPipelineLine;
             _runner.AttemptFailed += (game, why) => { _failCount++; AppendLog("⚠ " + game + "：" + why); };
 
@@ -4367,6 +4370,7 @@ namespace GameTranslatorV3
                 var txtAttempts = new TextBox { Width = 80, Text = _settings.MaxAttempts.ToString() };
                 var txtBudget = new TextBox { Width = 80, Text = _settings.GameBudgetMinutes.ToString() };
                 var txtStall = new TextBox { Width = 80, Text = _settings.StalledAfterMinutes.ToString() };
+                var txtConcurrency = new TextBox { Width = 80, Text = _settings.Concurrency.ToString() };
                 var txtDepth = new TextBox { Width = 60, Text = _settings.ScanDepth.ToString() };
                 var txtLlama = new TextBox { Width = 380, Text = _settings.LlamaDir };
                 var txtWork = new TextBox { Width = 380, Text = _settings.WorkDir };
@@ -4491,6 +4495,10 @@ namespace GameTranslatorV3
                 t.Controls.Add(txtBudget, 1, r++);
                 t.Controls.Add(new Label { Text = "无输出判定卡死(分)", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
                 t.Controls.Add(txtStall, 1, r++);
+                // Only meaningful against a hosted endpoint: the local llama-server is started with
+                // --parallel 1, so extra batches would only queue inside it.
+                t.Controls.Add(new Label { Text = "并发批次数", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                t.Controls.Add(txtConcurrency, 1, r++);
 
                 // Scan roots and depth. Several roots are merged into the one list, and the
                 // roots are remembered so the library is not re-found on every launch.
@@ -4512,6 +4520,8 @@ namespace GameTranslatorV3
                     Dock = DockStyle.Bottom, Height = 56, ForeColor = Color.DimGray,
                     Text = "失败重试次数：一个游戏失败几次后跳过它、继续后面的游戏。\n" +
                            "单游戏时间上限 / 无输出判定卡死：超过就结束该游戏并重试，避免整个批次被一个游戏卡住。\n" +
+                           "并发批次数：同时发出几个翻译批次，只对云端 API 有意义（本地模型服务是单并发，填大只会排队），\n" +
+                           "云端建议 4-8；填 1 就是原来的串行行为。\n" +
                            "扫描路径：可添加多个文件夹，结果汇总在同一个列表里；路径会被记住，下次无需重新扫描。"
                 };
 
@@ -4533,6 +4543,9 @@ namespace GameTranslatorV3
                 if (!int.TryParse(txtAttempts.Text.Trim(), out attempts) || attempts < 1 || attempts > 10) { MessageBox.Show(this, "重试次数需在 1-10 之间。"); return; }
                 if (!int.TryParse(txtBudget.Text.Trim(), out budget) || budget < 5) { MessageBox.Show(this, "时间上限至少 5 分钟。"); return; }
                 if (!int.TryParse(txtStall.Text.Trim(), out stall) || stall < 1) { MessageBox.Show(this, "卡死判定至少 1 分钟。"); return; }
+                int concurrency;
+                if (!int.TryParse(txtConcurrency.Text.Trim(), out concurrency) || concurrency < 1 || concurrency > 64)
+                { MessageBox.Show(this, "并发批次数需在 1-64 之间（1 = 串行）。"); return; }
                 if (txtPipe.Text.Trim().Length > 0 && !File.Exists(txtPipe.Text.Trim())) { MessageBox.Show(this, "管线脚本不存在。"); return; }
 
                 string llama = txtLlama.Text.Trim();
@@ -4564,6 +4577,7 @@ namespace GameTranslatorV3
                 _settings.MaxAttempts = attempts;
                 _settings.GameBudgetMinutes = budget;
                 _settings.StalledAfterMinutes = stall;
+                _settings.Concurrency = concurrency;
 
                 int depth;
                 if (!int.TryParse(txtDepth.Text.Trim(), out depth) || depth < 1 || depth > 12)
@@ -4599,6 +4613,7 @@ namespace GameTranslatorV3
                 _runner.MaxAttempts = attempts;
                 _runner.GameBudget = TimeSpan.FromMinutes(budget);
                 _runner.StalledAfter = TimeSpan.FromMinutes(stall);
+                _runner.ExtraEnv["GT_CONCURRENCY"] = _settings.Concurrency.ToString();
                 if (_settings.PipelineJs.Length > 0) _runner.PipelineJs = _settings.PipelineJs;
                 RefreshModels();
                 AppendLog("设置已保存。");

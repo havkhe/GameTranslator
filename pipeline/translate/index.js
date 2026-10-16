@@ -35,6 +35,24 @@ const DEFAULT_TEMPLATE =
   "保持每行开头的行号，逐行输出「行号. 译文」，不要JSON、不要解释。\r\n{lines}";
 
 /**
+ * How many top-level batches may be in flight at once.
+ *
+ * GT_CONCURRENCY, default 1 — the shipped behaviour, one request at a time, and it stays the default
+ * because that is the only setting that is right for a local llama-server (see below).
+ *
+ * A hosted endpoint decodes many requests together, so a strictly sequential client leaves most of its
+ * capacity unused: measured against the free Index-Translate endpoint, one request at a time gives 3.4
+ * requests/s, eight at a time 14.4, sixty-four 73.4, and the service was still scaling at 128 (106.6
+ * requests/s). With eight-line batches that is the difference between roughly 6 lines/s and roughly 100.
+ *
+ * A LOCAL llama-server is a different story: the product starts it with --parallel 1, so it serves one
+ * request at a time and a second batch just waits in the server's queue — no speed-up, and the silent
+ * socket watchdog would be counting a request that has not started. Raise this for a hosted endpoint, or
+ * for a local server that was started with a larger --parallel.
+ */
+const CONCURRENCY = Math.max(1, Math.min(64, parseInt(process.env.GT_CONCURRENCY || "1", 10) || 1));
+
+/**
  * Refuse a multi-line reply that dropped the line numbers.
  *
  * The request numbers its input lines (batcher.buildPrompt), so the numbers are the anchor that makes
@@ -346,20 +364,34 @@ async function translate(o) {
   // walks the entry list.
   const SAVE_INTERVAL_MS = 20000;
   let lastSaveAt = Date.now();
-  for (let i = 0; i < groups.length; i++) {
-    await waitWhilePaused(o.pauseFile);      // the window's 暂停, honoured between requests
-    await run(groups[i], 0);
-    const now = Date.now();
-    if (now - lastSaveAt >= SAVE_INTERVAL_MS || i === groups.length - 1) {
-      cache.save();
-      lastSaveAt = now;
+
+  // Only the TOP level is concurrent: each worker takes one group and `run()` keeps its own halving and
+  // retrying sequential, so the rules above (cache immediately, retry the rejected lines once, halve on a
+  // count mismatch) are unchanged inside a group. Sharing is safe because cache.set() only mutates an
+  // in-memory map and cache.save() is a synchronous write — two workers can never interleave a write — and
+  // every counter in `stats` is incremented in one synchronous statement.
+  let nextGroup = 0;
+  const worker = async () => {
+    for (;;) {
+      if (stats.truncated) return;
+      const i = nextGroup++;
+      if (i >= groups.length) return;
+      await waitWhilePaused(o.pauseFile);      // the window's 暂停, honoured between requests
+      await run(groups[i], 0);
+      const now = Date.now();
+      if (now - lastSaveAt >= SAVE_INTERVAL_MS) {
+        cache.save();
+        lastSaveAt = now;
+      }
+      stats.cached = cache.size;
+      // Progress is reported through the callback only; the caller owns the line format
+      // (the UI parses it), so printing here as well produced the line twice.
+      if (typeof o.onProgress === "function") o.onProgress(stats);
     }
-    stats.cached = cache.size;
-    // Progress is reported through the callback only; the caller owns the line format
-    // (the UI parses it), so printing here as well produced the line twice.
-    if (typeof o.onProgress === "function") o.onProgress(stats);
-  }
-  // The exact figure for the report: entries the cache now holds, computed once.
+  };
+  const workers = Math.min(CONCURRENCY, Math.max(1, groups.length));
+  if (workers > 1) console.log("CONCURRENCY", workers, "batches in flight of", groups.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
   cache.save();
   stats.cached = entries.filter((e) => cache.has(e.text)).length;
   // Cloud mode: the exact token usage the endpoint reported for this game (local llama-server leaves

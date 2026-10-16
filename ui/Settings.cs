@@ -56,6 +56,17 @@ namespace GameTranslatorV3.Core
         public int StalledAfterMinutes = 10;
 
         /// <summary>
+        /// How many translation batches may be in flight at once (GT_CONCURRENCY).
+        ///
+        /// 1 is the default and the only value that is right for the local llama-server the app starts
+        /// itself: it runs with --parallel 1, so a second batch would only wait in the server's queue.
+        /// A hosted endpoint decodes many requests together, and a strictly sequential client wastes most
+        /// of that: measured against the free Index-Translate endpoint, throughput went from 3.4 requests/s
+        /// at 1 to 14.4 at 8 and 106.6 at 128, with no failures all the way to 128.
+        /// </summary>
+        public int Concurrency = 1;
+
+        /// <summary>
         /// The pipeline script to run. v3 lives in pipeline\index.js; the v2 script
         /// (game-pipeline.js) is still accepted so an existing install keeps working,
         /// and the runner falls back to whichever exists.
@@ -386,6 +397,7 @@ namespace GameTranslatorV3.Core
                         case "MaxAttempts": if (int.TryParse(val, out n) && n >= 1 && n <= 10) s.MaxAttempts = n; break;
                         case "GameBudgetMinutes": if (int.TryParse(val, out n) && n >= 5) s.GameBudgetMinutes = n; break;
                         case "StalledAfterMinutes": if (int.TryParse(val, out n) && n >= 1) s.StalledAfterMinutes = n; break;
+                        case "Concurrency": if (int.TryParse(val, out n) && n >= 1 && n <= 64) s.Concurrency = n; break;
                     }
                 }
                 // A local .gguf name can end up in ApiModel: it is what the dropdown held when cloud mode
@@ -435,6 +447,7 @@ namespace GameTranslatorV3.Core
                 sb.AppendLine("MaxAttempts=" + MaxAttempts.ToString(CultureInfo.InvariantCulture));
                 sb.AppendLine("GameBudgetMinutes=" + GameBudgetMinutes.ToString(CultureInfo.InvariantCulture));
                 sb.AppendLine("StalledAfterMinutes=" + StalledAfterMinutes.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine("Concurrency=" + Concurrency.ToString(CultureInfo.InvariantCulture));
                 File.WriteAllText(FilePath(root), sb.ToString(), Encoding.UTF8);
             }
             catch { }

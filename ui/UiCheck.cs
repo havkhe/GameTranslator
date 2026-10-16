@@ -1207,6 +1207,57 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 并发批次数（云端提速，默认串行）===");
+            {
+                var iniTmp = Path.Combine(Path.GetTempPath(), "gt-uicheck-conc-" + Environment.TickCount.ToString());
+                try
+                {
+                    Directory.CreateDirectory(iniTmp);
+                    var def = GameTranslatorV3.Core.Settings.Load(iniTmp);
+                    Assert(def.Concurrency == 1, "默认并发批次数为 1（串行）：" + def.Concurrency);
+
+                    File.WriteAllText(Path.Combine(iniTmp, "ui-settings.ini"), "Concurrency=8\r\n", new System.Text.UTF8Encoding(false));
+                    var eight = GameTranslatorV3.Core.Settings.Load(iniTmp);
+                    Assert(eight.Concurrency == 8, "并发批次数读回 8：" + eight.Concurrency);
+
+                    File.WriteAllText(Path.Combine(iniTmp, "ui-settings.ini"), "Concurrency=999\r\n", new System.Text.UTF8Encoding(false));
+                    var huge = GameTranslatorV3.Core.Settings.Load(iniTmp);
+                    Assert(huge.Concurrency == 1, "越界的并发数被忽略（999 → " + huge.Concurrency + "）");
+
+                    File.WriteAllText(Path.Combine(iniTmp, "ui-settings.ini"), "Concurrency=0\r\n", new System.Text.UTF8Encoding(false));
+                    var zero = GameTranslatorV3.Core.Settings.Load(iniTmp);
+                    Assert(zero.Concurrency == 1, "并发数 0 也被忽略（→ " + zero.Concurrency + "）");
+
+                    eight.Save(iniTmp);
+                    var raw = File.ReadAllText(Path.Combine(iniTmp, "ui-settings.ini"), System.Text.Encoding.UTF8);
+                    Assert(raw.Contains("Concurrency=8"), "保存后写回 ini（Concurrency=8）");
+                }
+                finally { try { Directory.Delete(iniTmp, true); } catch { } }
+
+                // The window hands the value to the pipeline through the environment, in both modes — the
+                // pipeline reads GT_CONCURRENCY whether or not cloud mode is on.
+                var runnerField = typeof(MainForm).GetField("_runner", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert(runnerField != null, "找到 _runner（反射）");
+                if (runnerField != null)
+                {
+                    var runner = runnerField.GetValue(form);
+                    // ExtraEnv is a public readonly FIELD on PipelineRunner, not a property.
+                    var envField = runner == null ? null : runner.GetType().GetField("ExtraEnv");
+                    var env = envField == null ? null : envField.GetValue(runner) as System.Collections.Generic.IDictionary<string, string>;
+                    Assert(envField != null, "找到 PipelineRunner.ExtraEnv（反射）");
+                    bool has = env != null && env.ContainsKey("GT_CONCURRENCY");
+                    Assert(has, "窗口把并发批次数传给管线（GT_CONCURRENCY=" +
+                        (has ? env["GT_CONCURRENCY"] : "缺") + "）");
+                    if (has)
+                    {
+                        int cv;
+                        Assert(int.TryParse(env["GT_CONCURRENCY"], out cv) && cv >= 1 && cv <= 64,
+                            "传下去的值落在 1-64 之内（" + env["GT_CONCURRENCY"] + "）");
+                    }
+                }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
             Console.WriteLine("        标题: " + form.Text + "   尺寸: " + form.Size);
             Console.WriteLine("");
