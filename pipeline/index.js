@@ -46,49 +46,12 @@ const rgssad = require("./archive/rgssad.js");
 const repackGuard = require("./archive/repack-guard.js");
 const { translate } = require("./translate/index.js");
 const mvPatch = require("./patch/mv.js");
+const { detectEngine, ARCHIVE_NAMES } = require("./engine-detect.js");
 
 const BACKUP_DIRNAME = "data_原版备份";
 const ARCHIVE_DIRNAME = "_archive工作";
-const ARCHIVE_NAMES = ["Game.rgss3a", "Game.rgss2a", "Game.rgssad"];
 
-/** Which engine is this, and where does its data live? */
-function detectEngine(dir) {
-  const has = (d, re) => {
-    try { return fs.readdirSync(d).some((f) => re.test(f)); } catch (e) { return false; }
-  };
-  const isDir = (d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } };
-  const candidates = [
-    { dataDir: path.join(dir, "www", "data") },
-    { dataDir: path.join(dir, "data") },
-  ];
-  for (const c of candidates) {
-    if (!isDir(c.dataDir)) continue;
-    const hasJson = has(c.dataDir, /\.json$/i);
-    // A VX Ace game may also carry a "data" folder; .rvdata2 wins. Trusting the folder name
-    // alone made VX Ace titles whose Data/ holds only .rvdata2 report as MV with zero
-    // strings (measured on two games: 0 and 22 entries instead of 143 and 935).
-    if (hasJson && !has(c.dataDir, /\.rvdata2$/i) && !has(c.dataDir, /\.rvdata$/i)) {
-      return { kind: "MV", dataDir: c.dataDir, live: c.dataDir };
-    }
-  }
-  // VX / VX Ace: a Data folder holding .rvdata2 (Ace) or .rvdata (VX), loose.
-  for (const name of ["Data", "data"]) {
-    const d = path.join(dir, name);
-    if (!isDir(d)) continue;
-    if (has(d, /\.rvdata2$/i)) return { kind: "VXAce", dataDir: d, live: d, packed: false };
-    if (has(d, /\.rvdata$/i)) return { kind: "VX", dataDir: d, live: d, packed: false };
-  }
-  // Packed: the data lives inside an RGSSAD container. The version byte decides the engine,
-  // not the filename.
-  for (const n of ARCHIVE_NAMES) {
-    const a = path.join(dir, n);
-    if (!fs.existsSync(a)) continue;
-    let version = 0;
-    try { version = rgssad.archiveVersion(a); } catch (e) { }
-    return { kind: version === 3 ? "VXAce" : "VX", dataDir: null, live: dir, packed: true, archive: a, archiveVersion: version };
-  }
-  return null;
-}
+
 
 /** Make sure the pristine copy of a packed archive exists, so the source is never the live file. */
 function ensureArchiveBackup(engine, gameDir) {
