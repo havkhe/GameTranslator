@@ -12,9 +12,10 @@ namespace GameTranslatorV3.Core
 {
     public sealed class Settings
     {
-        /// <summary>Where the .gguf files live. The shipped default is the one the manual documents;
-        /// a new install is expected to point this at its own model folder.</summary>
-        public string ModelDir = @"D:\galtrans";
+        /// <summary>Where the .gguf files live. Empty means "the install folder itself", which is what a
+        /// fresh install defaults to: the old D:\galtrans default pointed at a path most machines do not
+        /// have, and on a portable copy there is no better guess than the folder the program sits in.</summary>
+        public string ModelDir = "";
 
         /// <summary>
         /// Translate through a hosted OpenAI-compatible endpoint instead of a local llama-server.
@@ -274,11 +275,80 @@ namespace GameTranslatorV3.Core
             return v3;
         }
 
+        /// <summary>The model folder a fresh install should use: the install folder itself.</summary>
+        public static string DefaultModelDir(string root)
+        {
+            return string.IsNullOrEmpty(root) ? "" : root.TrimEnd('\\', '/');
+        }
+
+        /// <summary>
+        /// What to write into ui-settings.ini for a path: relative to the install root when it lives inside
+        /// it, absolute otherwise.
+        ///
+        /// This is what makes the install portable. Every path used to be stored absolute, so moving or
+        /// renaming the folder left the settings pointing at the old home — measured on a copy at
+        /// I:\新建文件夹 whose ui-settings.ini still said PipelineJs=I:\trans\pipeline\index.js, a folder that
+        /// no longer holds a pipeline at all, so nothing could be translated.
+        /// </summary>
+        public static string ToStoredPath(string root, string full)
+        {
+            var f = (full ?? "").Trim();
+            if (f.Length == 0 || string.IsNullOrEmpty(root)) return f;
+            var r = root.TrimEnd('\\', '/');
+            if (f.Length > r.Length + 1 &&
+                f.StartsWith(r, StringComparison.OrdinalIgnoreCase) &&
+                (f[r.Length] == '\\' || f[r.Length] == '/'))
+            {
+                return f.Substring(r.Length + 1);
+            }
+            return f;
+        }
+
+        /// <summary>
+        /// Resolve a stored path against the install root, and heal a stale one.
+        ///
+        /// A relative value is resolved against the CURRENT root, so a moved install keeps working. An
+        /// absolute value is used as-is when it exists. An absolute value that exists nowhere is the case
+        /// that used to fail silently (the install moved, the setting stayed behind), so it falls back to
+        /// the default under this root and says so in <see cref="LoadNotes"/>.
+        /// </summary>
+        public static string ResolvePath(string root, string stored, string fallback)
+        {
+            return ResolvePath(root, stored, fallback, null, "路径");
+        }
+
+        private static string ResolvePath(string root, string stored, string fallback, List<string> notes, string what)
+        {
+            var v = (stored ?? "").Trim();
+            if (v.Length == 0) return fallback;
+            var r = (root ?? "").TrimEnd('\\', '/');
+            bool rooted = v.Length > 1 && (v[1] == ':' || v.StartsWith("\\\\", StringComparison.Ordinal));
+            if (!rooted && r.Length > 0) v = Path.Combine(r, v);
+            try
+            {
+                if (File.Exists(v) || Directory.Exists(v)) return v;
+            }
+            catch { }
+            if (notes != null && !string.Equals(v, fallback, StringComparison.OrdinalIgnoreCase))
+            {
+                notes.Add(what + "设置指向的位置不存在（" + v + "），已改用 " + fallback +
+                    "。移动或改名过安装目录时会出现这种情况，可在【设置…】里改回来。");
+            }
+            return fallback;
+        }
+
+        /// <summary>
+        /// Things worth telling the user about the settings that were just loaded — a path that had to be
+        /// healed because the install was moved, for instance. The window logs these at startup.
+        /// </summary>
+        public List<string> LoadNotes = new List<string>();
+
         public static Settings Load(string root)
         {
             var s = new Settings();
             s.PipelineJs = DefaultPipeline(root);
             s.LlamaDir = DefaultLlamaDir(root);
+            s.ModelDir = DefaultModelDir(root);
             if (!string.IsNullOrEmpty(root))
             {
                 s.WorkDir = DefaultWorkDir(root);
@@ -328,6 +398,15 @@ namespace GameTranslatorV3.Core
                 }
             }
             catch { /* defaults are always usable */ }
+
+            // Every path setting is resolved against THIS root, which also heals a stale absolute path when
+            // the install has been moved or renamed since the file was written.
+            s.PipelineJs = ResolvePath(root, s.PipelineJs, DefaultPipeline(root), s.LoadNotes, "管线脚本");
+            s.LlamaDir = ResolvePath(root, s.LlamaDir, DefaultLlamaDir(root), s.LoadNotes, "llama 目录");
+            s.WorkDir = ResolvePath(root, s.WorkDir, DefaultWorkDir(root), s.LoadNotes, "工作目录");
+            s.PromptFile = ResolvePath(root, s.PromptFile, Path.Combine(DefaultWorkDir(root), "prompt.txt"),
+                s.LoadNotes, "提示词文件");
+            s.ModelDir = ResolvePath(root, s.ModelDir, DefaultModelDir(root), s.LoadNotes, "模型目录");
             return s;
         }
 
@@ -337,16 +416,18 @@ namespace GameTranslatorV3.Core
             {
                 var sb = new StringBuilder();
                 sb.AppendLine("# GameTranslator v3 设置");
-                sb.AppendLine("ModelDir=" + ModelDir);
+                // Paths that live inside the install folder are stored relative to it, so moving or renaming
+                // the folder keeps every setting valid (see ToStoredPath).
+                sb.AppendLine("ModelDir=" + ToStoredPath(root, ModelDir));
                 sb.AppendLine("Model=" + Model);
                 sb.AppendLine("UseApi=" + (UseApi ? "1" : "0"));
                 sb.AppendLine("ApiBaseUrl=" + ApiBaseUrl);
                 sb.AppendLine("ApiModel=" + ApiModel);
                 sb.AppendLine("ApiModels=" + ApiModels);
-                sb.AppendLine("WorkDir=" + WorkDir);
-                sb.AppendLine("PromptFile=" + PromptFile);
-                sb.AppendLine("PipelineJs=" + PipelineJs);
-                sb.AppendLine("LlamaDir=" + LlamaDir);
+                sb.AppendLine("WorkDir=" + ToStoredPath(root, WorkDir));
+                sb.AppendLine("PromptFile=" + ToStoredPath(root, PromptFile));
+                sb.AppendLine("PipelineJs=" + ToStoredPath(root, PipelineJs));
+                sb.AppendLine("LlamaDir=" + ToStoredPath(root, LlamaDir));
                 sb.AppendLine("LlamaBackend=" + LlamaBackend);
                 sb.AppendLine("ScanRoots=" + ScanRootsRaw);
                 sb.AppendLine("ScanDepth=" + ScanDepth.ToString(CultureInfo.InvariantCulture));

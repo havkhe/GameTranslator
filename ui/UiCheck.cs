@@ -1160,6 +1160,53 @@ namespace GameTranslatorV3.UiCheck
             }
 
             Console.WriteLine("");
+            Console.WriteLine("=== 目录设置都能改，而且能整包搬走（相对保存 + 失效绝对路径自愈）===");
+            {
+                var defModel = GameTranslatorV3.Core.Settings.DefaultModelDir(root);
+                Assert(defModel.TrimEnd('\\') == root.TrimEnd('\\'), "模型目录默认 = 安装根目录：" + defModel);
+
+                var inside = Path.Combine(root, "work");
+                Assert(GameTranslatorV3.Core.Settings.ToStoredPath(root, inside) == "work",
+                    "安装目录内的路径按相对保存：" + GameTranslatorV3.Core.Settings.ToStoredPath(root, inside));
+                Assert(GameTranslatorV3.Core.Settings.ToStoredPath(root, @"D:\elsewhere\models") == @"D:\elsewhere\models",
+                    "安装目录外的路径仍保存为绝对");
+                Assert(GameTranslatorV3.Core.Settings.ResolvePath(root, "work", "fallback") == inside,
+                    "相对值按当前安装目录解析：" + GameTranslatorV3.Core.Settings.ResolvePath(root, "work", "fallback"));
+                Assert(GameTranslatorV3.Core.Settings.ResolvePath(root, inside, "fallback") == inside, "存在的绝对路径原样使用");
+                Assert(GameTranslatorV3.Core.Settings.ResolvePath(root, @"Z:\moved-away\pipeline\index.js", inside) == inside,
+                    "失效的绝对路径回落到默认：" + GameTranslatorV3.Core.Settings.ResolvePath(root, @"Z:\moved-away\pipeline\index.js", inside));
+
+                // The exact shape of the broken install that could not translate anything: an ini whose
+                // PipelineJs still names the folder the install used to live in. Loading it under THIS root
+                // must hand back this root's own pipeline, and say so.
+                var tmp = Path.Combine(Path.GetTempPath(), "gt-uicheck-paths-" + Environment.TickCount.ToString());
+                try
+                {
+                    Directory.CreateDirectory(tmp);
+                    Directory.CreateDirectory(Path.Combine(tmp, "pipeline"));
+                    File.WriteAllText(Path.Combine(tmp, "pipeline", "index.js"), "// stub\n", new System.Text.UTF8Encoding(false));
+                    File.WriteAllText(Path.Combine(tmp, "ui-settings.ini"),
+                        "WorkDir=" + Path.Combine(tmp, "work") + "\r\n" +
+                        "ModelDir=" + Path.Combine(tmp, "models") + "\r\n" +
+                        @"PipelineJs=I:\trans\pipeline\index.js" + "\r\n" +
+                        "LlamaDir=" + Path.Combine(tmp, "llama") + "\r\n",
+                        new System.Text.UTF8Encoding(false));
+                    var back = GameTranslatorV3.Core.Settings.Load(tmp);
+                    Assert(back.PipelineJs == Path.Combine(tmp, "pipeline", "index.js"),
+                        "失效的管线脚本自动回到当前安装目录：" + back.PipelineJs);
+                    Assert(back.ModelDir.TrimEnd('\\') == tmp.TrimEnd('\\'), "模型目录回落到安装目录：" + back.ModelDir);
+                    Assert(back.LoadNotes.Count >= 1, "并且记了说明给界面显示（" + back.LoadNotes.Count + " 条）");
+
+                    back.Save(tmp);
+                    var raw = File.ReadAllText(Path.Combine(tmp, "ui-settings.ini"), System.Text.Encoding.UTF8);
+                    Assert(raw.Contains("PipelineJs=pipeline\\index.js") || raw.Contains("PipelineJs=pipeline/index.js"),
+                        "保存后管线脚本写成相对路径");
+                    Assert(raw.Contains("WorkDir=work"), "保存后工作目录写成相对路径");
+                }
+                finally { try { Directory.Delete(tmp, true); } catch { } }
+            }
+
+            Console.WriteLine("");
             Console.WriteLine("=== 窗口 ===");
             Console.WriteLine("        标题: " + form.Text + "   尺寸: " + form.Size);
             Console.WriteLine("");

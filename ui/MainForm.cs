@@ -140,6 +140,10 @@ namespace GameTranslatorV3
         {
             _root = root;
             _settings = Settings.Load(root);
+            // A path setting that had to be healed (the install was moved or renamed since the ini was
+            // written) must be visible, not silent: it is the difference between "the tool does not work on
+            // this machine" and "the work directory moved, here is where it is now".
+            foreach (var note in _settings.LoadNotes) AppendLog(note);
             _runner = new PipelineRunner(root)
             {
                 WorkDir = _settings.WorkDir,
@@ -4365,6 +4369,7 @@ namespace GameTranslatorV3
                 var txtStall = new TextBox { Width = 80, Text = _settings.StalledAfterMinutes.ToString() };
                 var txtDepth = new TextBox { Width = 60, Text = _settings.ScanDepth.ToString() };
                 var txtLlama = new TextBox { Width = 380, Text = _settings.LlamaDir };
+                var txtWork = new TextBox { Width = 380, Text = _settings.WorkDir };
 
                 // Scan-root editor: a list plus add/remove, so several folders can feed the
                 // same game list.
@@ -4395,6 +4400,18 @@ namespace GameTranslatorV3
                 bPick.Click += (s, e) => { using (var f = new FolderBrowserDialog()) if (f.ShowDialog(dlg) == DialogResult.OK) txtDir.Text = f.SelectedPath; };
                 dirRow.Controls.Add(bPick);
                 t.Controls.Add(dirRow, 1, r++);
+
+                // Work directory: caches, the queue and the logs all live here. It used to be settable only by
+                // editing the ini by hand, and because it was stored as an absolute path a moved install kept
+                // pointing at the old folder (measured: a copy at I:\新建文件夹 whose ini still named
+                // I:\trans\... — a folder that no longer holds a pipeline, so nothing could be translated).
+                t.Controls.Add(new Label { Text = "工作目录", Height = 26, TextAlign = ContentAlignment.MiddleLeft }, 0, r);
+                var workRow = new FlowLayoutPanel { WrapContents = false, Height = 30 };
+                workRow.Controls.Add(txtWork);
+                var bPickWork = new Button { Text = "…", Width = 30, Height = 24 };
+                bPickWork.Click += (s, e) => { using (var f = new FolderBrowserDialog()) if (f.ShowDialog(dlg) == DialogResult.OK) txtWork.Text = f.SelectedPath; };
+                workRow.Controls.Add(bPickWork);
+                t.Controls.Add(workRow, 1, r++);
 
                 // ---- cloud API -----------------------------------------------------
                 // The endpoint and the model chain are ordinary settings; only the key lives elsewhere
@@ -4526,6 +4543,21 @@ namespace GameTranslatorV3
                 }
                 _settings.LlamaDir = llama;
                 _settings.ModelDir = txtDir.Text.Trim();
+                // Changing the work directory moves the caches, the queue and the logs with it. The prompt
+                // file normally lives there too, so it follows unless the user pointed it somewhere else.
+                if (txtWork.Text.Trim().Length > 0)
+                {
+                    var newWork = txtWork.Text.Trim();
+                    if (!string.Equals(newWork, _settings.WorkDir, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var wasDefaultPrompt = string.Equals(_settings.PromptFile,
+                            Path.Combine(_settings.WorkDir, "prompt.txt"), StringComparison.OrdinalIgnoreCase);
+                        _settings.WorkDir = newWork;
+                        if (wasDefaultPrompt) _settings.PromptFile = Path.Combine(newWork, "prompt.txt");
+                        AppendLog("工作目录已改为 " + newWork +
+                            (wasDefaultPrompt ? "，提示词文件跟随为 " + _settings.PromptFile : "（提示词文件保持原样）"));
+                    }
+                }
                 _settings.Port = port;
                 _settings.PromptFile = txtPrompt.Text.Trim();
                 _settings.PipelineJs = txtPipe.Text.Trim();
