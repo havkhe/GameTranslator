@@ -58,7 +58,7 @@ function isTranslatableEnglish(text) {
   if (EXT_RE.test(t) || INTERNAL_RE.test(t) || EVENT_ID_RE.test(t)) return false;
   // A backslash was treated as "this is a path" — but RPG Maker control codes all start with one (`\C[27]`,
   // `\!`, `\N[1]`, `\$Name`), so every English dialogue line carrying a colour code or a line-break escape was
-  // thrown away: measured on Luxuria [ENG], "Haha! With arms that thin?\!", "Figures. The entry is off limits
+  // thrown away: measured on an English VX Ace release, "Haha! With arms that thin?\!", "Figures. The entry is off limits
   // to non-staff.\!" and their like were never extracted and stayed English in the game. Strip the codes, then
   // test what is left for something that really looks like a path.
   const bare = t.replace(/\\[A-Za-z]+\[[^\]]*\]|\\[!$.<>|^]/g, "");
@@ -82,7 +82,7 @@ function isTranslatableEnglish(text) {
  * ("Sister", "Storekeeper", "Customer", "Soldier") or an interjection ("Yes.", "Oh...") — never an id. The
  * English rule leaves a bare word alone because in a DATABASE field ("Potion", "EV001") it usually is an id.
  *
- * Measured on Luxuria [ENG]: 3,907 message lines were single-word speaker labels and stayed English while the
+ * Measured on an English VX Ace release: 3,907 message lines were single-word speaker labels and stayed English while the
  * dialogue around them was translated, so the game read as half-translated.
  */
 function isTranslatableMessage(text) {

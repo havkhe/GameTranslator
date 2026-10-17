@@ -69,7 +69,7 @@ end
 #
 # Ruby's \s is ASCII-only, while JS \s includes every Unicode space. RPG text routinely starts a line with the
 # full-width space U+3000 ("　So this is the port town…"), so the cache key (JS-normalised, space stripped) and
-# the data text (Ruby-normalised, space kept) missed each other: measured on Luxuria [ENG], 2,810 cached
+# the data text (Ruby-normalised, space kept) missed each other: measured on an English VX Ace release, 2,810 cached
 # translations were reported as "not found in the data" and those lines stayed English even though the cache
 # held their Chinese. Listing U+3000 and U+00A0 makes both sides agree.
 SPACE = /[[:space:]\u{3000}\u{00a0}]/

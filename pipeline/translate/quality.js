@@ -245,7 +245,7 @@ function qualityCheck(src, dst, opts) {
   // Chinese are comparable in length per character, so 25% catches a truncated answer. English is far more
   // verbose per character: "Guaranteed high pay!" (19 characters) is 报酬丰厚！(5), and
   // "Women should refrain from stepping outside town." (47) is 女性应避免外出小镇。(10) — both correct, both
-  // rejected by the fixed 25% floor. Measured on Luxuria [ENG]: 200+ correct lines were dropped as
+  // rejected by the fixed 25% floor. Measured on an English VX Ace release: 200+ correct lines were dropped as
   // `too-short:4<17`, `10<42`, and stayed English in the game.
   const latinSource = /[A-Za-z]/.test(s) && !/[\u3040-\u30ff]/.test(s);
   const shortest = latinSource ? 0.10 : 0.25;

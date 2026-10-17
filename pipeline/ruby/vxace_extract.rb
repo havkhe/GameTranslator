@@ -83,7 +83,7 @@ end
 # Which raw strings are worth handing to the JS rules.
 #
 # This used to require kana or Han, and that silently threw away EVERY line of an English release. Measured on
-# Luxuria [ENG]: all 208 data files loaded fine, the maps held 15,366 message commands (code 401) whose text is
+# an English VX Ace release: all 208 data files loaded fine, the maps held 15,366 message commands (code 401) whose text is
 # plain English, and only 1,375 raw strings survived — the dialogue never reached the pipeline, so the run
 # "finished" with the game still English and only the Japanese leftovers (names, UI) translated.
 #
