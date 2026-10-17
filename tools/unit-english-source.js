@@ -70,6 +70,31 @@ check("英文正文算可译源", Q.translatableSource("You found a Potion!"), t
 check("id 不算可译源", Q.translatableSource("K-02"), false);
 check("中文长句仍算", Q.translatableSource("你已经获得了三个药剂，请小心使用它们。"), true);
 
+console.log("");
+console.log("=== 英文台词里的控制符不能被当成路径（v3.3.1）===");
+check("带 \\! 的英文台词", R.isTranslatable("Haha! With arms that thin?\\!"), true);
+check("带 \\C[n] 的英文台词", R.isTranslatable("\\C[2]Key Items\\C[0] menu"), true);
+check("真正的路径仍然排除", R.isTranslatable("img/pictures/face.png"), false);
+check("真正的 URL 仍然排除", R.isTranslatable("https://example.com/x"), false);
+
+console.log("");
+console.log("=== 事件消息行：单个词是说话人名，不是 id（v3.3.1）===");
+check("Sister", R.isTranslatableMessage("Sister"), true);
+check("Storekeeper", R.isTranslatableMessage("Storekeeper"), true);
+check("带控制符的名字标签", R.isTranslatableMessage("\\C[3]Aisha\\C[0]"), true);
+check("EV001 仍是 id", R.isTranslatableMessage("EV001"), false);
+check("纯数字仍是 id", R.isTranslatableMessage("1200"), false);
+check("空白不算", R.isTranslatableMessage("   "), false);
+
+console.log("");
+console.log("=== 英文源的长度下限放宽到 10%（英文比中文冗长 4-5 倍）===");
+const q1 = Q.qualityCheck("Guaranteed high pay!", "报酬丰厚！", {});
+check("英文长句译成短中文不算太短", q1.fatal.join(",").indexOf("too-short") >= 0, false);
+const q2 = Q.qualityCheck("Women should refrain from stepping outside town.", "女性应避免外出小镇。", {});
+check("第二个英文长句同样不算太短", q2.fatal.join(",").indexOf("too-short") >= 0, false);
+const q3 = Q.qualityCheck("これはとても長い日本語の文章でございます", "是", {});
+check("日文源仍按 25% 判（少太多还是拒绝）", q3.fatal.join(",").indexOf("too-short") >= 0, true);
+
 // 真实语料统计：只有当环境变量 GT_CORPUS 指向一个英文版游戏的原版数据目录时才跑，没有就整段跳过。
 // 写死本机某个游戏的路径，会让这条断言在别的机器上失败，也会把作者的游戏名带进发行产物。
 const GAME = String(process.env.GT_CORPUS || "");
