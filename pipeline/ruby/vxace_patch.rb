@@ -64,8 +64,18 @@ def normalize(s)
   end
 end
 
+# The lookup key for a text, normalised EXACTLY like the JS side (translate/cache.js normText): line endings
+# unified, then leading/trailing whitespace removed — nothing else, no collapsing.
+#
+# Ruby's \s is ASCII-only, while JS \s includes every Unicode space. RPG text routinely starts a line with the
+# full-width space U+3000 ("　So this is the port town…"), so the cache key (JS-normalised, space stripped) and
+# the data text (Ruby-normalised, space kept) missed each other: measured on Luxuria [ENG], 2,810 cached
+# translations were reported as "not found in the data" and those lines stayed English even though the cache
+# held their Chinese. Listing U+3000 and U+00A0 makes both sides agree.
+SPACE = /[[:space:]\u{3000}\u{00a0}]/
 def norm_key(s)
-  s.to_s.gsub("\r\n", "\n").gsub("\r", "\n").sub(/\A\s+/, "").sub(/\s+\z/, "")
+  t = s.to_s.gsub("\r\n", "\n").gsub("\r", "\n")
+  t.sub(/\A#{SPACE}+/, "").sub(/#{SPACE}+\z/, "")
 end
 
 def main

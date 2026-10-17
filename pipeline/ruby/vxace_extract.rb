@@ -80,9 +80,21 @@ def normalize(s)
   end
 end
 
+# Which raw strings are worth handing to the JS rules.
+#
+# This used to require kana or Han, and that silently threw away EVERY line of an English release. Measured on
+# Luxuria [ENG]: all 208 data files loaded fine, the maps held 15,366 message commands (code 401) whose text is
+# plain English, and only 1,375 raw strings survived — the dialogue never reached the pipeline, so the run
+# "finished" with the game still English and only the Japanese leftovers (names, UI) translated.
+#
+# extract/rules.js already tells English prose from identifiers (isTranslatableEnglish: two words or a
+# sentence ending, minus paths, filenames and event ids), and vxace.js applies it to everything this file
+# returns. So this gate only has to be permissive: anything with Japanese, or carrying Latin letters at all,
+# goes through and the JS side decides.
 def translatable?(s)
   return false if s.nil? || s.length > 2000
-  s =~ /[\p{Hiragana}\p{Katakana}\p{Han}]/
+  return true if s =~ /[\p{Hiragana}\p{Katakana}\p{Han}]/
+  s =~ /[A-Za-z]/
 end
 
 def main

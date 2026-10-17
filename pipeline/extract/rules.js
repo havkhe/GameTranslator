@@ -56,7 +56,13 @@ function isTranslatableEnglish(text) {
   const t = String(text).trim();
   if (t.length < 4) return false;
   if (EXT_RE.test(t) || INTERNAL_RE.test(t) || EVENT_ID_RE.test(t)) return false;
-  if (/^(https?:|\/\/)|[\\/]/.test(t)) return false;                   // url / path
+  // A backslash was treated as "this is a path" — but RPG Maker control codes all start with one (`\C[27]`,
+  // `\!`, `\N[1]`, `\$Name`), so every English dialogue line carrying a colour code or a line-break escape was
+  // thrown away: measured on Luxuria [ENG], "Haha! With arms that thin?\!", "Figures. The entry is off limits
+  // to non-staff.\!" and their like were never extracted and stayed English in the game. Strip the codes, then
+  // test what is left for something that really looks like a path.
+  const bare = t.replace(/\\[A-Za-z]+\[[^\]]*\]|\\[!$.<>|^]/g, "");
+  if (/^(https?:|\/\/)|[\\/]/.test(bare)) return false;                 // url / path
   const letters = (t.match(/[A-Za-z]/g) || []).length;
   if (letters < 3) return false;
   const body = t.replace(/\s/g, "");
@@ -67,6 +73,27 @@ function isTranslatableEnglish(text) {
   // with sentence punctuation and holds no digits, and reject the rest of the path-like tokens.
   if (PATH_LIKE_RE.test(t) && !(/[!?…]|\.$/.test(t) && !/[0-9]/.test(t))) return false;
   return /[.!?…:]["')\]]?$/.test(t) && !/[0-9]/.test(t);
+}
+
+/**
+ * A single word on an event-message line.
+ *
+ * Every `@text` behind a Show Text command is dialogue by construction, so a bare word there is a speaker name
+ * ("Sister", "Storekeeper", "Customer", "Soldier") or an interjection ("Yes.", "Oh...") — never an id. The
+ * English rule leaves a bare word alone because in a DATABASE field ("Potion", "EV001") it usually is an id.
+ *
+ * Measured on Luxuria [ENG]: 3,907 message lines were single-word speaker labels and stayed English while the
+ * dialogue around them was translated, so the game read as half-translated.
+ */
+function isTranslatableMessage(text) {
+  const t = String(text).trim();
+  if (t.length < 2) return false;
+  if (EXT_RE.test(t) || INTERNAL_RE.test(t) || EVENT_ID_RE.test(t)) return false;
+  const bare = t.replace(/\\[A-Za-z]+\[[^\]]*\]|\\[!$.<>|^]/g, "").trim();
+  if (!bare) return false;
+  if (/^(https?:|\/\/)|[\\/]/.test(bare)) return false;
+  if (/[0-9]/.test(bare)) return false;                      // ids and counters are not names
+  return /[A-Za-z\u3040-\u30ff\u4e00-\u9fff]/.test(bare);
 }
 
 function isTranslatable(text) {
@@ -231,6 +258,7 @@ function pluginArgValueTranslatable(key, value) {
 module.exports = {
   isTranslatable,
   isTranslatableEnglish,
+  isTranslatableMessage,
   EVENT_TEXT_CODES,
   TEXT_FIELDS,
   TERMS_KEYS,

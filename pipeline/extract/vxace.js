@@ -88,7 +88,11 @@ function extract(dataDir, root, workDir, extractJson) {
   for (const e of all) {
     // One prompt line per entry, so embedded breaks become spaces (see translate/index.js).
     const t = String(e.text).replace(/\r\n|\n|\r/g, " ");
-    if (!R.isTranslatable(t)) { filtered++; continue; }
+    // A message line (`@text` of a Show Text command) is dialogue by construction, so the single-word guard of
+    // the English rule must not apply to it — a bare word there is a speaker name. See isTranslatableMessage.
+    const isMessage = / @text$/.test(String(e.path || ""));
+    const ok = R.isTranslatable(t) || (isMessage && R.isTranslatableMessage(t));
+    if (!ok) { filtered++; continue; }
     if (isChineseLike(t, CHINESE_PROSE_MIN)) { skipped++; continue; }
     if (seen.has(t)) continue;
     seen.add(t);
